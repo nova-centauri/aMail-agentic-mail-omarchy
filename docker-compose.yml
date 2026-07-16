@@ -1,0 +1,97 @@
+name: ${COMPOSE_PROJECT_NAME:-gigamail}
+
+services:
+  gigamail:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${COMPOSE_PROJECT_NAME:-gigamail}:local
+    restart: unless-stopped
+    init: true
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      # Docker forwards to the container network interface; host exposure is
+      # still restricted by the loopback-only `ports` mapping below.
+      HOST: 0.0.0.0
+      PORT: "3000"
+      GIGAMAIL_DATA_DIR: /data
+      GIGAMAIL_STATIC_DIR: /app/dist
+      # The privacy launcher provides this only for its own Compose invocation.
+      # An empty value keeps remote-content requests on their normal path.
+      REMOTE_CONTENT_PROXY_URL: ${REMOTE_CONTENT_PROXY_URL:-}
+    ports:
+      # Deliberately local-only. Use an SSH tunnel or an authenticated reverse
+      # proxy instead of publishing a mail client directly to the internet.
+      - "${GIGAMAIL_BIND_ADDRESS:-127.0.0.1}:${GIGAMAIL_PORT:-3080}:3000"
+    volumes:
+      - gigamail-data:/data
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    read_only: true
+    user: "10001:10001"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - app-net
+      - privacy-net
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  # This has no host port. Start it only with --profile privacy and set
+  # REMOTE_CONTENT_PROXY_URL=http://tor-proxy:8118 for that same command.
+  tor-proxy:
+    profiles:
+      - privacy
+    build:
+      context: ./deploy/tor
+      dockerfile: Dockerfile
+    image: ${COMPOSE_PROJECT_NAME:-gigamail}-tor-proxy:local
+    restart: unless-stopped
+    init: true
+    read_only: true
+    user: "10002:10002"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - tor-state:/var/lib/tor
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    networks:
+      - privacy-net
+      - tor-egress
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "8118"]
+      interval: 30s
+      timeout: 5s
+      start_period: 45s
+      retries: 3
+
+volumes:
+  gigamail-data:
+  tor-state:
+
+networks:
+  # GigaMail needs ordinary egress for IMAP/SMTP providers.
+  app-net:
+    driver: bridge
+  # Only GigaMail and Tor/Privoxy share this isolated network.
+  privacy-net:
+    driver: bridge
+    internal: true
+  # Tor needs internet egress, but GigaMail is never attached to this network.
+  tor-egress:
+    driver: bridge

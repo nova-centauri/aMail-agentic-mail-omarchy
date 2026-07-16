@@ -1,0 +1,9 @@
+# SOCKS is deliberately bound to loopback: Privoxy is the only process that
+# can use it. The Compose service does not publish either proxy port to the
+# Docker host.
+SocksPort 127.0.0.1:9050
+DataDirectory /var/lib/tor
+Log notice stdout
+RunAsDaemon 0
+ClientOnly 1
+AvoidDiskWrites 1
