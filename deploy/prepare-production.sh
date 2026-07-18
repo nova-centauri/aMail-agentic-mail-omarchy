@@ -269,19 +269,21 @@ process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => { input += chunk; });
 process.stdin.on("end", () => {
   try {
+    const reject = (reason) => { console.error(reason); process.exit(1); };
     const config = JSON.parse(input);
     const service = config.services?.gigamail;
     const torService = config.services?.["tor-proxy"];
-    if (!service || !torService || config.name !== process.env.GIGAMAIL_EXPECT_COMPOSE_PROJECT ||
-      service.image !== process.env.GIGAMAIL_EXPECT_APP_IMAGE ||
-      torService.image !== process.env.GIGAMAIL_EXPECT_TOR_IMAGE) process.exit(1);
+    if (!service || !torService) reject("Resolved Compose services are incomplete.");
+    if (config.name !== process.env.GIGAMAIL_EXPECT_COMPOSE_PROJECT) reject("Resolved Compose project mismatch.");
+    if (service.image !== process.env.GIGAMAIL_EXPECT_APP_IMAGE) reject("Resolved GigaMail image reference mismatch.");
+    if (torService.image !== process.env.GIGAMAIL_EXPECT_TOR_IMAGE) reject("Resolved Tor image reference mismatch.");
     const mounts = Array.isArray(service.volumes)
       ? service.volumes.filter((mount) => mount?.target === "/data")
       : [];
     const volumeSource = mounts[0]?.source;
     const expectedVolume = process.env.GIGAMAIL_EXPECT_DATA_VOLUME;
     if (mounts.length !== 1 || mounts[0].type !== "volume" ||
-      (volumeSource !== "gigamail-data" && volumeSource !== expectedVolume)) process.exit(1);
+      (volumeSource !== "gigamail-data" && volumeSource !== expectedVolume)) reject("Resolved GigaMail data-volume mismatch.");
     let resolved = service.environment || {};
     if (Array.isArray(resolved)) {
       resolved = Object.fromEntries(resolved.map((entry) => {
@@ -300,9 +302,10 @@ process.stdin.on("end", () => {
     ];
     for (const key of keys) {
       const expected = process.env[key];
-      if (expected !== undefined && resolved[key] !== expected) process.exit(1);
+      if (expected !== undefined && resolved[key] !== expected) reject(`Resolved environment mismatch: ${key}`);
     }
   } catch {
+    console.error("Resolved Compose configuration could not be parsed.");
     process.exit(1);
   }
 });
