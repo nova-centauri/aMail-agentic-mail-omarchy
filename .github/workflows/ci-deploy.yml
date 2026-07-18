@@ -91,13 +91,75 @@ jobs:
       name: production
       url: https://mail.xer0.io
     env:
-      PRODUCTION_REPO: /home/mitsubishi/apps/GigaMail
       DEPLOY_MODE: privacy
     steps:
       - name: Check out deployment tooling
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
+
+      - name: Locate the protected production checkout
+        shell: bash
+        env:
+          CONFIGURED_PRODUCTION_REPO: ${{ vars.PRODUCTION_REPO }}
+        run: |
+          set -euo pipefail
+          actions_workspace=$(realpath -e "$GITHUB_WORKSPACE")
+          actions_work_root=$(realpath -e "$actions_workspace/../..")
+          matches=()
+
+          consider_repository() {
+            repository=$(realpath -e "$1") || return 0
+            case "$repository" in
+              *$'\n'*|*$'\r'*)
+                printf 'Repository paths must not contain line breaks.\n' >&2
+                exit 1
+                ;;
+              "$actions_workspace"|"$actions_workspace"/*|"$actions_work_root"|"$actions_work_root"/*)
+                return 0
+                ;;
+            esac
+
+            [ -e "$repository/.git" ] || return 0
+            origin=$(git -C "$repository" remote get-url origin 2>/dev/null || true)
+            case "$origin" in
+              https://github.com/nova-centauri/GigaMail|https://github.com/nova-centauri/GigaMail.git|git@github.com:nova-centauri/GigaMail|git@github.com:nova-centauri/GigaMail.git|ssh://git@github.com/nova-centauri/GigaMail|ssh://git@github.com/nova-centauri/GigaMail.git)
+                ;;
+              *)
+                return 0
+                ;;
+            esac
+
+            [ -f "$repository/.env" ] || return 0
+            matches+=("$repository")
+          }
+
+          if [ -n "$CONFIGURED_PRODUCTION_REPO" ]; then
+            consider_repository "$CONFIGURED_PRODUCTION_REPO"
+          else
+            scan_file=$(mktemp "$RUNNER_TEMP/gigamail-checkouts.XXXXXX")
+            trap 'rm -f "$scan_file"' EXIT
+            if ! find "$HOME" -path "$actions_work_root" -prune -o \
+              \( -type d -o -type f \) -name .git -print0 > "$scan_file"; then
+              printf 'Could not safely scan for the persistent production checkout.\n' >&2
+              exit 1
+            fi
+
+            while IFS= read -r -d '' git_entry; do
+              consider_repository "${git_entry%/.git}"
+            done < "$scan_file"
+          fi
+
+          if [ "${#matches[@]}" -ne 1 ]; then
+            printf 'Expected exactly one persistent GigaMail checkout with a private .env; found %s.\n' "${#matches[@]}" >&2
+            for repository in "${matches[@]}"; do
+              printf 'Candidate: %s\n' "$repository" >&2
+            done
+            exit 1
+          fi
+
+          printf 'PRODUCTION_REPO=%s\n' "${matches[0]}" >> "$GITHUB_ENV"
+          printf 'Using protected production checkout: %s\n' "${matches[0]}"
 
       - name: Deploy the exact tested commit
         run: sh deploy/production-deploy.sh "$GITHUB_SHA" "$PRODUCTION_REPO" "$DEPLOY_MODE" "$GITHUB_WORKSPACE"

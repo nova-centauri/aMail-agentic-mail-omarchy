@@ -157,12 +157,13 @@ on the VM instead of publishing SSH or adding a long-lived deployment key:
    `sudo`:
 
    ```sh
+   PRODUCTION_REPO=/path/to/GigaMail
    git --version
    docker version
    docker compose version
    flock --version
-   test -d /home/mitsubishi/apps/GigaMail/.git
-   test "$(stat -c '%a' /home/mitsubishi/apps/GigaMail/.env)" = 600
+   test -d "$PRODUCTION_REPO/.git"
+   test "$(stat -c '%a' "$PRODUCTION_REPO/.env")" = 600
    ```
 
 The production job uses the GitHub environment named `production` and is
@@ -174,14 +175,21 @@ deployment branches to `main`. In branch protection for `main`, require the
 merges.
 
 No GitHub deployment secrets or long-lived repository credentials are
-required. The deploy script imports the exact tested Git commit from the
-already-authenticated Actions workspace into the persistent production clone;
-it never copies an untested working tree. The protected `.env` remains only on
-the VM, and the runner service must run as `mitsubishi` so that it can read the
-repository and invoke Docker. Never configure this production runner to
-execute pull-request jobs from forks. The supplied workflow schedules only
-the main-push deployment job on it; all pull-request code runs on
-GitHub-hosted runners.
+required. The production job locates exactly one persistent clone owned by
+the runner user whose `origin` is this GitHub repository and which already
+contains the protected `.env`; Actions workspaces are explicitly excluded. By
+default it searches the runner user's home directory. If the persistent clone
+lives elsewhere, set the non-secret `PRODUCTION_REPO` variable on the GitHub
+`production` environment to its absolute path. The same origin, `.env`, and
+workspace-exclusion checks still apply.
+
+The deploy script then imports the exact tested Git commit from the
+already-authenticated Actions workspace into that clone, never an untested
+working tree. The protected `.env` remains only on the VM, and the runner
+service must run as `mitsubishi` so that it can read the repository and invoke
+Docker. Never configure this production runner to execute pull-request jobs
+from forks. The supplied workflow schedules only the main-push deployment job
+on it; all pull-request code runs on GitHub-hosted runners.
 
 On a successful push, `deploy/production-deploy.sh`:
 
