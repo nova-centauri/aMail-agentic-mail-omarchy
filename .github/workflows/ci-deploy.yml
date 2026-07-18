@@ -72,7 +72,7 @@ jobs:
       - name: Start the application image
         run: |
           REMOTE_CONTENT_PROXY_URL=http://tor-proxy:8118 \
-            docker compose --env-file .env --profile privacy up --detach --no-build --wait --wait-timeout 180
+            docker compose --env-file .env --profile privacy up --detach --no-build --wait --wait-timeout 300
 
       - name: Exercise health and authentication gates
         run: |

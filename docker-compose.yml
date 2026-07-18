@@ -84,10 +84,10 @@ services:
           printf 'AUTHENTICATE\r\nGETINFO status/bootstrap-phase\r\nQUIT\r\n' |
           nc -w 3 127.0.0.1 9051 |
           grep -q 'PROGRESS=100'
-      interval: 30s
+      interval: 15s
       timeout: 5s
       start_period: 45s
-      retries: 3
+      retries: 12
 
 volumes:
   gigamail-data:
