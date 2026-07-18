@@ -257,7 +257,7 @@ verify_compose_environment() {
   repository=$1
   (
     cd "$repository"
-    docker compose --env-file .env config --format json
+    docker compose --env-file .env --profile privacy config --format json
   ) | docker exec -i \
     -e "GIGAMAIL_EXPECT_COMPOSE_PROJECT=$compose_project" \
     -e "GIGAMAIL_EXPECT_DATA_VOLUME=$data_volume" \
