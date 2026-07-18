@@ -20,13 +20,29 @@ case "$mode" in
   *) usage ;;
 esac
 
-if [ ! -d "$repo_dir/.git" ]; then
-  echo "Production repository not found at $repo_dir." >&2
+if ! command -v flock >/dev/null 2>&1; then
+  echo "flock is required to serialize production deployments." >&2
   exit 1
 fi
 
-if ! command -v flock >/dev/null 2>&1; then
-  echo "flock is required to serialize production deployments." >&2
+# A stable lock outside the checkout also covers one-time checkout recovery.
+# The workflow holds descriptor 8 before it invokes this script; manual runs
+# acquire the same lock here.
+if [ "${GIGAMAIL_DEPLOY_LOCK_HELD:-0}" = "1" ]; then
+  if ! flock -n 8; then
+    echo "The inherited production deployment lock is not held." >&2
+    exit 1
+  fi
+else
+  exec 8>"$HOME/.gigamail-production-deploy.lock"
+  if ! flock -w 600 8; then
+    echo "Timed out waiting for the production deployment lock." >&2
+    exit 1
+  fi
+fi
+
+if [ ! -d "$repo_dir/.git" ]; then
+  echo "Production repository not found at $repo_dir." >&2
   exit 1
 fi
 
@@ -186,6 +202,41 @@ wait_for_health() {
   return 1
 }
 
+restore_bootstrap_images() {
+  marker=.git/gigamail-bootstrap-images
+  [ ! -f .git/gigamail-last-successful-sha ] || return 1
+  [ -f "$marker" ] || return 1
+
+  for key in app_saved app_runtime tor_saved tor_runtime; do
+    count=$(awk -F= -v key="$key" '$1 == key { count += 1 } END { print count + 0 }' "$marker")
+    [ "$count" -eq 1 ] || return 1
+  done
+  app_saved=$(awk -F= '$1 == "app_saved" { print substr($0, length($1) + 2); exit }' "$marker")
+  app_runtime=$(awk -F= '$1 == "app_runtime" { print substr($0, length($1) + 2); exit }' "$marker")
+  tor_saved=$(awk -F= '$1 == "tor_saved" { print substr($0, length($1) + 2); exit }' "$marker")
+  tor_runtime=$(awk -F= '$1 == "tor_runtime" { print substr($0, length($1) + 2); exit }' "$marker")
+  for image_reference in "$app_saved" "$app_runtime" "$tor_saved" "$tor_runtime"; do
+    case "$image_reference" in
+      ''|*@*|*[!a-z0-9._/:-]*) return 1 ;;
+    esac
+  done
+
+  docker image inspect "$app_saved" "$tor_saved" >/dev/null 2>&1 || return 1
+  docker image tag "$app_saved" "$app_runtime" || return 1
+  docker image tag "$tor_saved" "$tor_runtime" || return 1
+
+  echo "Restoring the exact pre-CI application and privacy images."
+  if [ "$mode" = "privacy" ]; then
+    REMOTE_CONTENT_PROXY_URL=http://tor-proxy:8118 \
+      docker compose --env-file .env --profile privacy up \
+        --detach --no-build --force-recreate
+  else
+    REMOTE_CONTENT_PROXY_URL= \
+      docker compose --env-file .env up \
+        --detach --no-build --force-recreate
+  fi
+}
+
 deployment_started=0
 expected_release=$target_commit
 require_release=1
@@ -193,10 +244,13 @@ rollback() {
   echo "Deployment failed; restoring code and containers from $previous." >&2
   git checkout --detach "$previous"
   expected_release=$previous
-  # The release preceding this CI/CD change does not expose a release SHA.
-  # Keep rollback compatible while retaining every other security health gate.
-  require_release=0
-  GIGAMAIL_RELEASE_SHA="$previous" GIGAMAIL_FORCE_RECREATE=1 sh deploy/launch.sh "$mode"
+  if restore_bootstrap_images; then
+    # The release preceding this CI/CD change does not expose a release SHA.
+    # Keep rollback compatible while retaining every other security gate.
+    require_release=0
+  else
+    GIGAMAIL_RELEASE_SHA="$previous" GIGAMAIL_FORCE_RECREATE=1 sh deploy/launch.sh "$mode"
+  fi
   if wait_for_health; then
     echo "Rollback to $previous is healthy." >&2
   else

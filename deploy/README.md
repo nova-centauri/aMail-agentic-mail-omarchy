@@ -185,6 +185,30 @@ GitHub repository. If the persistent clone lives elsewhere and there is no
 existing container, set the non-secret `PRODUCTION_REPO` variable on the
 GitHub `production` environment to its absolute path.
 
+The first CI-managed rollout can also repair a stale Compose working-directory
+label whose directory is missing or is no longer a valid clone. The bootstrap
+is allowed only below the runner user's home, only when exactly one running
+GigaMail container passes the authentication, encryption, and privacy health
+gates, only when its Compose project/config labels and `/data` named-volume
+labels agree, and only for a runner-owned parent directory. It creates a full
+local clone from the tested Actions workspace, pins `origin` to this
+repository, and uses the commit immediately before CI/CD was introduced as the
+initial source rollback point when the old application does not expose a
+release SHA. It also retains immutable tags for the exact live application and
+Tor images so the first failed rollout can restore the known-good runtime
+without rebuilding it.
+
+If an old deployment directory still exists, it is moved to a timestamped
+`.pre-cicd-*` sibling instead of being deleted. Its mode-`600` `.env` is copied
+into the new checkout; if no file remains, only an explicit allowlist of
+configuration values with dotenv-safe characters is recovered from the healthy
+container without printing them to the Actions log. The resolved Compose
+configuration is compared byte-for-byte with the live container before it is
+accepted. A failed bootstrap moves its partial clone aside and restores the
+prior directory, reporting a critical error if either atomic rename fails.
+Once the new deployment is verified and any preserved directory is no longer
+needed, an operator can remove that backup manually.
+
 The deploy script then imports the exact tested Git commit from the
 already-authenticated Actions workspace into that clone, never an untested
 working tree. The protected `.env` remains only on the VM, and the runner
@@ -195,7 +219,8 @@ on it; all pull-request code runs on GitHub-hosted runners.
 
 On a successful push, `deploy/production-deploy.sh`:
 
-- locks deployment on both GitHub and the VM and deploys the exact tested commit;
+- locks deployment on GitHub and with a stable VM lock held across checkout
+  preparation and deployment, then deploys the exact tested commit;
 - refuses tracked or untracked production-source changes, duplicate secret
   declarations, or an `.env` whose mode is not `600`;
 - creates an online SQLite backup in the named data volume, retaining five;
@@ -204,7 +229,8 @@ On a successful push, `deploy/production-deploy.sh`:
 - waits up to five minutes for GigaMail health and a local Tor control-port
   check proving that the privacy relay reached 100% bootstrap; and
 - restores the last known-good commit and recreates its containers if health
-  fails.
+  fails; the first CI-managed rollout restores the retained exact pre-CI images
+  instead of relying on a source rebuild.
 
 Rollback intentionally does not restore the database automatically: doing so
 could discard mail received after the pre-deploy snapshot. Database migrations

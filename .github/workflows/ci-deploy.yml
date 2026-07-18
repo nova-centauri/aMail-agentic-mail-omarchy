@@ -49,9 +49,22 @@ jobs:
       - name: Validate deployment files
         run: |
           cp .env.example .env
+          bash -n deploy/prepare-production.sh
           sh -n deploy/launch.sh
           sh -n deploy/production-deploy.sh
           docker compose --env-file .env --profile privacy config --quiet
+          docker compose --env-file .env --profile privacy config --format json | node -e '
+            let input = "";
+            process.stdin.setEncoding("utf8");
+            process.stdin.on("data", (chunk) => { input += chunk; });
+            process.stdin.on("end", () => {
+              const config = JSON.parse(input);
+              const service = config.services?.gigamail;
+              const dataMount = service?.volumes?.find((mount) => mount.target === "/data");
+              if (!service || dataMount?.type !== "volume" || dataMount.source !== "gigamail-data" ||
+                typeof service.environment?.GIGAMAIL_ENCRYPTION_KEY !== "string") process.exit(1);
+            });
+          '
 
       - name: Build application and privacy images
         run: docker compose --env-file .env --profile privacy build
@@ -86,7 +99,7 @@ jobs:
       - self-hosted
       - linux
       - gigamail-prod
-    timeout-minutes: 20
+    timeout-minutes: 40
     environment:
       name: production
       url: https://mail.xer0.io
@@ -96,106 +109,28 @@ jobs:
       - name: Check out deployment tooling
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
+          fetch-depth: 0
           persist-credentials: false
 
-      - name: Locate the protected production checkout
+      - name: Prepare and deploy the exact tested commit
         shell: bash
         env:
           CONFIGURED_PRODUCTION_REPO: ${{ vars.PRODUCTION_REPO }}
         run: |
           set -euo pipefail
-          actions_workspace=$(realpath -e "$GITHUB_WORKSPACE")
-          actions_work_root=$(realpath -e "$actions_workspace/../..")
-          matches=()
+          exec 8>"$HOME/.gigamail-production-deploy.lock"
+          flock -w 600 8
+          production_repo=$(bash deploy/prepare-production.sh "$GITHUB_WORKSPACE" "$CONFIGURED_PRODUCTION_REPO")
 
-          consider_repository() {
-            require_origin=$2
-            repository=$(realpath -e "$1") || return 0
-            case "$repository" in
-              *$'\n'*|*$'\r'*)
-                printf 'Repository paths must not contain line breaks.\n' >&2
-                exit 1
-                ;;
-              "$actions_workspace"|"$actions_workspace"/*|"$actions_work_root"|"$actions_work_root"/*)
-                return 0
-                ;;
-            esac
-
-            [ -e "$repository/.git" ] || return 0
-            [ -f "$repository/.env" ] || return 0
-            [ -f "$repository/docker-compose.yml" ] || return 0
-            [ -f "$repository/deploy/launch.sh" ] || return 0
-            [ -f "$repository/package.json" ] || return 0
-
-            if [ "$require_origin" = "1" ]; then
-              origin=$(git -C "$repository" remote get-url origin 2>/dev/null || true)
-              case "$origin" in
-                https://github.com/nova-centauri/GigaMail|https://github.com/nova-centauri/GigaMail.git|git@github.com:nova-centauri/GigaMail|git@github.com:nova-centauri/GigaMail.git|ssh://git@github.com/nova-centauri/GigaMail|ssh://git@github.com/nova-centauri/GigaMail.git)
-                  ;;
-                *)
-                  return 0
-                  ;;
-              esac
-            fi
-
-            for existing in "${matches[@]}"; do
-              [ "$existing" = "$repository" ] && return 0
-            done
-            matches+=("$repository")
-          }
-
-          if [ -n "$CONFIGURED_PRODUCTION_REPO" ]; then
-            consider_repository "$CONFIGURED_PRODUCTION_REPO" 0
-          else
-            compose_scan=$(mktemp "$RUNNER_TEMP/gigamail-compose-roots.XXXXXX")
-            home_scan=$(mktemp "$RUNNER_TEMP/gigamail-checkouts.XXXXXX")
-            trap 'rm -f "$compose_scan" "$home_scan"' EXIT
-
-            if ! docker ps --all \
-              --filter label=com.docker.compose.service=gigamail \
-              --format '{{.Label "com.docker.compose.project.working_dir"}}' > "$compose_scan"; then
-              printf 'Could not inspect the existing GigaMail Compose container.\n' >&2
+          case "$production_repo" in
+            ''|*$'\n'*|*$'\r'*)
+              printf 'The prepared production path is missing or unsafe.\n' >&2
               exit 1
-            fi
-
-            while IFS= read -r compose_root; do
-              [ -n "$compose_root" ] || continue
-              case "$compose_root" in
-                *$'\r'*)
-                  printf 'Compose working-directory labels must not contain carriage returns.\n' >&2
-                  exit 1
-                  ;;
-              esac
-              printf 'Inspecting Compose working directory: %s\n' "$compose_root"
-              consider_repository "$compose_root" 0
-            done < "$compose_scan"
-
-            if [ "${#matches[@]}" -eq 0 ]; then
-              if ! find "$HOME" -path "$actions_work_root" -prune -o \
-                \( -type d -o -type f \) -name .git -print0 > "$home_scan"; then
-                printf 'Could not safely scan for the persistent production checkout.\n' >&2
-                exit 1
-              fi
-
-              while IFS= read -r -d '' git_entry; do
-                consider_repository "${git_entry%/.git}" 1
-              done < "$home_scan"
-            fi
-          fi
-
-          if [ "${#matches[@]}" -ne 1 ]; then
-            printf 'Expected exactly one persistent GigaMail checkout with a private .env; found %s.\n' "${#matches[@]}" >&2
-            for repository in "${matches[@]}"; do
-              printf 'Candidate: %s\n' "$repository" >&2
-            done
-            exit 1
-          fi
-
-          printf 'PRODUCTION_REPO=%s\n' "${matches[0]}" >> "$GITHUB_ENV"
-          printf 'Using protected production checkout: %s\n' "${matches[0]}"
-
-      - name: Deploy the exact tested commit
-        run: sh deploy/production-deploy.sh "$GITHUB_SHA" "$PRODUCTION_REPO" "$DEPLOY_MODE" "$GITHUB_WORKSPACE"
+              ;;
+          esac
+          printf 'Using protected production checkout: %s\n' "$production_repo"
+          GIGAMAIL_DEPLOY_LOCK_HELD=1 \
+            sh deploy/production-deploy.sh "$GITHUB_SHA" "$production_repo" "$DEPLOY_MODE" "$GITHUB_WORKSPACE"
 
   verify-public:
     name: Verify public HTTPS
