@@ -176,12 +176,14 @@ merges.
 
 No GitHub deployment secrets or long-lived repository credentials are
 required. The production job locates exactly one persistent clone owned by
-the runner user whose `origin` is this GitHub repository and which already
-contains the protected `.env`; Actions workspaces are explicitly excluded. By
-default it searches the runner user's home directory. If the persistent clone
-lives elsewhere, set the non-secret `PRODUCTION_REPO` variable on the GitHub
-`production` environment to its absolute path. The same origin, `.env`, and
-workspace-exclusion checks still apply.
+the runner user which already contains the protected `.env` and the expected
+GigaMail deployment files; Actions workspaces are explicitly excluded. It
+first uses the working-directory label on the existing GigaMail Compose
+container. If no valid container-managed checkout exists, it searches the
+runner user's home directory and requires that clone's `origin` to be this
+GitHub repository. If the persistent clone lives elsewhere and there is no
+existing container, set the non-secret `PRODUCTION_REPO` variable on the
+GitHub `production` environment to its absolute path.
 
 The deploy script then imports the exact tested Git commit from the
 already-authenticated Actions workspace into that clone, never an untested

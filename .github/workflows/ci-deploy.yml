@@ -109,6 +109,7 @@ jobs:
           matches=()
 
           consider_repository() {
+            require_origin=$2
             repository=$(realpath -e "$1") || return 0
             case "$repository" in
               *$'\n'*|*$'\r'*)
@@ -121,33 +122,65 @@ jobs:
             esac
 
             [ -e "$repository/.git" ] || return 0
-            origin=$(git -C "$repository" remote get-url origin 2>/dev/null || true)
-            case "$origin" in
-              https://github.com/nova-centauri/GigaMail|https://github.com/nova-centauri/GigaMail.git|git@github.com:nova-centauri/GigaMail|git@github.com:nova-centauri/GigaMail.git|ssh://git@github.com/nova-centauri/GigaMail|ssh://git@github.com/nova-centauri/GigaMail.git)
-                ;;
-              *)
-                return 0
-                ;;
-            esac
-
             [ -f "$repository/.env" ] || return 0
+            [ -f "$repository/docker-compose.yml" ] || return 0
+            [ -f "$repository/deploy/launch.sh" ] || return 0
+            [ -f "$repository/package.json" ] || return 0
+
+            if [ "$require_origin" = "1" ]; then
+              origin=$(git -C "$repository" remote get-url origin 2>/dev/null || true)
+              case "$origin" in
+                https://github.com/nova-centauri/GigaMail|https://github.com/nova-centauri/GigaMail.git|git@github.com:nova-centauri/GigaMail|git@github.com:nova-centauri/GigaMail.git|ssh://git@github.com/nova-centauri/GigaMail|ssh://git@github.com/nova-centauri/GigaMail.git)
+                  ;;
+                *)
+                  return 0
+                  ;;
+              esac
+            fi
+
+            for existing in "${matches[@]}"; do
+              [ "$existing" = "$repository" ] && return 0
+            done
             matches+=("$repository")
           }
 
           if [ -n "$CONFIGURED_PRODUCTION_REPO" ]; then
-            consider_repository "$CONFIGURED_PRODUCTION_REPO"
+            consider_repository "$CONFIGURED_PRODUCTION_REPO" 0
           else
-            scan_file=$(mktemp "$RUNNER_TEMP/gigamail-checkouts.XXXXXX")
-            trap 'rm -f "$scan_file"' EXIT
-            if ! find "$HOME" -path "$actions_work_root" -prune -o \
-              \( -type d -o -type f \) -name .git -print0 > "$scan_file"; then
-              printf 'Could not safely scan for the persistent production checkout.\n' >&2
+            compose_scan=$(mktemp "$RUNNER_TEMP/gigamail-compose-roots.XXXXXX")
+            home_scan=$(mktemp "$RUNNER_TEMP/gigamail-checkouts.XXXXXX")
+            trap 'rm -f "$compose_scan" "$home_scan"' EXIT
+
+            if ! docker ps --all \
+              --filter label=com.docker.compose.service=gigamail \
+              --format '{{.Label "com.docker.compose.project.working_dir"}}' > "$compose_scan"; then
+              printf 'Could not inspect the existing GigaMail Compose container.\n' >&2
               exit 1
             fi
 
-            while IFS= read -r -d '' git_entry; do
-              consider_repository "${git_entry%/.git}"
-            done < "$scan_file"
+            while IFS= read -r compose_root; do
+              [ -n "$compose_root" ] || continue
+              case "$compose_root" in
+                *$'\r'*)
+                  printf 'Compose working-directory labels must not contain carriage returns.\n' >&2
+                  exit 1
+                  ;;
+              esac
+              printf 'Inspecting Compose working directory: %s\n' "$compose_root"
+              consider_repository "$compose_root" 0
+            done < "$compose_scan"
+
+            if [ "${#matches[@]}" -eq 0 ]; then
+              if ! find "$HOME" -path "$actions_work_root" -prune -o \
+                \( -type d -o -type f \) -name .git -print0 > "$home_scan"; then
+                printf 'Could not safely scan for the persistent production checkout.\n' >&2
+                exit 1
+              fi
+
+              while IFS= read -r -d '' git_entry; do
+                consider_repository "${git_entry%/.git}" 1
+              done < "$home_scan"
+            fi
           fi
 
           if [ "${#matches[@]}" -ne 1 ]; then
