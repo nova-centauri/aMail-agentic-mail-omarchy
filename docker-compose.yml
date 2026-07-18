@@ -39,8 +39,12 @@ services:
     security_opt:
       - no-new-privileges:true
     networks:
-      - app-net
-      - privacy-net
+      # GigaMail needs direct provider access for IMAP/SMTP. Explicit gateway
+      # priority prevents the internal privacy network from becoming its
+      # default route on hosts that attach Compose networks in another order.
+      app-net:
+        gw_priority: 1
+      privacy-net:
     healthcheck:
       test:
         - CMD
@@ -74,8 +78,12 @@ services:
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=32m
     networks:
-      - privacy-net
-      - tor-egress
+      privacy-net:
+      # Tor must use the egress bridge as its default route. Without an
+      # explicit priority Docker may select the internal network instead,
+      # leaving Tor alive but permanently stuck at 0% bootstrap.
+      tor-egress:
+        gw_priority: 1
     healthcheck:
       test:
         - CMD-SHELL

@@ -79,8 +79,25 @@ for command in git docker; do
   fi
 done
 
-if ! docker compose version >/dev/null 2>&1; then
-  echo "Docker Compose v2 is required for production deployment." >&2
+compose_version=$(docker compose version --short 2>/dev/null || true)
+compose_version=${compose_version#v}
+compose_major=$(printf '%s\n' "$compose_version" | awk -F. '{ print $1 }')
+compose_minor=$(printf '%s\n' "$compose_version" | awk -F. '{ print $2 }')
+compose_patch=$(printf '%s\n' "$compose_version" | awk -F. '{ value=$3; sub(/[^0-9].*$/, "", value); print value }')
+case "$compose_major.$compose_minor.$compose_patch" in
+  *[!0-9.]*|.*|*.|*..*) compose_supported=0 ;;
+  *)
+    if [ "$compose_major" -gt 2 ] \
+      || { [ "$compose_major" -eq 2 ] && [ "$compose_minor" -gt 33 ]; } \
+      || { [ "$compose_major" -eq 2 ] && [ "$compose_minor" -eq 33 ] && [ "$compose_patch" -ge 1 ]; }; then
+      compose_supported=1
+    else
+      compose_supported=0
+    fi
+    ;;
+esac
+if [ "$compose_supported" -ne 1 ]; then
+  echo "Docker Compose 2.33.1 or newer is required for deterministic gateway priority (found ${compose_version:-unknown})." >&2
   exit 1
 fi
 

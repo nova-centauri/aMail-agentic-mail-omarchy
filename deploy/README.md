@@ -9,8 +9,9 @@ this project.
 
 ## First launch
 
-On the VM, place this repository in a directory owned by the deployment user,
-then create the private runtime configuration:
+On the VM, install Docker Compose 2.33.1 or newer, place this repository in a
+directory owned by the deployment user, then create the private runtime
+configuration:
 
 ```sh
 cd /path/to/GigaMail
@@ -107,8 +108,10 @@ This starts `tor-proxy` and passes
 `REMOTE_CONTENT_PROXY_URL=http://tor-proxy:8118` only to that launch. Neither
 its SOCKS nor HTTP proxy port is published to the Docker host. GigaMail can
 reach Privoxy over an internal network; Tor alone has a separate egress
-network. If the proxy is unavailable, remote-content requests fail closed
-rather than silently going direct.
+network, selected explicitly as Tor's default gateway. GigaMail's separate
+provider network is likewise its explicit default route for IMAP/SMTP. If the
+proxy is unavailable, remote-content requests fail closed rather than silently
+going direct.
 
 Tor is a privacy aid, not a complete anonymity system. It does not anonymize
 IMAP/SMTP traffic, and remote images can still reveal message-specific data
@@ -160,7 +163,7 @@ on the VM instead of publishing SSH or adding a long-lived deployment key:
    PRODUCTION_REPO=/path/to/GigaMail
    git --version
    docker version
-   docker compose version
+   docker compose version # must be 2.33.1 or newer for gateway priority
    flock --version
    test -d "$PRODUCTION_REPO/.git"
    test "$(stat -c '%a' "$PRODUCTION_REPO/.env")" = 600

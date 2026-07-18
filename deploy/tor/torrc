@@ -12,3 +12,8 @@ Log notice stdout
 RunAsDaemon 0
 ClientOnly 1
 AvoidDiskWrites 1
+# This container is an explicitly managed, always-available application
+# proxy. A persisted DataDirectory may remember that an idle Tor client was
+# dormant; treat each intentional container start as activity so deployment
+# health checks can establish a fresh circuit.
+DormantCanceledByStartup 1
