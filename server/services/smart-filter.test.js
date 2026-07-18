@@ -9,6 +9,9 @@ import {
   SMART_CATEGORY_SLUGS,
   SMART_FILTER_VERSION,
   classifyMessage,
+  isPersonFlag,
+  messageMatchesPersonFlag,
+  normalizeEmailAddress,
 } from './smart-filter.js';
 
 const makeTempDatabase = () => {
@@ -52,9 +55,34 @@ test('smart filtering is deterministic, explainable, and gives GitHub precedence
       category: 'primary',
       rule: 'primary.default',
     },
+    {
+      message: { from_email: 'watchtower@home.lab', subject: 'Watchtower update report: all containers up to date' },
+      category: 'ops_quiet',
+      rule: 'ops_quiet.watchtower',
+    },
+    {
+      message: { from_email: 'root@proxmox.local', subject: 'Proxmox backup failed on pve-1' },
+      category: 'ops_error',
+      rule: 'ops_error.proxmox',
+    },
+    {
+      message: { from_email: 'jobs@workboard.com', subject: 'Workboard daily digest' },
+      category: 'ops_quiet',
+      rule: 'ops_quiet.workboard',
+    },
+    {
+      message: { from_email: 'backup@xer0.io', subject: 'xer0/msl backup completed successfully' },
+      category: 'ops_quiet',
+      rule: 'ops_quiet.xer0_msl_backup',
+    },
+    {
+      message: { from_email: 'backup@xer0.io', subject: 'MSL backup failed: exit code 1' },
+      category: 'ops_error',
+      rule: 'ops_error.xer0_msl_backup',
+    },
   ];
 
-  assert.deepEqual(SMART_CATEGORY_SLUGS, ['primary', 'github_ci', 'logs', 'status']);
+  assert.deepEqual(SMART_CATEGORY_SLUGS, ['primary', 'github_ci', 'logs', 'status', 'ops_error', 'ops_quiet']);
   for (const { message, category, rule } of cases) {
     const first = classifyMessage(message);
     const second = classifyMessage({ ...message });
@@ -65,6 +93,25 @@ test('smart filtering is deterministic, explainable, and gives GitHub precedence
     assert.ok(first.categoryLabel);
     assert.match(first.categoryReason, /\S/);
   }
+});
+
+test('person flags match Midstate addresses including known domain typos', () => {
+  assert.equal(normalizeEmailAddress('Phil <phil@midstaelitho.com>'), 'phil@midstatelitho.com');
+  assert.equal(normalizeEmailAddress('support@midstaetlitho.com'), 'support@midstatelitho.com');
+  assert.ok(isPersonFlag('phil'));
+  assert.ok(messageMatchesPersonFlag({
+    from_email: 'phil@midstaelitho.com',
+    to_json: '[{"email":"nova@example.com"}]',
+  }, 'phil'));
+  assert.ok(messageMatchesPersonFlag({
+    from_email: 'boss@example.com',
+    to: [{ email: 'sarah@midstatelitho.com' }],
+  }, 'sarah'));
+  assert.ok(messageMatchesPersonFlag({
+    from_email: 'client@example.com',
+    cc: [{ email: 'mark_culley@sdmc.com' }],
+  }, 'mark'));
+  assert.equal(messageMatchesPersonFlag({ from_email: 'stranger@example.com' }, 'sales'), false);
 });
 
 test('existing databases gain category columns and old messages are classified on startup', (t) => {
@@ -269,5 +316,7 @@ test('message repository persists public category metadata and supports filterin
     github_ci: 0,
     logs: 1,
     status: 1,
+    ops_error: 0,
+    ops_quiet: 0,
   });
 });

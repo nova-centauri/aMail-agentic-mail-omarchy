@@ -161,7 +161,7 @@ test('message API filters unified mail by smart category and account creation is
   assert.equal(filtered.total, 1);
   assert.equal(filtered.messages[0].category, 'github_ci');
   assert.equal(filtered.messages[0].subject, '[acme/web] Deploy check failed');
-  assert.deepEqual(filtered.categoryCounts, { primary: 2, github_ci: 1, logs: 1, status: 1 });
+  assert.deepEqual(filtered.categoryCounts, { primary: 2, github_ci: 1, logs: 1, status: 1, ops_error: 0 });
 
   const searchedResponse = await fetch(`${origin}/api/messages?folder=inbox&q=Workflow%20failed`);
   assert.equal(searchedResponse.status, 200);
@@ -169,7 +169,7 @@ test('message API filters unified mail by smart category and account creation is
   assert.equal(searched.total, 1);
   assert.equal(searched.messages[0].subject, 'Re: Workflow failure — I can help');
   assert.equal(searched.messages[0].category, 'primary');
-  assert.deepEqual(searched.categoryCounts, { primary: 1, github_ci: 0, logs: 0, status: 0 });
+  assert.deepEqual(searched.categoryCounts, { primary: 1, github_ci: 0, logs: 0, status: 0, ops_error: 0 });
 
   const allResponse = await fetch(`${origin}/api/messages?folder=inbox`);
   const all = await allResponse.json();
@@ -180,6 +180,69 @@ test('message API filters unified mail by smart category and account creation is
   assert.equal(all.folderCounts.inbox, 5);
   assert.equal(all.folderCounts.starred, 0);
   assert.equal(all.folderCounts.drafts, 0);
+
+  // Routine ops digests stay out of the default inbox even when unread. Errors
+  // surface in the dedicated Ops errors smart view.
+  const quietThread = repos.threads.create({
+    account_id: account.id,
+    subject: 'Watchtower: all containers up to date',
+    normalized_subject: 'watchtower: all containers up to date',
+    latest_at: '2026-01-08T00:00:00.000Z',
+  });
+  repos.messages.upsert(messageInput({
+    accountId: account.id,
+    threadId: quietThread.id,
+    uid: 7,
+    subject: 'Watchtower: all containers up to date',
+    fromEmail: 'watchtower@home.lab',
+    timestamp: '2026-01-08T00:00:00.000Z',
+  }));
+  const errorThread = repos.threads.create({
+    account_id: account.id,
+    subject: 'Proxmox backup failed on pve-1',
+    normalized_subject: 'proxmox backup failed on pve-1',
+    latest_at: '2026-01-09T00:00:00.000Z',
+  });
+  repos.messages.upsert(messageInput({
+    accountId: account.id,
+    threadId: errorThread.id,
+    uid: 8,
+    subject: 'Proxmox backup failed on pve-1',
+    fromEmail: 'root@proxmox.local',
+    timestamp: '2026-01-09T00:00:00.000Z',
+  }));
+  const philThread = repos.threads.create({
+    account_id: account.id,
+    subject: 'Press schedule for Thursday',
+    normalized_subject: 'press schedule for thursday',
+    latest_at: '2026-01-10T00:00:00.000Z',
+  });
+  const philMessage = {
+    ...messageInput({
+      accountId: account.id,
+      threadId: philThread.id,
+      uid: 9,
+      subject: 'Press schedule for Thursday',
+      fromEmail: 'phil@midstaelitho.com',
+      timestamp: '2026-01-10T00:00:00.000Z',
+    }),
+    to_json: JSON.stringify([{ name: 'Nova', email: 'owner@example.test' }]),
+  };
+  repos.messages.upsert(philMessage);
+
+  const defaultInbox = await (await fetch(`${origin}/api/messages?folder=inbox`)).json();
+  assert.equal(defaultInbox.messages.some((item) => /Watchtower/.test(item.subject)), false);
+  assert.equal(defaultInbox.messages.some((item) => /Proxmox backup failed/.test(item.subject)), true);
+  assert.equal(defaultInbox.folderCounts.inbox, 7);
+
+  const opsErrors = await (await fetch(`${origin}/api/messages?folder=inbox&category=ops_error`)).json();
+  assert.equal(opsErrors.total, 1);
+  assert.equal(opsErrors.messages[0].category, 'ops_error');
+
+  const philFlag = await (await fetch(`${origin}/api/messages?folder=inbox&flag=phil`)).json();
+  assert.equal(philFlag.total, 1);
+  assert.equal(philFlag.messages[0].from.email, 'phil@midstaelitho.com');
+  assert.equal(philFlag.personFlag, 'phil');
 
   const invalidResponse = await fetch(`${origin}/api/messages?category=unknown`);
   assert.equal(invalidResponse.status, 400);

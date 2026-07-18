@@ -187,7 +187,7 @@ function initSchema(db) {
       is_spam INTEGER NOT NULL DEFAULT 0,
       snoozed_until TEXT,
       is_sent INTEGER NOT NULL DEFAULT 0,
-      smart_category TEXT NOT NULL DEFAULT 'primary' CHECK (smart_category IN ('primary', 'github_ci', 'logs', 'status')),
+      smart_category TEXT NOT NULL DEFAULT 'primary' CHECK (smart_category IN ('primary', 'github_ci', 'logs', 'status', 'ops_error', 'ops_quiet')),
       smart_category_reason TEXT NOT NULL DEFAULT '',
       smart_category_rule TEXT NOT NULL DEFAULT '',
       smart_category_version INTEGER NOT NULL DEFAULT 0,
@@ -239,6 +239,84 @@ function initSchema(db) {
   if (!messageColumns.has('smart_category_rule')) db.exec("ALTER TABLE messages ADD COLUMN smart_category_rule TEXT NOT NULL DEFAULT ''");
   if (!messageColumns.has('smart_category_version')) db.exec('ALTER TABLE messages ADD COLUMN smart_category_version INTEGER NOT NULL DEFAULT 0');
   db.exec('CREATE INDEX IF NOT EXISTS idx_messages_smart_category ON messages(account_id, smart_category, sent_at DESC)');
+
+  // SQLite cannot ALTER a CHECK constraint in place. Rebuild the messages table
+  // when an older smart_category check would reject ops_error / ops_quiet.
+  const messagesTableSql = String(db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'messages'`).get()?.sql || '');
+  const hasLegacyCategoryCheck = /CHECK\s*\(\s*smart_category\s+IN\s*\(\s*'primary'\s*,\s*'github_ci'\s*,\s*'logs'\s*,\s*'status'\s*\)\s*\)/i.test(messagesTableSql);
+  if (hasLegacyCategoryCheck) {
+    db.pragma('foreign_keys = OFF');
+    const rebuildMessages = db.transaction(() => {
+      db.exec(`
+        CREATE TABLE messages_migrated (
+          id TEXT PRIMARY KEY,
+          account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+          thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+          mailbox TEXT NOT NULL DEFAULT 'INBOX',
+          uid INTEGER,
+          rfc_message_id TEXT,
+          in_reply_to TEXT,
+          references_json TEXT NOT NULL DEFAULT '[]',
+          subject TEXT NOT NULL DEFAULT '',
+          from_name TEXT NOT NULL DEFAULT '',
+          from_email TEXT NOT NULL DEFAULT '',
+          to_json TEXT NOT NULL DEFAULT '[]',
+          cc_json TEXT NOT NULL DEFAULT '[]',
+          bcc_json TEXT NOT NULL DEFAULT '[]',
+          reply_to_json TEXT,
+          sent_at TEXT,
+          received_at TEXT,
+          html_body TEXT NOT NULL DEFAULT '',
+          text_body TEXT NOT NULL DEFAULT '',
+          snippet TEXT NOT NULL DEFAULT '',
+          attachments_json TEXT NOT NULL DEFAULT '[]',
+          labels_json TEXT NOT NULL DEFAULT '[]',
+          is_read INTEGER NOT NULL DEFAULT 0,
+          is_starred INTEGER NOT NULL DEFAULT 0,
+          is_archived INTEGER NOT NULL DEFAULT 0,
+          is_trashed INTEGER NOT NULL DEFAULT 0,
+          is_spam INTEGER NOT NULL DEFAULT 0,
+          snoozed_until TEXT,
+          is_sent INTEGER NOT NULL DEFAULT 0,
+          smart_category TEXT NOT NULL DEFAULT 'primary' CHECK (smart_category IN ('primary', 'github_ci', 'logs', 'status', 'ops_error', 'ops_quiet')),
+          smart_category_reason TEXT NOT NULL DEFAULT '',
+          smart_category_rule TEXT NOT NULL DEFAULT '',
+          smart_category_version INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(account_id, mailbox, uid)
+        );
+        INSERT INTO messages_migrated (
+          id, account_id, thread_id, mailbox, uid, rfc_message_id, in_reply_to, references_json,
+          subject, from_name, from_email, to_json, cc_json, bcc_json, reply_to_json,
+          sent_at, received_at, html_body, text_body, snippet, attachments_json, labels_json,
+          is_read, is_starred, is_archived, is_trashed, is_spam, snoozed_until, is_sent,
+          smart_category, smart_category_reason, smart_category_rule, smart_category_version,
+          created_at, updated_at
+        )
+        SELECT
+          id, account_id, thread_id, mailbox, uid, rfc_message_id, in_reply_to, references_json,
+          subject, from_name, from_email, to_json, cc_json, bcc_json, reply_to_json,
+          sent_at, received_at, html_body, text_body, snippet, attachments_json, labels_json,
+          is_read, is_starred, is_archived, is_trashed, is_spam, snoozed_until, is_sent,
+          CASE
+            WHEN smart_category IN ('primary', 'github_ci', 'logs', 'status', 'ops_error', 'ops_quiet') THEN smart_category
+            ELSE 'primary'
+          END,
+          smart_category_reason, smart_category_rule, smart_category_version,
+          created_at, updated_at
+        FROM messages;
+        DROP TABLE messages;
+        ALTER TABLE messages_migrated RENAME TO messages;
+        CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id, sent_at);
+        CREATE INDEX IF NOT EXISTS idx_messages_folder ON messages(account_id, mailbox, is_archived, is_trashed, sent_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_messages_rfc_id ON messages(account_id, rfc_message_id);
+        CREATE INDEX IF NOT EXISTS idx_messages_smart_category ON messages(account_id, smart_category, sent_at DESC);
+      `);
+    });
+    rebuildMessages();
+    db.pragma('foreign_keys = ON');
+  }
 
   const staleMessages = db.prepare(`SELECT id, subject, from_name, from_email, labels_json, snippet, text_body
     FROM messages
@@ -394,6 +472,7 @@ export function createRepositories(db) {
             AND is_archived = 0 AND is_trashed = 0 AND is_spam = 0
             AND is_read = 0
             AND (snoozed_until IS NULL OR snoozed_until <= @now)
+            AND smart_category <> 'ops_quiet'
           GROUP BY thread_id
         )
       ) AS inbox,

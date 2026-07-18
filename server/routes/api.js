@@ -2,7 +2,16 @@ import express from 'express';
 import rateLimit from 'express-rate-limit';
 import { decryptJson, encryptJson, timingSafeMatch } from '../services/crypto.js';
 import { hydrateRemoteContent } from '../services/message-html.js';
-import { isSmartCategory, SMART_CATEGORY_SLUGS } from '../services/smart-filter.js';
+import {
+  getPersonFlag,
+  HIDDEN_DEFAULT_CATEGORIES,
+  isHiddenDefaultCategory,
+  isPersonFlag,
+  isSmartCategory,
+  messageMatchesPersonFlag,
+  PERSON_FLAGS,
+  SMART_CATEGORY_SLUGS,
+} from '../services/smart-filter.js';
 import {
   accountConnection,
   DEFAULT_ACCOUNT_COLOR,
@@ -26,13 +35,33 @@ const normalizeFolder = (value) => {
 const normalizeCategory = (value) => {
   const category = String(value || '').trim().toLowerCase();
   if (!category || category === 'all') return '';
-  if (!isSmartCategory(category)) {
-    throw new ValidationError(`Unknown smart filter. Choose one of: ${SMART_CATEGORY_SLUGS.join(', ')}.`);
+  // ops_quiet is intentionally not selectable as a smart-view chip; it only
+  // exists so routine digests can be excluded from the default inbox.
+  if (category === 'ops_quiet') {
+    throw new ValidationError('Ops digests without errors are hidden. Use Ops errors for failures.');
+  }
+  if (!isSmartCategory(category) || isHiddenDefaultCategory(category)) {
+    throw new ValidationError(`Unknown smart filter. Choose one of: ${SMART_CATEGORY_SLUGS.filter((slug) => !isHiddenDefaultCategory(slug)).join(', ')}.`);
   }
   return category;
 };
 
-const emptyCategoryCounts = () => Object.fromEntries(SMART_CATEGORY_SLUGS.map((category) => [category, 0]));
+const normalizePersonFlag = (value) => {
+  const flag = String(value || '').trim().toLowerCase();
+  if (!flag) return '';
+  if (!isPersonFlag(flag)) {
+    throw new ValidationError(`Unknown person flag. Choose one of: ${PERSON_FLAGS.map((item) => item.id).join(', ')}.`);
+  }
+  return flag;
+};
+
+const emptyCategoryCounts = () => Object.fromEntries(
+  SMART_CATEGORY_SLUGS
+    .filter((category) => !isHiddenDefaultCategory(category))
+    .map((category) => [category, 0]),
+);
+
+const conversationTouchesPersonFlag = (conversationMessages, flagId) => conversationMessages.some((message) => messageMatchesPersonFlag(message, flagId));
 
 const emptyFolderCounts = () => ({ inbox: 0, starred: 0, snoozed: 0, drafts: 0 });
 
@@ -347,10 +376,24 @@ export function registerApi(app, { config, repos, mailService, remoteContent }) 
     response.json({ results });
   });
 
+  router.get('/flags', (_request, response) => {
+    response.json({
+      flags: PERSON_FLAGS.map((flag) => ({
+        id: flag.id,
+        label: flag.label,
+        shortLabel: flag.shortLabel,
+        description: flag.description,
+        emails: [...flag.emails],
+      })),
+      hiddenDefaultCategories: [...HIDDEN_DEFAULT_CATEGORIES],
+    });
+  });
+
   router.get('/messages', (request, response) => {
     const accountId = request.query.accountId ? String(request.query.accountId) : null;
     const folder = normalizeFolder(request.query.folder);
     const category = normalizeCategory(request.query.category);
+    const personFlag = normalizePersonFlag(request.query.flag || request.query.personFlag);
     const page = parseNumber(request.query.page, 1, 1, 100_000);
     const pageSize = parseNumber(request.query.pageSize || request.query.limit, 50, 1, 200);
     const query = String(request.query.q || '').trim().slice(0, 200);
@@ -359,8 +402,12 @@ export function registerApi(app, { config, repos, mailService, remoteContent }) 
     if (folder === 'drafts') {
       const drafts = accounts.flatMap((account) => repos.drafts.list(account.id)
         .map((draft) => draftListItem(draft, account))
-        .filter((draft) => !query || [draft.subject, draft.snippet, draft.from.name, draft.from.email, ...draft.to.map((recipient) => `${recipient.name || ''} ${recipient.email || ''}`)]
-          .join(' ').toLowerCase().includes(query.toLowerCase()))
+        .filter((draft) => {
+          if (personFlag && !messageMatchesPersonFlag(draft, personFlag)) return false;
+          if (!query) return true;
+          return [draft.subject, draft.snippet, draft.from.name, draft.from.email, ...draft.to.map((recipient) => `${recipient.name || ''} ${recipient.email || ''}`)]
+            .join(' ').toLowerCase().includes(query.toLowerCase());
+        })
       ).sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)));
       const start = (page - 1) * pageSize;
       return response.json({
@@ -370,6 +417,8 @@ export function registerApi(app, { config, repos, mailService, remoteContent }) 
         pageSize,
         categoryCounts: emptyCategoryCounts(),
         folderCounts: sumFolderCounts(accounts, repos),
+        personFlag: personFlag || null,
+        personFlagMeta: personFlag ? getPersonFlag(personFlag) : null,
       });
     }
     const mailbox = String(request.query.mailbox || 'INBOX');
@@ -400,15 +449,25 @@ export function registerApi(app, { config, repos, mailService, remoteContent }) 
       }
     }
     const conversations = [...byThread.values()]
-      .filter(({ messages }) => !normalizedQuery || messages.some((message) => [
-        message.subject,
-        message.from?.name,
-        message.from?.email,
-        message.snippet,
-        ...(message.to || []).flatMap((recipient) => [recipient.name, recipient.email]),
-        ...(message.cc || []).flatMap((recipient) => [recipient.name, recipient.email]),
-      ].join(' ').toLocaleLowerCase().includes(normalizedQuery)))
-      .map(({ latest: latestMessage }) => {
+      .filter(({ messages }) => !personFlag || conversationTouchesPersonFlag(messages, personFlag))
+      .filter(({ messages, latest }) => {
+        // Explicit search can still find quiet digests. Unscoped browsing and
+        // smart-category chips hide routine ops noise even when unread.
+        if (normalizedQuery) {
+          return messages.some((message) => [
+            message.subject,
+            message.from?.name,
+            message.from?.email,
+            message.snippet,
+            ...(message.to || []).flatMap((recipient) => [recipient.name, recipient.email]),
+            ...(message.cc || []).flatMap((recipient) => [recipient.name, recipient.email]),
+          ].join(' ').toLocaleLowerCase().includes(normalizedQuery));
+        }
+        if (category) return true;
+        if (personFlag) return true;
+        return !isHiddenDefaultCategory(latest.category);
+      })
+      .map(({ latest: latestMessage, messages }) => {
       const thread = repos.threads.get(latestMessage.threadId);
       const latestAt = latestMessage.sentAt || latestMessage.receivedAt || latestMessage.createdAt;
       return {
@@ -425,23 +484,30 @@ export function registerApi(app, { config, repos, mailService, remoteContent }) 
         snippet: latestMessage.snippet,
         isRead: (thread?.unreadCount || 0) === 0,
         isStarred: thread?.isStarred ?? latestMessage.isStarred,
+        _threadMessages: messages,
         ...(folder === 'snoozed' ? { folder: 'snoozed' } : {}),
       };
     }).sort((left, right) =>
       String(right.latestAt || right.sentAt || right.receivedAt || right.createdAt).localeCompare(String(left.latestAt || left.sentAt || left.receivedAt || left.createdAt)));
     const categoryCounts = emptyCategoryCounts();
-    for (const conversation of conversations) categoryCounts[conversation.category] += 1;
+    for (const conversation of conversations) {
+      if (isHiddenDefaultCategory(conversation.category)) continue;
+      if (Object.hasOwn(categoryCounts, conversation.category)) categoryCounts[conversation.category] += 1;
+    }
     const all = category
       ? conversations.filter((conversation) => conversation.category === category)
       : conversations;
     const start = (page - 1) * pageSize;
+    const pageItems = all.slice(start, start + pageSize).map(({ _threadMessages, ...conversation }) => conversation);
     response.json({
-      messages: all.slice(start, start + pageSize),
+      messages: pageItems,
       total: all.length,
       page,
       pageSize,
       categoryCounts,
       folderCounts: sumFolderCounts(accounts, repos),
+      personFlag: personFlag || null,
+      personFlagMeta: personFlag ? getPersonFlag(personFlag) : null,
     });
   });
   router.get('/messages/:id', (request, response) => {

@@ -86,11 +86,20 @@ const UNIFIED_ACCOUNT = {
 };
 
 const SMART_CATEGORIES = [
-  { id: 'all', label: 'All mail', shortLabel: 'All', icon: 'inbox', description: 'Everything across every connected account' },
+  { id: 'all', label: 'All mail', shortLabel: 'All', icon: 'inbox', description: 'Everything across every connected account (routine ops digests stay hidden)' },
   { id: 'primary', label: 'Primary', shortLabel: 'Primary', icon: 'person', description: 'People, conversations, and mail that needs attention' },
   { id: 'github_ci', label: 'GitHub CI', shortLabel: 'GitHub CI', icon: 'branch', description: 'Pull requests, checks, builds, and workflow runs' },
   { id: 'logs', label: 'Logs', shortLabel: 'Logs', icon: 'terminal', description: 'Automated logs, digests, and machine output' },
   { id: 'status', label: 'Status updates', shortLabel: 'Status', icon: 'activity', description: 'Incidents, uptime, deploys, and service health' },
+  { id: 'ops_error', label: 'Ops errors', shortLabel: 'Ops errors', icon: 'alert', description: 'Failures from Workboard, Proxmox, Watchtower, and xer0/msl backups. Successful digests stay hidden.' },
+];
+
+const PERSON_FLAGS = [
+  { id: 'phil', label: 'Phil', shortLabel: 'Phil', emails: ['phil@midstatelitho.com', 'phil@midstaelitho.com'], color: '#0b57d0', description: 'Mail involving Phil at Midstate Litho' },
+  { id: 'sarah', label: 'Sarah', shortLabel: 'Sarah', emails: ['sarah@midstatelitho.com'], color: '#c2185b', description: 'Mail involving Sarah at Midstate Litho' },
+  { id: 'mark', label: 'Mark Culley', shortLabel: 'Mark', emails: ['mark_culley@sdmc.com'], color: '#00897b', description: 'Mail involving Mark Culley' },
+  { id: 'support', label: 'Midstate Support', shortLabel: 'Support', emails: ['support@midstatelitho.com', 'support@midstaetlitho.com'], color: '#e8710a', description: 'Mail involving Midstate Litho support' },
+  { id: 'sales', label: 'Midstate Sales', shortLabel: 'Sales', emails: ['sales@midstatelitho.com'], color: '#6c4fc7', description: 'Mail involving Midstate Litho sales' },
 ];
 
 const CATEGORY_ALIASES = {
@@ -110,6 +119,13 @@ const CATEGORY_ALIASES = {
   'status-update': 'status',
   status_updates: 'status',
   incidents: 'status',
+  ops: 'ops_error',
+  ops_error: 'ops_error',
+  'ops-error': 'ops_error',
+  ops_errors: 'ops_error',
+  workboard: 'ops_error',
+  proxmox: 'ops_error',
+  watchtower: 'ops_error',
 };
 
 const PROVIDER_PRESETS = {
@@ -331,6 +347,79 @@ const demoThreads = [
     ],
   },
   {
+    id: 'watchtower-ok',
+    threadId: 'watchtower-ok',
+    subject: 'Watchtower: all containers up to date',
+    snippet: 'No container updates were required. This daily digest stays out of All mail unless something fails.',
+    from: { name: 'Watchtower', email: 'watchtower@home.lab', color: '#455a64' },
+    timestamp: new Date(Date.now() - 1000 * 60 * 60 * 5).toISOString(),
+    unread: true,
+    starred: false,
+    labels: ['Ops'],
+    folder: 'inbox',
+    messageCount: 1,
+    category: 'ops_quiet',
+    categoryLabel: 'Ops digests',
+    categoryReason: 'Routine watchtower digest with no error signal.',
+    messages: [
+      {
+        id: 'watchtower-ok-1',
+        from: { name: 'Watchtower', email: 'watchtower@home.lab', color: '#455a64' },
+        to: ['Nova Centauri'],
+        timestamp: new Date(Date.now() - 1000 * 60 * 60 * 5).toISOString(),
+        body: 'All containers are up to date. No action needed.',
+      },
+    ],
+  },
+  {
+    id: 'proxmox-fail',
+    threadId: 'proxmox-fail',
+    subject: 'Proxmox backup failed on pve-1',
+    snippet: 'vzdump finished with errors on VM 105. Review the task log before the next nightly run.',
+    from: { name: 'Proxmox', email: 'root@proxmox.local', color: '#e53935' },
+    timestamp: new Date(Date.now() - 1000 * 60 * 60 * 1.5).toISOString(),
+    unread: true,
+    starred: false,
+    labels: ['Ops'],
+    folder: 'inbox',
+    messageCount: 1,
+    category: 'ops_error',
+    categoryLabel: 'Ops errors',
+    categoryReason: 'Ops error from proxmox.',
+    messages: [
+      {
+        id: 'proxmox-fail-1',
+        from: { name: 'Proxmox', email: 'root@proxmox.local', color: '#e53935' },
+        to: ['Nova Centauri'],
+        timestamp: new Date(Date.now() - 1000 * 60 * 60 * 1.5).toISOString(),
+        body: 'TASK ERROR: vzdump failed for VM 105. Exit code 1.',
+      },
+    ],
+  },
+  {
+    id: 'phil-note',
+    threadId: 'phil-note',
+    subject: 'Press schedule for Thursday',
+    snippet: 'Can you confirm the afternoon press window for the Midstate run?',
+    from: { name: 'Phil', email: 'phil@midstaelitho.com', color: '#0b57d0' },
+    timestamp: new Date(Date.now() - 1000 * 60 * 60 * 6).toISOString(),
+    unread: true,
+    starred: false,
+    labels: [],
+    folder: 'inbox',
+    messageCount: 1,
+    category: 'primary',
+    messages: [
+      {
+        id: 'phil-note-1',
+        from: { name: 'Phil', email: 'phil@midstaelitho.com', color: '#0b57d0' },
+        to: ['Nova Centauri'],
+        timestamp: new Date(Date.now() - 1000 * 60 * 60 * 6).toISOString(),
+        body: 'Can you confirm the afternoon press window for the Midstate run?',
+      },
+    ],
+  },
+  {
     id: 'receipt',
     threadId: 'receipt',
     subject: 'Your receipt from Figma',
@@ -478,6 +567,15 @@ function inferSmartCategory(raw = {}) {
   const labels = Array.isArray(raw.labels) ? raw.labels : Array.isArray(raw.tags) ? raw.tags : [];
   const from = normalizePerson(raw.from || raw.sender || raw.fromAddress);
   const haystack = [raw.subject, raw.snippet, raw.preview, from.name, from.email, ...labels].filter(Boolean).join(' ').toLowerCase();
+  const isOpsSource = /\b(?:workboard|proxmox|\bpve\b|watchtower|xer0|msl)\b/i.test(haystack)
+    || (/\bbackup\b/i.test(haystack) && /\b(?:xer0|msl)\b/i.test(haystack));
+  const isOpsError = /\b(?:error|errors|failed|failure|fatal|critical|exception|unreachable|timeout|timed out)\b/i.test(haystack)
+    && !/\b(?:0|no|without|zero)\s+errors?\b/i.test(haystack);
+  if (isOpsSource) {
+    return isOpsError
+      ? { category: 'ops_error', reason: 'Matched a Workboard, Proxmox, Watchtower, or xer0/msl backup failure.' }
+      : { category: 'ops_quiet', reason: 'Routine ops digest with no error signal (hidden from All mail).' };
+  }
   if (/(github|github actions|actions@github|workflow|pull request|check run|build #|ci failed|ci passed)/i.test(haystack)) {
     return { category: 'github_ci', reason: 'Matched GitHub, workflow, pull-request, or CI language.' };
   }
@@ -493,12 +591,45 @@ function inferSmartCategory(raw = {}) {
 function smartCategoryMetadata(raw = {}, fallback = {}) {
   const inferred = inferSmartCategory({ ...fallback, ...raw });
   const category = canonicalCategory(raw.category || raw.smartCategory || raw.categoryId || fallback.category) || inferred.category;
-  const definition = SMART_CATEGORIES.find((item) => item.id === category) || SMART_CATEGORIES[1];
+  const definition = SMART_CATEGORIES.find((item) => item.id === category)
+    || (category === 'ops_quiet' ? { id: 'ops_quiet', label: 'Ops digests' } : null)
+    || SMART_CATEGORIES[1];
   return {
     category: definition.id,
     categoryLabel: raw.categoryLabel || raw.category_label || fallback.categoryLabel || definition.label,
     categoryReason: raw.categoryReason || raw.category_reason || fallback.categoryReason || inferred.reason,
   };
+}
+
+function normalizePersonFlagEmail(value = '') {
+  const match = String(value).trim().toLowerCase().match(/<([^>]+)>/);
+  const email = (match?.[1] || String(value)).trim().toLowerCase();
+  return email
+    .replace(/@midstaelitho\.com$/, '@midstatelitho.com')
+    .replace(/@midstaetlitho\.com$/, '@midstatelitho.com');
+}
+
+function conversationMatchesPersonFlag(thread, flagId) {
+  const flag = PERSON_FLAGS.find((item) => item.id === flagId);
+  if (!flag) return false;
+  const wanted = new Set(flag.emails.map(normalizePersonFlagEmail));
+  const people = [
+    thread.from,
+    ...(thread.participants || []),
+    ...recipientArray(thread.to),
+    ...recipientArray(thread.cc),
+    ...recipientArray(thread.replyTo),
+    ...(thread.messages || []).flatMap((message) => [
+      message.from,
+      ...recipientArray(message.to),
+      ...recipientArray(message.cc),
+      ...recipientArray(message.replyTo),
+    ]),
+  ];
+  return people.some((person) => {
+    const email = normalizePersonFlagEmail(person?.email || person?.address || person || '');
+    return email && wanted.has(email);
+  });
 }
 
 function countSmartCategories(threads = []) {
@@ -825,6 +956,7 @@ function Icon({ name, size = 20, className = '' }) {
     branch: <><circle cx="7" cy="5" r="2" /><circle cx="17" cy="7" r="2" /><circle cx="7" cy="19" r="2" /><path d="M7 7v10M9 12h2c3.3 0 6-1.3 6-3" /></>,
     terminal: <><rect x="3" y="4.5" width="18" height="15" rx="2" /><path d="m7 9 3 3-3 3M13 15h4" /></>,
     activity: <><path d="M3 12h4l2.1-6 4.2 12 2.2-6H21" /></>,
+    alert: <><path d="M12 4 3 19h18z" /><path d="M12 10v4M12 16.5v.5" /></>,
     sparkles: <><path d="m12 3 1.2 3.8L17 8l-3.8 1.2L12 13l-1.2-3.8L7 8l3.8-1.2zM6.5 14l.8 2.2 2.2.8-2.2.8L6.5 20l-.8-2.2-2.2-.8 2.2-.8zM18.5 13l.6 1.6 1.6.6-1.6.6-.6 1.7-.6-1.7-1.6-.6 1.6-.6z" /></>,
     lock: <><rect x="5" y="10" width="14" height="10" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v2.5" /></>,
     eye: <><path d="M2.5 12c1.3-2.8 4.8-6 9.5-6s8.2 3.2 9.5 6c-1.3 2.8-4.8 6-9.5 6S3.8 14.8 2.5 12Z" /><circle cx="12" cy="12" r="3" /></>,
@@ -941,7 +1073,7 @@ function Topbar({ onToggleSidebar, onGoHome, query, setQuery, onOpenSettings, on
   );
 }
 
-function Sidebar({ compact, mobileOpen, onCloseMobile, activeFolder, setActiveFolder, counts, onCompose, accounts, activeAccount, setActiveAccount, onSelectUnified, onOpenSettings, isDemo, onAddAccount }) {
+function Sidebar({ compact, mobileOpen, onCloseMobile, activeFolder, setActiveFolder, counts, onCompose, accounts, activeAccount, setActiveAccount, onSelectUnified, onOpenSettings, isDemo, onAddAccount, activePersonFlag, onSelectPersonFlag }) {
   const [showMore, setShowMore] = useState(false);
   const displayAccounts = accounts.length ? accounts : isDemo ? demoAccounts : [];
   const items = showMore
@@ -962,8 +1094,8 @@ function Sidebar({ compact, mobileOpen, onCloseMobile, activeFolder, setActiveFo
               <button
                 type="button"
                 key={item.id}
-                onClick={() => { setActiveFolder(item.id); onCloseMobile(); }}
-                className={`nav-item ${activeFolder === item.id ? 'is-selected' : ''}`}
+                onClick={() => { setActiveFolder(item.id); onSelectPersonFlag?.(null); onCloseMobile(); }}
+                className={`nav-item ${activeFolder === item.id && !activePersonFlag ? 'is-selected' : ''}`}
                 title={compact ? item.label : undefined}
               >
                 <Icon name={item.icon} size={20} />
@@ -976,6 +1108,23 @@ function Sidebar({ compact, mobileOpen, onCloseMobile, activeFolder, setActiveFo
               <span className="nav-label">{showMore ? 'Less' : 'More'}</span>
             </button>
           </nav>
+          <div className="flags-section">
+            <div className="side-section-heading"><span>Flagged people</span></div>
+            <nav className="folder-nav flag-nav" aria-label="Flagged people">
+              {PERSON_FLAGS.map((flag) => (
+                <button
+                  type="button"
+                  key={flag.id}
+                  onClick={() => { onSelectPersonFlag?.(flag.id); onCloseMobile(); }}
+                  className={`nav-item label-nav ${activePersonFlag === flag.id ? 'is-selected' : ''}`}
+                  title={compact ? flag.label : flag.description}
+                >
+                  <span className="label-dot" style={{ background: flag.color }} />
+                  <span className="nav-label">{flag.shortLabel}</span>
+                </button>
+              ))}
+            </nav>
+          </div>
           <div className="accounts-section">
             <div className="side-section-heading">
               <span>Accounts</span>
@@ -1083,14 +1232,17 @@ function SmartFilterBar({ activeCategory, onChange, visibleCount, categoryCounts
 function CategoryBadge({ thread, showPrimary = false }) {
   const metadata = smartCategoryMetadata(thread);
   if (metadata.category === 'primary' && !showPrimary) return null;
-  const definition = SMART_CATEGORIES.find((item) => item.id === metadata.category) || SMART_CATEGORIES[1];
+  if (metadata.category === 'ops_quiet' && !showPrimary) return null;
+  const definition = SMART_CATEGORIES.find((item) => item.id === metadata.category)
+    || (metadata.category === 'ops_quiet' ? { id: 'ops_quiet', label: 'Ops digests', icon: 'terminal' } : null)
+    || SMART_CATEGORIES[1];
   return (
     <span
       className={`thread-category category-${metadata.category}`}
       title={metadata.categoryReason}
       aria-label={`${metadata.categoryLabel}. ${metadata.categoryReason}`}
     >
-      <Icon name={definition.icon} size={12} />
+      <Icon name={definition.icon || 'sparkles'} size={12} />
       <span>{metadata.categoryLabel}</span>
     </span>
   );
@@ -1184,7 +1336,7 @@ function SkeletonRows() {
   );
 }
 
-function MailList({ threads, totalCount, categoryCounts, selectedThread, loading, folder, query, activeCategory, setActiveCategory, selectedIds, setSelectedIds, onOpenThread, onToggleStar, onRefresh, onBulkAction, onCompose, onClearSearch }) {
+function MailList({ threads, totalCount, categoryCounts, selectedThread, loading, folder, query, activeCategory, setActiveCategory, selectedIds, setSelectedIds, onOpenThread, onToggleStar, onRefresh, onBulkAction, onCompose, onClearSearch, hideSmartFilters = false }) {
   const allSelected = threads.length > 0 && threads.every((thread) => selectedIds.includes(thread.id));
   const toggleAll = () => setSelectedIds(allSelected ? [] : threads.map((thread) => thread.id));
   const toggleOne = (thread, checked) => setSelectedIds((current) => checked ? [...new Set([...current, thread.id])] : current.filter((id) => id !== thread.id));
@@ -1200,7 +1352,7 @@ function MailList({ threads, totalCount, categoryCounts, selectedThread, loading
         onToggleAll={toggleAll}
         loading={loading}
       />
-      {folder === 'inbox' && <SmartFilterBar activeCategory={activeCategory} onChange={setActiveCategory} visibleCount={threads.length} categoryCounts={categoryCounts} loading={loading} />}
+      {folder === 'inbox' && !hideSmartFilters && <SmartFilterBar activeCategory={activeCategory} onChange={setActiveCategory} visibleCount={threads.length} categoryCounts={categoryCounts} loading={loading} />}
       {loading && !threads.length ? <SkeletonRows /> : threads.length ? (
         <div className="thread-list" id="conversation-list" role="tabpanel">
           {threads.map((thread) => (
@@ -1993,6 +2145,7 @@ export default function App() {
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState('all');
+  const [activePersonFlag, setActivePersonFlag] = useState(null);
   const [mailTotal, setMailTotal] = useState(0);
   const [categoryCounts, setCategoryCounts] = useState(() => countSmartCategories([]));
   const [folderCounts, setFolderCounts] = useState(() => ({ ...EMPTY_FOLDER_COUNTS }));
@@ -2122,7 +2275,8 @@ export default function App() {
       }
       const params = new URLSearchParams({ folder: activeFolder });
       if (activeAccount?.id) params.set('accountId', activeAccount.id);
-      if (activeFolder === 'inbox' && activeCategory !== 'all') params.set('category', activeCategory);
+      if (activeFolder === 'inbox' && !activePersonFlag && activeCategory !== 'all') params.set('category', activeCategory);
+      if (activePersonFlag) params.set('flag', activePersonFlag);
       if (debouncedQuery) params.set('q', debouncedQuery);
       const [accountData, mailData] = await Promise.all([
         api('/accounts'),
@@ -2195,21 +2349,24 @@ export default function App() {
     } finally {
       if (requestId === loadRequestRef.current) setLoading(false);
     }
-  }, [accessToken, activeAccount?.id, activeCategory, activeFolder, debouncedQuery, selectedThread]);
+  }, [accessToken, activeAccount?.id, activeCategory, activePersonFlag, activeFolder, debouncedQuery, selectedThread]);
 
-  useEffect(() => { loadMailbox({ keepSelection: false }); }, [activeFolder, activeAccount?.id, activeCategory, debouncedQuery, accessToken]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadMailbox({ keepSelection: false }); }, [activeFolder, activeAccount?.id, activeCategory, activePersonFlag, debouncedQuery, accessToken]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     setSelectedIds([]);
     setSelectedThread(null);
-  }, [activeAccount?.id, activeCategory, activeFolder, debouncedQuery, accessToken]);
+  }, [activeAccount?.id, activeCategory, activePersonFlag, activeFolder, debouncedQuery, accessToken]);
 
   useEffect(() => {
     if (activeFolder !== 'inbox' && activeCategory !== 'all') {
       setActiveCategory('all');
       setSelectedIds([]);
     }
-  }, [activeCategory, activeFolder]);
+    if (activeFolder !== 'inbox' && activePersonFlag) {
+      setActivePersonFlag(null);
+    }
+  }, [activeCategory, activeFolder, activePersonFlag]);
 
   const refreshMailbox = async () => {
     if (isDemo) {
@@ -2260,11 +2417,14 @@ export default function App() {
     return threads.filter((thread) => {
       const inFolder = activeFolder === 'all' || thread.folder === activeFolder || (activeFolder === 'starred' && thread.starred) || (activeFolder === 'drafts' && thread.folder === 'drafts');
       if (!inFolder) return false;
-      if (activeFolder === 'inbox' && activeCategory !== 'all' && smartCategoryMetadata(thread).category !== activeCategory) return false;
+      if (activePersonFlag && !conversationMatchesPersonFlag(thread, activePersonFlag)) return false;
+      if (!activePersonFlag && activeFolder === 'inbox' && activeCategory !== 'all' && smartCategoryMetadata(thread).category !== activeCategory) return false;
+      // Demo/preview: hide routine ops digests from All/Primary unless searching.
+      if (!search && !activePersonFlag && (activeCategory === 'all' || activeCategory === 'primary') && smartCategoryMetadata(thread).category === 'ops_quiet') return false;
       if (!search) return true;
       return [thread.subject, thread.snippet, thread.from?.name, thread.from?.email, thread.categoryLabel, thread.categoryReason, ...(thread.labels || [])].join(' ').toLowerCase().includes(search);
     });
-  }, [threads, activeFolder, activeCategory, query]);
+  }, [threads, activeFolder, activeCategory, activePersonFlag, query]);
 
   const visibleTotal = isDemo ? visibleThreads.length : mailTotal;
 
@@ -2278,12 +2438,21 @@ export default function App() {
   const goHome = () => {
     setActiveFolder('inbox');
     setActiveCategory('all');
+    setActivePersonFlag(null);
     setQuery('');
     setSelectedThread(null);
     setSelectedIds([]);
     setMobileSidebarOpen(false);
     setSettingsOpen(false);
     setProfileOpen(false);
+  };
+
+  const selectPersonFlag = (flagId) => {
+    setActiveFolder('inbox');
+    setActiveCategory('all');
+    setActivePersonFlag(flagId);
+    setSelectedIds([]);
+    setSelectedThread(null);
   };
 
   const openThread = async (thread) => {
@@ -2570,10 +2739,23 @@ export default function App() {
         onSelectUnified={() => setActiveAccount(null)}
         onOpenSettings={() => setSettingsOpen(true)}
         onAddAccount={() => setAddAccountOpen(true)}
+        activePersonFlag={activePersonFlag}
+        onSelectPersonFlag={selectPersonFlag}
         isDemo={isDemo}
       />
       <main className="mail-workspace">
         {offline ? <div className="demo-banner offline-banner" role="status"><Icon name="eyeOff" size={16} /><span>Offline — showing the last mailbox loaded from this server.</span><button type="button" onClick={() => loadMailbox({ keepSelection: true })}>Retry</button></div> : isDemo && <div className="demo-banner"><Icon name="shield" size={16} /><span>Preview mailbox — connect your first account to replace this sample data.</span><button type="button" onClick={() => setAddAccountOpen(true)}>Add account</button></div>}
+        {activePersonFlag && !offline && (
+          <div className="demo-banner flag-banner" role="status">
+            <Icon name="person" size={16} />
+            <span>
+              Flagged: {PERSON_FLAGS.find((flag) => flag.id === activePersonFlag)?.label || activePersonFlag}
+              {' · '}
+              {(PERSON_FLAGS.find((flag) => flag.id === activePersonFlag)?.emails || []).join(', ')}
+            </span>
+            <button type="button" onClick={() => setActivePersonFlag(null)}>Clear flag</button>
+          </div>
+        )}
         <div className="mail-split">
           <MailList
             threads={visibleThreads}
@@ -2584,7 +2766,7 @@ export default function App() {
             folder={activeFolder}
             query={query}
             activeCategory={activeCategory}
-            setActiveCategory={(category) => { setActiveCategory(category); setSelectedIds([]); }}
+            setActiveCategory={(category) => { setActiveCategory(category); setActivePersonFlag(null); setSelectedIds([]); }}
             selectedIds={selectedIds}
             setSelectedIds={setSelectedIds}
             onOpenThread={openThread}
@@ -2593,6 +2775,7 @@ export default function App() {
             onBulkAction={applyAction}
             onCompose={openNewCompose}
             onClearSearch={() => setQuery('')}
+            hideSmartFilters={Boolean(activePersonFlag)}
           />
           {selectedThread ? <ThreadView key={selectedThread.id} thread={selectedThread} activeFolder={activeFolder} onBack={() => setSelectedThread(null)} onAction={applyAction} onLoadRemote={loadRemoteContent} onReply={openReplyComposer} onReplyAll={(thread, message) => openReplyComposer(thread, message, { replyAll: true })} onForward={openForwardComposer} allowPrivateImages={privacy.privateImages} /> : (
             <ReaderPlaceholder isDemo={isDemo} onAddAccount={() => setAddAccountOpen(true)} />
