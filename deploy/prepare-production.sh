@@ -261,6 +261,8 @@ verify_compose_environment() {
   ) | docker exec -i \
     -e "GIGAMAIL_EXPECT_COMPOSE_PROJECT=$compose_project" \
     -e "GIGAMAIL_EXPECT_DATA_VOLUME=$data_volume" \
+    -e "GIGAMAIL_EXPECT_APP_IMAGE=$app_runtime_image" \
+    -e "GIGAMAIL_EXPECT_TOR_IMAGE=$tor_runtime_image" \
     "$container_id" node -e '
 let input = "";
 process.stdin.setEncoding("utf8");
@@ -269,7 +271,10 @@ process.stdin.on("end", () => {
   try {
     const config = JSON.parse(input);
     const service = config.services?.gigamail;
-    if (!service || config.name !== process.env.GIGAMAIL_EXPECT_COMPOSE_PROJECT) process.exit(1);
+    const torService = config.services?.["tor-proxy"];
+    if (!service || !torService || config.name !== process.env.GIGAMAIL_EXPECT_COMPOSE_PROJECT ||
+      service.image !== process.env.GIGAMAIL_EXPECT_APP_IMAGE ||
+      torService.image !== process.env.GIGAMAIL_EXPECT_TOR_IMAGE) process.exit(1);
     const mounts = Array.isArray(service.volumes)
       ? service.volumes.filter((mount) => mount?.target === "/data")
       : [];
