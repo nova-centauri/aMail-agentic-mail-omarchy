@@ -202,6 +202,35 @@ wait_for_health() {
   return 1
 }
 
+report_health_diagnostics() {
+  echo "Production service health diagnostics:" >&2
+
+  app_id=$(compose ps -q gigamail 2>/dev/null || true)
+  if [ -n "$app_id" ]; then
+    docker inspect \
+      --format 'gigamail: status={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} restarts={{.RestartCount}}' \
+      "$app_id" >&2 || true
+  else
+    echo "gigamail: container not found" >&2
+  fi
+
+  if [ "$mode" = "privacy" ]; then
+    tor_id=$(compose ps -q tor-proxy 2>/dev/null || true)
+    if [ -n "$tor_id" ]; then
+      docker inspect \
+        --format 'tor-proxy: status={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} restarts={{.RestartCount}}' \
+        "$tor_id" >&2 || true
+      docker inspect \
+        --format '{{if .State.Health}}{{range .State.Health.Log}}tor-health: exit={{.ExitCode}} output={{json .Output}}{{println}}{{end}}{{end}}' \
+        "$tor_id" >&2 || true
+      echo "Recent Tor/Privoxy logs:" >&2
+      compose logs --no-color --tail 200 tor-proxy >&2 || true
+    else
+      echo "tor-proxy: container not found" >&2
+    fi
+  fi
+}
+
 restore_bootstrap_images() {
   marker=.git/gigamail-bootstrap-images
   [ ! -f .git/gigamail-last-successful-sha ] || return 1
@@ -254,6 +283,7 @@ rollback() {
   if wait_for_health; then
     echo "Rollback to $previous is healthy." >&2
   else
+    report_health_diagnostics
     echo "CRITICAL: rollback containers did not become healthy; inspect Docker on the VM." >&2
   fi
 }
@@ -281,6 +311,7 @@ GIGAMAIL_RELEASE_SHA="$target_commit" GIGAMAIL_FORCE_RECREATE=1 sh deploy/launch
 if ! wait_for_health; then
   echo "The recreated services did not become healthy within five minutes." >&2
   compose ps >&2 || true
+  report_health_diagnostics
   exit 1
 fi
 
