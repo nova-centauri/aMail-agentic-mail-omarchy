@@ -25,6 +25,11 @@ fi
 # configuration file as shell code.
 require_secret() {
   key=$1
+  count=$(awk -v key="$key" 'index($0, key "=") == 1 { count += 1 } END { print count + 0 }' .env)
+  if [ "$count" -ne 1 ]; then
+    echo "$key must appear exactly once in .env (found $count declarations)." >&2
+    exit 1
+  fi
   value=$(awk -v key="$key" 'index($0, key "=") == 1 { print substr($0, length(key) + 2); exit }' .env)
   case "$value" in
     ''|replace-with-*|changeme*|change-me*|example*|"\"replace-with-"*|"'replace-with-"*)
@@ -48,11 +53,21 @@ docker compose --env-file .env config --quiet
 if [ "$mode" = privacy ]; then
   # Shell-scoped so a normal direct launch cannot accidentally retain a proxy
   # setting for a stopped Tor container.
-  REMOTE_CONTENT_PROXY_URL=http://tor-proxy:8118 \
-    docker compose --env-file .env --profile privacy up --detach --build
+  if [ "${GIGAMAIL_FORCE_RECREATE:-0}" = "1" ]; then
+    REMOTE_CONTENT_PROXY_URL=http://tor-proxy:8118 \
+      docker compose --env-file .env --profile privacy up --detach --build --force-recreate
+  else
+    REMOTE_CONTENT_PROXY_URL=http://tor-proxy:8118 \
+      docker compose --env-file .env --profile privacy up --detach --build
+  fi
 else
   # This intentionally runs no proxy. In production GigaMail keeps remote
   # content blocked rather than bypassing privacy controls with direct egress.
-  REMOTE_CONTENT_PROXY_URL= \
-    docker compose --env-file .env up --detach --build
+  if [ "${GIGAMAIL_FORCE_RECREATE:-0}" = "1" ]; then
+    REMOTE_CONTENT_PROXY_URL= \
+      docker compose --env-file .env up --detach --build --force-recreate
+  else
+    REMOTE_CONTENT_PROXY_URL= \
+      docker compose --env-file .env up --detach --build
+  fi
 fi

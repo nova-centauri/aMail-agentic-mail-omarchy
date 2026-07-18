@@ -62,6 +62,115 @@ const UNIFIED_ACCOUNT = {
   isUnified: true,
 };
 
+const SMART_CATEGORIES = [
+  { id: 'all', label: 'All mail', shortLabel: 'All', icon: 'inbox', description: 'Everything across every connected account' },
+  { id: 'primary', label: 'Primary', shortLabel: 'Primary', icon: 'person', description: 'People, conversations, and mail that needs attention' },
+  { id: 'github_ci', label: 'GitHub CI', shortLabel: 'GitHub CI', icon: 'branch', description: 'Pull requests, checks, builds, and workflow runs' },
+  { id: 'logs', label: 'Logs', shortLabel: 'Logs', icon: 'terminal', description: 'Automated logs, digests, and machine output' },
+  { id: 'status', label: 'Status updates', shortLabel: 'Status', icon: 'activity', description: 'Incidents, uptime, deploys, and service health' },
+];
+
+const CATEGORY_ALIASES = {
+  all: 'all',
+  primary: 'primary',
+  focused: 'primary',
+  people: 'primary',
+  github: 'github_ci',
+  'github-ci': 'github_ci',
+  github_ci: 'github_ci',
+  ci: 'github_ci',
+  builds: 'github_ci',
+  log: 'logs',
+  logs: 'logs',
+  automated: 'logs',
+  status: 'status',
+  'status-update': 'status',
+  status_updates: 'status',
+  incidents: 'status',
+};
+
+const PROVIDER_PRESETS = {
+  gmail: {
+    id: 'gmail',
+    label: 'Gmail',
+    caption: 'Gmail or Google Workspace',
+    mark: 'G',
+    color: '#1a73e8',
+    provider: 'gmail',
+    imapHost: 'imap.gmail.com',
+    imapPort: '993',
+    smtpHost: 'smtp.gmail.com',
+    smtpPort: '465',
+    title: 'Connect Gmail securely',
+    passwordTitle: 'Use a Google app password',
+    passwordHint: 'Turn on 2-Step Verification, create a 16-digit app password, then paste it here. Your regular Google password will not work.',
+    helpLabel: 'Google app-password help',
+    helpUrl: 'https://support.google.com/accounts/answer/185833?hl=en',
+  },
+  icloud: {
+    id: 'icloud',
+    label: 'iCloud Mail',
+    caption: 'Apple Account mail',
+    mark: '☁',
+    color: '#2589f5',
+    provider: 'icloud',
+    imapHost: 'imap.mail.me.com',
+    imapPort: '993',
+    smtpHost: 'smtp.mail.me.com',
+    smtpPort: '587',
+    title: 'Connect iCloud Mail',
+    passwordTitle: 'Create an app-specific password',
+    passwordHint: 'Your Apple Account needs two-factor authentication. Generate an app-specific password under Sign-In and Security, then paste it here.',
+    helpLabel: 'Apple app-specific password help',
+    helpUrl: 'https://support.apple.com/en-us/102654',
+  },
+  mailinabox: {
+    id: 'mailinabox',
+    label: 'Mail-in-a-Box',
+    caption: 'Self-hosted mail server',
+    mark: 'M',
+    color: '#6c4fc7',
+    provider: 'mailinabox',
+    imapHost: 'box.xer5.com',
+    imapPort: '993',
+    smtpHost: 'box.xer5.com',
+    smtpPort: '587',
+    title: 'Connect Mail-in-a-Box',
+    passwordTitle: 'Use the mailbox password',
+    passwordHint: 'Use the full mailbox address and its Mail-in-a-Box mailbox password. GigaMail connects to box.xer5.com with IMAP TLS and SMTP STARTTLS.',
+  },
+  outlook: {
+    id: 'outlook',
+    label: 'Outlook',
+    caption: 'Microsoft 365 or Outlook.com',
+    mark: 'O',
+    color: '#0078d4',
+    provider: 'outlook',
+    imapHost: 'outlook.office365.com',
+    imapPort: '993',
+    smtpHost: 'smtp.office365.com',
+    smtpPort: '587',
+    title: 'Connect Outlook',
+    passwordTitle: 'Use an app password if your account supports one',
+    passwordHint: 'Microsoft may require OAuth or an organization-approved app password. Basic mailbox passwords are often blocked by tenant policy.',
+  },
+  custom: {
+    id: 'custom',
+    label: 'Other IMAP',
+    caption: 'Any IMAP + SMTP provider',
+    mark: '@',
+    color: '#4f636f',
+    provider: 'custom',
+    imapHost: '',
+    imapPort: '993',
+    smtpHost: '',
+    smtpPort: '465',
+    title: 'Connect another provider',
+    passwordTitle: 'Use a provider app password when available',
+    passwordHint: 'Enter the encrypted IMAP and SMTP settings from your provider. A dedicated app password is safer than your primary sign-in password.',
+  },
+};
+
 const demoThreads = [
   {
     id: 'design-sync',
@@ -120,6 +229,81 @@ const demoThreads = [
         to: ['Nova Centauri'],
         timestamp: new Date(Date.now() - 1000 * 60 * 60 * 2).toISOString(),
         body: 'Hi Nova,\n\nThe isolated Docker deployment is ready for review. It uses its own named volumes and a dedicated network, so it will not conflict with any existing services on the host.\n\nAvery',
+      },
+    ],
+  },
+  {
+    id: 'github-ci',
+    threadId: 'github-ci',
+    subject: '[GigaMail] CI failed on main (#842)',
+    snippet: 'The test job failed after 2m 18s in message-html.test.js. View the workflow run for annotations.',
+    from: { name: 'GitHub Actions', email: 'notifications@github.com', color: '#24292f' },
+    timestamp: new Date(Date.now() - 1000 * 60 * 60 * 2.6).toISOString(),
+    unread: true,
+    starred: false,
+    labels: ['GitHub', 'CI'],
+    folder: 'inbox',
+    messageCount: 1,
+    category: 'github_ci',
+    categoryLabel: 'GitHub CI',
+    categoryReason: 'Matched a GitHub Actions workflow notification.',
+    messages: [
+      {
+        id: 'github-ci-1',
+        from: { name: 'GitHub Actions', email: 'notifications@github.com', color: '#24292f' },
+        to: ['Nova Centauri'],
+        timestamp: new Date(Date.now() - 1000 * 60 * 60 * 2.6).toISOString(),
+        body: 'Workflow: CI\nBranch: main\nCommit: 5ab1c72\n\nThe test job failed after 2m 18s in message-html.test.js. View the workflow run for annotations.',
+      },
+    ],
+  },
+  {
+    id: 'service-status',
+    threadId: 'service-status',
+    subject: 'Resolved: Elevated API latency',
+    snippet: 'All systems have recovered. We will publish a full incident review within two business days.',
+    from: { name: 'Centauri Status', email: 'status@centauri.dev', color: '#188038' },
+    timestamp: new Date(Date.now() - 1000 * 60 * 60 * 3.2).toISOString(),
+    unread: false,
+    starred: false,
+    labels: ['Status'],
+    folder: 'inbox',
+    messageCount: 3,
+    category: 'status',
+    categoryLabel: 'Status update',
+    categoryReason: 'Recognized a resolved service incident update.',
+    messages: [
+      {
+        id: 'service-status-1',
+        from: { name: 'Centauri Status', email: 'status@centauri.dev', color: '#188038' },
+        to: ['Nova Centauri'],
+        timestamp: new Date(Date.now() - 1000 * 60 * 60 * 3.2).toISOString(),
+        body: 'All systems have recovered. We will publish a full incident review within two business days.',
+      },
+    ],
+  },
+  {
+    id: 'backup-log',
+    threadId: 'backup-log',
+    subject: 'Nightly backup completed with 3 warnings',
+    snippet: 'Backup completed in 18m 42s. Three stale cache files were skipped and no mailbox data was lost.',
+    from: { name: 'Mail Server Logs', email: 'logs@mail.centauri.dev', color: '#5f6368' },
+    timestamp: new Date(Date.now() - 1000 * 60 * 60 * 3.7).toISOString(),
+    unread: false,
+    starred: false,
+    labels: ['Logs'],
+    folder: 'inbox',
+    messageCount: 1,
+    category: 'logs',
+    categoryLabel: 'Log digest',
+    categoryReason: 'Matched automated server log and backup language.',
+    messages: [
+      {
+        id: 'backup-log-1',
+        from: { name: 'Mail Server Logs', email: 'logs@mail.centauri.dev', color: '#5f6368' },
+        to: ['Nova Centauri'],
+        timestamp: new Date(Date.now() - 1000 * 60 * 60 * 3.7).toISOString(),
+        body: 'Backup completed in 18m 42s.\n\nWarnings: 3 stale cache files skipped.\nMailbox data lost: 0\nArchive verified: yes',
       },
     ],
   },
@@ -262,6 +446,47 @@ function formatMessageDate(value) {
   });
 }
 
+function canonicalCategory(value) {
+  const normalized = String(value || '').trim().toLowerCase().replace(/\s+/g, '_');
+  return CATEGORY_ALIASES[normalized] || CATEGORY_ALIASES[normalized.replace(/_/g, '-')] || null;
+}
+
+function inferSmartCategory(raw = {}) {
+  const labels = Array.isArray(raw.labels) ? raw.labels : Array.isArray(raw.tags) ? raw.tags : [];
+  const from = normalizePerson(raw.from || raw.sender || raw.fromAddress);
+  const haystack = [raw.subject, raw.snippet, raw.preview, from.name, from.email, ...labels].filter(Boolean).join(' ').toLowerCase();
+  if (/(github|github actions|actions@github|workflow|pull request|check run|build #|ci failed|ci passed)/i.test(haystack)) {
+    return { category: 'github_ci', reason: 'Matched GitHub, workflow, pull-request, or CI language.' };
+  }
+  if (/(status@|status page|incident|degraded|outage|uptime|service health|all systems|resolved:|investigating|monitoring:)/i.test(haystack)) {
+    return { category: 'status', reason: 'Matched service-health or incident-update language.' };
+  }
+  if (/(logs?@|server logs?|cron|nightly backup|backup completed|telemetry|automated digest|job output|stack trace|exception report)/i.test(haystack)) {
+    return { category: 'logs', reason: 'Matched automated log, backup, telemetry, or job-output language.' };
+  }
+  return { category: 'primary', reason: 'Kept in Primary because it looks like regular correspondence.' };
+}
+
+function smartCategoryMetadata(raw = {}, fallback = {}) {
+  const inferred = inferSmartCategory({ ...fallback, ...raw });
+  const category = canonicalCategory(raw.category || raw.smartCategory || raw.categoryId || fallback.category) || inferred.category;
+  const definition = SMART_CATEGORIES.find((item) => item.id === category) || SMART_CATEGORIES[1];
+  return {
+    category: definition.id,
+    categoryLabel: raw.categoryLabel || raw.category_label || fallback.categoryLabel || definition.label,
+    categoryReason: raw.categoryReason || raw.category_reason || fallback.categoryReason || inferred.reason,
+  };
+}
+
+function countSmartCategories(threads = []) {
+  const counts = Object.fromEntries(SMART_CATEGORIES.filter((item) => item.id !== 'all').map((item) => [item.id, 0]));
+  threads.forEach((thread) => {
+    const category = smartCategoryMetadata(thread).category;
+    if (Object.hasOwn(counts, category)) counts[category] += 1;
+  });
+  return counts;
+}
+
 function getArray(payload, keys = []) {
   if (Array.isArray(payload)) return payload;
   if (!payload || typeof payload !== 'object') return [];
@@ -285,8 +510,14 @@ function normalizePerson(value, fallback = {}) {
   };
 }
 
+function recipientArray(value) {
+  if (Array.isArray(value)) return value;
+  if (Array.isArray(value?.value)) return value.value;
+  return value ? [value] : [];
+}
+
 function formatRecipients(value) {
-  const recipients = Array.isArray(value) ? value : value ? [value] : [];
+  const recipients = recipientArray(value);
   return recipients.map((recipient) => {
     const person = normalizePerson(recipient);
     if (person.name && person.email && person.name !== person.email) return `${person.name} <${person.email}>`;
@@ -296,13 +527,17 @@ function formatRecipients(value) {
 
 function normalizeMessage(raw, index = 0) {
   const from = normalizePerson(raw.from || raw.sender || raw.fromAddress, { color: raw.color });
+  const classification = smartCategoryMetadata(raw, { from });
   return {
-    id: String(raw.id || raw.messageId || `message-${index}`),
-    rfcMessageId: raw.messageId || raw.rfcMessageId || raw.id || null,
+    id: String(raw.latestMessageId || raw.id || raw.messageId || `message-${index}`),
+    accountId: (raw.accountId || raw.account_id) ? String(raw.accountId || raw.account_id) : null,
+    rfcMessageId: raw.messageId || raw.rfcMessageId || null,
     from,
     to: raw.to || raw.recipients || raw.toAddresses || [],
     cc: raw.cc || [],
     bcc: raw.bcc || [],
+    replyTo: raw.replyTo || raw.reply_to || [],
+    isSent: Boolean(raw.isSent ?? raw.is_sent),
     timestamp: raw.timestamp || raw.date || raw.sentAt || raw.receivedAt || new Date().toISOString(),
     body: raw.textBody || raw.bodyText || raw.text || raw.body || raw.snippet || '',
     bodyHtml: raw.htmlBody || raw.bodyHtml || raw.html || '',
@@ -312,6 +547,7 @@ function normalizeMessage(raw, index = 0) {
     })),
     remoteContentBlocked: Boolean(raw.remoteContentBlocked || raw.trackerBlocked || raw.hasRemoteContent || raw.remoteImageCount > 0),
     remoteContentLoaded: Boolean(raw.remoteContentLoaded),
+    ...classification,
   };
 }
 
@@ -334,12 +570,20 @@ function normalizeThread(raw, index = 0) {
   const messages = getArray(raw, ['messages', 'items']).map(normalizeMessage);
   const latest = messages.at(-1) || normalizeMessage(raw, index);
   const from = normalizePerson(raw.from || raw.sender || latest.from, latest.from);
+  const classification = smartCategoryMetadata(raw, latest);
   return {
     id: String(raw.id || raw.threadId || raw.conversationId || `thread-${index}`),
+    draftId: raw.draftId || raw.draft_id || null,
+    accountId: (raw.accountId || raw.account_id || latest.accountId) ? String(raw.accountId || raw.account_id || latest.accountId) : null,
     threadId: String(raw.threadId || raw.id || raw.conversationId || `thread-${index}`),
     subject: raw.subject || latest.subject || '(no subject)',
     snippet: raw.snippet || raw.preview || latest.body.replace(/\s+/g, ' ').slice(0, 170),
     from,
+    to: raw.to || latest.to || [],
+    cc: raw.cc || latest.cc || [],
+    bcc: raw.bcc || latest.bcc || [],
+    replyTo: raw.replyTo || latest.replyTo || [],
+    isSent: Boolean(raw.isSent ?? latest.isSent),
     participants: raw.participants || raw.people || [],
     timestamp: raw.timestamp || raw.latestAt || raw.updatedAt || raw.sentAt || raw.receivedAt || raw.date || latest.timestamp,
     unread: Boolean(raw.unread ?? raw.isUnread ?? (raw.unreadCount !== undefined ? Number(raw.unreadCount) > 0 : raw.isRead === false)),
@@ -348,9 +592,14 @@ function normalizeThread(raw, index = 0) {
     folder: inferFolder(raw),
     messageCount: raw.messageCount || raw.count || messages.length || 1,
     hasAttachments: Boolean(raw.hasAttachments || raw.attachments?.length || messages.some((message) => message.attachments.length)),
-    messages,
+    // Keep the compact list message available immediately so a fast Reply has
+    // the correct account and RFC Message-ID while full thread detail loads.
+    messages: messages.length ? messages : [latest],
+    ...classification,
   };
 }
+
+const demoMailboxThreads = demoThreads.map(normalizeThread);
 
 function normalizeAccount(raw, index = 0) {
   const person = normalizePerson(raw);
@@ -362,6 +611,9 @@ function normalizeAccount(raw, index = 0) {
     color: raw.color || ['#8e24aa', '#0b57d0', '#e8710a', '#00897b'][index % 4],
     signature: raw.signature || '',
     connected: raw.connected !== false && raw.status !== 'error',
+    provider: raw.provider || 'custom',
+    status: raw.status || (raw.connected === false ? 'error' : 'connected'),
+    lastSyncedAt: raw.lastSyncedAt || raw.last_synced_at || null,
   };
 }
 
@@ -378,14 +630,46 @@ async function api(path, options = {}) {
     },
   });
   if (!response.ok) {
-    const detail = await response.text().catch(() => '');
-    const error = new Error(detail || `Request failed (${response.status})`);
+    const contentType = response.headers.get('content-type') || '';
+    let detail = null;
+    try {
+      detail = contentType.includes('application/json') ? await response.json() : await response.text();
+    } catch {
+      detail = null;
+    }
+    const errorBody = detail && typeof detail === 'object' ? (detail.error || detail) : null;
+    const message = typeof errorBody?.message === 'string'
+      ? errorBody.message
+      : typeof detail === 'string' && detail.trim()
+        ? detail.trim()
+        : `Request failed (${response.status})`;
+    const error = new Error(message);
     error.status = response.status;
+    error.code = errorBody?.code || detail?.code || null;
+    error.details = errorBody?.details || detail?.details || null;
     throw error;
   }
   if (response.status === 204) return null;
   const contentType = response.headers.get('content-type') || '';
   return contentType.includes('application/json') ? response.json() : response.text();
+}
+
+function syncResultStatus(payload) {
+  const source = payload?.result ?? payload?.results ?? payload;
+  const results = Array.isArray(source) ? source : source ? [source] : [];
+  if (!results.length) return 'ok';
+  if (results.every((result) => result?.skipped)) return 'skipped';
+  if (results.some((result) => result?.skipped)) return 'partial';
+  const statuses = results.map((result) => result?.status).filter(Boolean);
+  if (statuses.length && statuses.every((status) => status === 'failed')) return 'failed';
+  if (statuses.some((status) => status === 'failed' || status === 'partial')) return 'partial';
+  return 'ok';
+}
+
+function syncSkippedMessageCount(payload) {
+  const source = payload?.result ?? payload?.results ?? payload;
+  const results = Array.isArray(source) ? source : source ? [source] : [];
+  return results.reduce((sum, result) => sum + (typeof result?.skipped === 'number' ? Math.max(0, result.skipped) : 0), 0);
 }
 
 function plainTextToHtml(text) {
@@ -498,6 +782,13 @@ function Icon({ name, size = 20, className = '' }) {
     shield: <><path d="M12 3 19 6v5c0 4.4-2.8 7.7-7 10-4.2-2.3-7-5.6-7-10V6z" /><path d="m8.7 12 2.2 2.2 4.5-4.5" /></>,
     eyeOff: <><path d="M3 3l18 18M10.6 6.2A10 10 0 0 1 12 6c4.7 0 8.3 3.3 9.5 6- .5 1.1-1.4 2.3-2.7 3.4M6.4 6.5C4.4 7.8 3 9.8 2.5 12c1.2 2.7 4.8 6 9.5 6 1.4 0 2.7-.3 3.8-.8M9.7 9.8A3 3 0 0 0 14.2 14" /></>,
     tune: <><path d="M4 7h10M17 7h3M4 12h3M10 12h10M4 17h11M18 17h2" /><circle cx="15" cy="7" r="2" fill="var(--surface)" /><circle cx="8" cy="12" r="2" fill="var(--surface)" /><circle cx="16" cy="17" r="2" fill="var(--surface)" /></>,
+    person: <><circle cx="12" cy="8" r="3.5" /><path d="M5.5 20c.5-4 2.7-6 6.5-6s6 2 6.5 6" /></>,
+    branch: <><circle cx="7" cy="5" r="2" /><circle cx="17" cy="7" r="2" /><circle cx="7" cy="19" r="2" /><path d="M7 7v10M9 12h2c3.3 0 6-1.3 6-3" /></>,
+    terminal: <><rect x="3" y="4.5" width="18" height="15" rx="2" /><path d="m7 9 3 3-3 3M13 15h4" /></>,
+    activity: <><path d="M3 12h4l2.1-6 4.2 12 2.2-6H21" /></>,
+    sparkles: <><path d="m12 3 1.2 3.8L17 8l-3.8 1.2L12 13l-1.2-3.8L7 8l3.8-1.2zM6.5 14l.8 2.2 2.2.8-2.2.8L6.5 20l-.8-2.2-2.2-.8 2.2-.8zM18.5 13l.6 1.6 1.6.6-1.6.6-.6 1.7-.6-1.7-1.6-.6 1.6-.6z" /></>,
+    lock: <><rect x="5" y="10" width="14" height="10" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v2.5" /></>,
+    eye: <><path d="M2.5 12c1.3-2.8 4.8-6 9.5-6s8.2 3.2 9.5 6c-1.3 2.8-4.8 6-9.5 6S3.8 14.8 2.5 12Z" /><circle cx="12" cy="12" r="3" /></>,
   };
   return (
     <svg className={`icon ${className}`} width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -552,7 +843,7 @@ function Tooltip({ children, text }) {
   return <span className="tooltip-wrap" data-tooltip={text}>{children}</span>;
 }
 
-function Topbar({ onToggleSidebar, sidebarCompact, query, setQuery, onOpenSettings, onOpenProfile, account, isDemo }) {
+function Topbar({ onToggleSidebar, query, setQuery, onOpenSettings, onOpenProfile, onFocusSmartFilters, account, isDemo }) {
   const searchRef = useRef(null);
   useEffect(() => {
     const focusSearch = (event) => {
@@ -567,8 +858,8 @@ function Topbar({ onToggleSidebar, sidebarCompact, query, setQuery, onOpenSettin
 
   return (
     <header className="topbar">
-      <Tooltip text={sidebarCompact ? 'Show navigation' : 'Hide navigation'}>
-        <IconButton label={sidebarCompact ? 'Show navigation' : 'Hide navigation'} onClick={onToggleSidebar} className="top-menu">
+      <Tooltip text="Toggle navigation">
+        <IconButton label="Toggle navigation" onClick={onToggleSidebar} className="top-menu">
           <Icon name="menu" />
         </IconButton>
       </Tooltip>
@@ -592,8 +883,8 @@ function Topbar({ onToggleSidebar, sidebarCompact, query, setQuery, onOpenSettin
             <Icon name="close" size={18} />
           </IconButton>
         )}
-        <Tooltip text="Show search options">
-          <IconButton label="Show search options" className="search-filter">
+        <Tooltip text="Smart mail filters">
+          <IconButton label="Focus smart mail filters" className="search-filter" onClick={onFocusSmartFilters}>
             <Icon name="tune" size={20} />
           </IconButton>
         </Tooltip>
@@ -707,10 +998,68 @@ function ListToolbar({ visibleCount, totalCount, selectedCount, onRefresh, onBul
       </div>
       <div className="toolbar-right">
         <span className="range-copy">{visibleCount ? `1–${visibleCount} of ${totalCount}` : '0 of 0'}</span>
-        <IconButton label="Newer"><Icon name="back" size={19} /></IconButton>
-        <IconButton label="Older"><Icon name="forward" size={19} /></IconButton>
+        <IconButton label="Newer (pagination not yet available)" disabled><Icon name="back" size={19} /></IconButton>
+        <IconButton label="Older (pagination not yet available)" disabled><Icon name="forward" size={19} /></IconButton>
       </div>
     </div>
+  );
+}
+
+function SmartFilterBar({ activeCategory, onChange, visibleCount, categoryCounts, loading }) {
+  const availableCounts = SMART_CATEGORIES
+    .filter((category) => category.id !== 'all')
+    .map((category) => categoryCounts?.[category.id])
+    .filter((count) => Number.isFinite(Number(count)));
+  const allCount = availableCounts.length
+    ? availableCounts.reduce((sum, count) => sum + Number(count), 0)
+    : Number(visibleCount || 0);
+  return (
+    <section className="smart-filter-bar" id="smart-mail-filters" aria-label="Smart inbox filters">
+      <div className="smart-filter-intro">
+        <span className="smart-filter-mark"><Icon name="sparkles" size={16} /></span>
+        <span><strong>Smart views</strong><small>Automatic, explainable sorting</small></span>
+      </div>
+      <div className="smart-filter-scroll" role="tablist" aria-label="Filter conversations by category">
+        {SMART_CATEGORIES.map((category) => {
+          const selected = activeCategory === category.id;
+          const categoryCount = category.id === 'all'
+            ? allCount
+            : Number(categoryCounts?.[category.id] || 0);
+          return (
+            <button
+              type="button"
+              role="tab"
+              key={category.id}
+              aria-selected={selected}
+              aria-controls="conversation-list"
+              className={`smart-filter-chip category-${category.id} ${selected ? 'is-selected' : ''}`}
+              onClick={() => onChange(category.id)}
+              title={category.description}
+            >
+              <Icon name={category.icon} size={15} />
+              <span>{category.shortLabel}</span>
+              {!loading && categoryCount > 0 && <small aria-label={`${categoryCount} ${categoryCount === 1 ? 'message' : 'messages'}`}>{categoryCount}</small>}
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function CategoryBadge({ thread, showPrimary = false }) {
+  const metadata = smartCategoryMetadata(thread);
+  if (metadata.category === 'primary' && !showPrimary) return null;
+  const definition = SMART_CATEGORIES.find((item) => item.id === metadata.category) || SMART_CATEGORIES[1];
+  return (
+    <span
+      className={`thread-category category-${metadata.category}`}
+      title={metadata.categoryReason}
+      aria-label={`${metadata.categoryLabel}. ${metadata.categoryReason}`}
+    >
+      <Icon name={definition.icon} size={12} />
+      <span>{metadata.categoryLabel}</span>
+    </span>
   );
 }
 
@@ -722,7 +1071,7 @@ function ThreadRow({ thread, selected, isChecked, onOpen, onCheck, onToggleStar 
       role="button"
       tabIndex={0}
       onClick={() => onOpen(thread)}
-      onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onOpen(thread); } }}
+      onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); onOpen(thread); } }}
     >
       <Checkbox checked={isChecked} onChange={onCheck} label={`Select ${thread.subject}`} />
       <IconButton label={thread.starred ? 'Unstar' : 'Star'} active={thread.starred} onClick={(event) => { event.stopPropagation(); onToggleStar(thread); }} className="row-star">
@@ -730,8 +1079,8 @@ function ThreadRow({ thread, selected, isChecked, onOpen, onCheck, onToggleStar 
       </IconButton>
       <div className="row-sender" title={sender}>{sender}</div>
       <div className="row-subject">
-        <strong>{thread.subject || '(no subject)'}</strong>
-        <span> — {thread.snippet}</span>
+        <span className="row-subject-heading"><strong>{thread.subject || '(no subject)'}</strong><CategoryBadge thread={thread} /></span>
+        <span className="row-snippet">{thread.snippet}</span>
       </div>
       <div className="row-meta">
         {thread.hasAttachments && <Icon name="attachment" size={17} />}
@@ -742,10 +1091,13 @@ function ThreadRow({ thread, selected, isChecked, onOpen, onCheck, onToggleStar 
   );
 }
 
-function EmptyMailbox({ folder, query, onCompose, onClearSearch, onRefresh }) {
-  const title = query ? 'No mail matched your search' : folder === 'inbox' ? 'Your inbox is clear' : `Nothing in ${folder}`;
+function EmptyMailbox({ folder, query, category = 'all', onCompose, onClearSearch, onClearCategory, onRefresh }) {
+  const categoryDefinition = SMART_CATEGORIES.find((item) => item.id === category);
+  const title = query ? 'No mail matched your search' : categoryDefinition && category !== 'all' ? `No ${categoryDefinition.label.toLowerCase()} here` : folder === 'inbox' ? 'Your inbox is clear' : `Nothing in ${folder}`;
   const copy = query
     ? 'Try a sender, subject, or a different search term.'
+    : categoryDefinition && category !== 'all'
+      ? `${categoryDefinition.description}. New matches will appear here automatically.`
     : folder === 'inbox'
       ? 'Take a breath. New conversations will appear here.'
       : 'Mail moved here will appear when it is available.';
@@ -755,10 +1107,39 @@ function EmptyMailbox({ folder, query, onCompose, onClearSearch, onRefresh }) {
       <h2>{title}</h2>
       <p>{copy}</p>
       <div className="empty-actions">
-        {query ? <button type="button" className="secondary-button" onClick={onClearSearch}>Clear search</button> : <button type="button" className="primary-button" onClick={onCompose}><Icon name="compose" size={18} /> Compose</button>}
+        {query ? <button type="button" className="secondary-button" onClick={onClearSearch}>Clear search</button> : category !== 'all' ? <button type="button" className="secondary-button" onClick={onClearCategory}>View all mail</button> : <button type="button" className="primary-button" onClick={onCompose}><Icon name="compose" size={18} /> Compose</button>}
         <button type="button" className="text-button" onClick={onRefresh}>Refresh</button>
       </div>
     </div>
+  );
+}
+
+function ReaderPlaceholder({ isDemo, onAddAccount }) {
+  if (!isDemo) {
+    return (
+      <section className="reader-placeholder" aria-label="No conversation selected">
+        <div className="reader-placeholder-mark"><span>G</span></div>
+        <h2>Select a conversation</h2>
+        <p>Choose a message to read it here.</p>
+        <div className="privacy-summary"><Icon name="shield" size={18} /><span><strong>Privacy is on</strong> — known tracking pixels are blocked before they can report back.</span></div>
+      </section>
+    );
+  }
+  return (
+    <section className="reader-placeholder onboarding-placeholder" aria-label="Connect your first email account">
+      <span className="onboarding-eyebrow"><Icon name="sparkles" size={14} /> Private unified inbox</span>
+      <div className="reader-placeholder-mark"><span>G</span></div>
+      <h2>All your mail. Much less noise.</h2>
+      <p>Bring Gmail, iCloud, and self-hosted mail into one calm inbox, with CI, logs, and status updates sorted automatically.</p>
+      <button type="button" className="primary-button onboarding-cta" onClick={onAddAccount}><Icon name="plus" size={18} /> Connect an account</button>
+      <div className="onboarding-provider-list" aria-label="Supported providers">
+        {['gmail', 'icloud', 'mailinabox'].map((id) => {
+          const provider = PROVIDER_PRESETS[id];
+          return <span key={id}><i style={{ '--provider-color': provider.color }}>{provider.mark}</i>{provider.label}</span>;
+        })}
+      </div>
+      <div className="privacy-summary"><Icon name="lock" size={18} /><span><strong>Credentials stay server-side.</strong> GigaMail requires encrypted-at-rest storage and never saves mailbox passwords in browser storage.</span></div>
+    </section>
   );
 }
 
@@ -770,7 +1151,7 @@ function SkeletonRows() {
   );
 }
 
-function MailList({ threads, selectedThread, loading, folder, query, selectedIds, setSelectedIds, onOpenThread, onToggleStar, onRefresh, onBulkAction, onCompose }) {
+function MailList({ threads, totalCount, categoryCounts, selectedThread, loading, folder, query, activeCategory, setActiveCategory, selectedIds, setSelectedIds, onOpenThread, onToggleStar, onRefresh, onBulkAction, onCompose, onClearSearch }) {
   const allSelected = threads.length > 0 && threads.every((thread) => selectedIds.includes(thread.id));
   const toggleAll = () => setSelectedIds(allSelected ? [] : threads.map((thread) => thread.id));
   const toggleOne = (thread, checked) => setSelectedIds((current) => checked ? [...new Set([...current, thread.id])] : current.filter((id) => id !== thread.id));
@@ -778,7 +1159,7 @@ function MailList({ threads, selectedThread, loading, folder, query, selectedIds
     <section className={`mail-list-panel ${selectedThread ? 'has-selected-thread' : ''}`} aria-label="Conversation list">
       <ListToolbar
         visibleCount={threads.length}
-        totalCount={threads.length}
+        totalCount={totalCount}
         selectedCount={selectedIds.length}
         onRefresh={onRefresh}
         onBulkAction={onBulkAction}
@@ -786,8 +1167,9 @@ function MailList({ threads, selectedThread, loading, folder, query, selectedIds
         onToggleAll={toggleAll}
         loading={loading}
       />
+      {folder === 'inbox' && <SmartFilterBar activeCategory={activeCategory} onChange={setActiveCategory} visibleCount={threads.length} categoryCounts={categoryCounts} loading={loading} />}
       {loading && !threads.length ? <SkeletonRows /> : threads.length ? (
-        <div className="thread-list">
+        <div className="thread-list" id="conversation-list" role="tabpanel">
           {threads.map((thread) => (
             <ThreadRow
               key={thread.id}
@@ -801,7 +1183,7 @@ function MailList({ threads, selectedThread, loading, folder, query, selectedIds
           ))}
         </div>
       ) : (
-        <EmptyMailbox folder={folder} query={query} onCompose={onCompose} onClearSearch={() => {}} onRefresh={onRefresh} />
+        <EmptyMailbox folder={folder} query={query} category={activeCategory} onCompose={onCompose} onClearSearch={onClearSearch} onClearCategory={() => setActiveCategory('all')} onRefresh={onRefresh} />
       )}
     </section>
   );
@@ -823,8 +1205,8 @@ function ThreadToolbar({ onBack, onAction, isRead }) {
         <IconButton label="More"><Icon name="more" /></IconButton>
       </div>
       <div className="toolbar-right">
-        <IconButton label="Newer conversation"><Icon name="back" size={19} /></IconButton>
-        <IconButton label="Older conversation"><Icon name="forward" size={19} /></IconButton>
+        <IconButton label="Newer conversation (pagination not yet available)" disabled><Icon name="back" size={19} /></IconButton>
+        <IconButton label="Older conversation (pagination not yet available)" disabled><Icon name="forward" size={19} /></IconButton>
       </div>
     </div>
   );
@@ -867,9 +1249,10 @@ function MessageBody({ message, onLoadRemote, allowPrivateImages }) {
   );
 }
 
-function MessageCard({ message, expanded, onToggle, onLoadRemote, onReply, onForward, allowPrivateImages }) {
+function MessageCard({ message, expanded, onToggle, onLoadRemote, onReply, onReplyAll, onForward, allowPrivateImages }) {
   const from = message.from || {};
   const recipientList = formatRecipients(message.to);
+  const canReplyAll = [...recipientArray(message.to), ...recipientArray(message.cc)].length > 1;
   return (
     <article className={`message-card ${expanded ? 'is-expanded' : ''}`}>
       <button type="button" className="message-summary" onClick={onToggle} aria-expanded={expanded}>
@@ -890,6 +1273,7 @@ function MessageCard({ message, expanded, onToggle, onLoadRemote, onReply, onFor
           <MessageBody message={message} onLoadRemote={onLoadRemote} allowPrivateImages={allowPrivateImages} />
           <div className="message-reply-actions">
             <button type="button" className="secondary-button" onClick={() => onReply(message)}><Icon name="reply" size={18} /> Reply</button>
+            {canReplyAll && <button type="button" className="secondary-button" onClick={() => onReplyAll(message)}><Icon name="reply" size={18} /> Reply all</button>}
             <button type="button" className="secondary-button" onClick={() => onForward(message)}><Icon name="forward" size={18} /> Forward</button>
           </div>
         </div>
@@ -898,8 +1282,9 @@ function MessageCard({ message, expanded, onToggle, onLoadRemote, onReply, onFor
   );
 }
 
-function ThreadView({ thread, activeFolder, onBack, onAction, onLoadRemote, onReply, onForward, allowPrivateImages }) {
+function ThreadView({ thread, activeFolder, onBack, onAction, onLoadRemote, onReply, onReplyAll, onForward, allowPrivateImages }) {
   const sourceMessages = thread.messages?.length ? thread.messages : [normalizeMessage(thread)];
+  const classification = smartCategoryMetadata(thread);
   const [expandedIds, setExpandedIds] = useState(() => new Set([sourceMessages.at(-1)?.id]));
   useEffect(() => setExpandedIds(new Set([sourceMessages.at(-1)?.id])), [thread.id]);
   const toggleExpanded = (id) => setExpandedIds((current) => {
@@ -909,13 +1294,19 @@ function ThreadView({ thread, activeFolder, onBack, onAction, onLoadRemote, onRe
   });
   return (
     <section className="thread-panel" aria-label="Open conversation">
-      <ThreadToolbar onBack={onBack} onAction={onAction} isRead={!thread.unread} />
+      <ThreadToolbar onBack={onBack} onAction={(action) => onAction(action, [thread.id])} isRead={!thread.unread} />
       <div className="thread-scroll">
         <div className="thread-heading">
-          <h1>{thread.subject || '(no subject)'}</h1>
-          <div className="heading-labels">
-            {(thread.labels || []).map((label) => <span key={label} className="message-label">{label}</span>)}
-            {activeFolder !== 'inbox' && <span className="message-label neutral-label">{activeFolder}</span>}
+          <div className="thread-heading-main">
+            <div className="thread-title-line">
+              <h1>{thread.subject || '(no subject)'}</h1>
+              <div className="heading-labels">
+                <CategoryBadge thread={thread} showPrimary />
+                {(thread.labels || []).map((label) => <span key={label} className="message-label">{label}</span>)}
+                {activeFolder !== 'inbox' && <span className="message-label neutral-label">{activeFolder}</span>}
+              </div>
+            </div>
+            <p className="category-reason"><Icon name="sparkles" size={13} />{classification.categoryReason}</p>
           </div>
         </div>
         <div className="conversation-stack">
@@ -927,6 +1318,7 @@ function ThreadView({ thread, activeFolder, onBack, onAction, onLoadRemote, onRe
               onToggle={() => toggleExpanded(message.id)}
               onLoadRemote={onLoadRemote}
               onReply={(target) => onReply(thread, target)}
+              onReplyAll={(target) => onReplyAll(thread, target)}
               onForward={(target) => onForward(thread, target)}
               allowPrivateImages={allowPrivateImages}
             />
@@ -937,24 +1329,77 @@ function ThreadView({ thread, activeFolder, onBack, onAction, onLoadRemote, onRe
   );
 }
 
-function ComposeModal({ account, accounts, onClose, onSent, initialReply }) {
+function ComposeModal({ account, accounts, isDemo, onClose, onSent, onDraftSaved, onDraftRemoved, initialReply }) {
   const [form, setForm] = useState({
     to: initialReply?.to || '',
-    cc: '',
-    bcc: '',
+    cc: initialReply?.cc || '',
+    bcc: initialReply?.bcc || '',
     subject: initialReply?.subject || '',
     body: initialReply?.body || '',
   });
-  const [extraFields, setExtraFields] = useState(false);
+  const [extraFields, setExtraFields] = useState(Boolean(initialReply?.cc || initialReply?.bcc));
   const [isMinimized, setIsMinimized] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [isSavingDraft, setIsSavingDraft] = useState(false);
+  const [draftId, setDraftId] = useState(initialReply?.draftId || '');
   const [error, setError] = useState('');
-  const [senderId, setSenderId] = useState(account?.id || accounts[0]?.id || '');
+  const [senderId, setSenderId] = useState(initialReply?.accountId || account?.id || accounts[0]?.id || '');
   const update = (key) => (event) => setForm((current) => ({ ...current, [key]: event.target.value }));
   useEffect(() => {
-    setSenderId((current) => accounts.some((item) => item.id === current) ? current : account?.id || accounts[0]?.id || '');
-  }, [account?.id, accounts]);
+    setSenderId((current) => accounts.some((item) => item.id === current) ? current : initialReply?.accountId || account?.id || accounts[0]?.id || '');
+  }, [account?.id, accounts, initialReply?.accountId]);
   const senderAccount = accounts.find((item) => item.id === senderId) || account || accounts[0] || null;
+  const addressValues = (value) => value.split(',').map((item) => item.trim()).filter(Boolean);
+  const draftPayload = () => ({
+    accountId: senderAccount?.id,
+    threadId: initialReply?.threadId || null,
+    to: addressValues(form.to),
+    cc: addressValues(form.cc),
+    bcc: addressValues(form.bcc),
+    subject: form.subject,
+    textBody: form.body,
+    htmlBody: plainTextToHtml(form.body),
+  });
+  const saveDraft = async () => {
+    if (isSending || isSavingDraft) return;
+    if (!senderAccount?.id) { setError('Connect an account before saving this draft.'); return; }
+    setError('');
+    setIsSavingDraft(true);
+    const payload = draftPayload();
+    try {
+      if (isDemo) {
+        const localId = draftId || `preview-${Date.now()}`;
+        const draft = { id: localId, ...payload, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+        setDraftId(localId);
+        onDraftSaved(draft, senderAccount, true);
+      } else {
+        const result = await api(draftId ? `/drafts/${encodeURIComponent(draftId)}` : '/drafts', { method: draftId ? 'PATCH' : 'POST', body: JSON.stringify(payload) });
+        const draft = result?.draft || result;
+        setDraftId(draft?.id || draftId);
+        onDraftSaved(draft, senderAccount, false);
+      }
+      onClose();
+    } catch (requestError) {
+      setError(requestError.status === 401 || requestError.status === 403 ? 'Unlock GigaMail before saving this draft.' : `Draft could not be saved. ${requestError.message || 'Check the server connection and try again.'}`);
+    } finally {
+      setIsSavingDraft(false);
+    }
+  };
+  const discardDraft = async () => {
+    if (isSending || isSavingDraft) return;
+    if (!draftId) { onClose(); return; }
+    setIsSavingDraft(true);
+    setError('');
+    try {
+      if (!isDemo) await api(`/drafts/${encodeURIComponent(draftId)}`, { method: 'DELETE' });
+      onDraftRemoved(draftId);
+      onClose();
+    } catch (requestError) {
+      setError(`The saved draft could not be discarded. ${requestError.message || 'Try again when the server is available.'}`);
+    } finally {
+      setIsSavingDraft(false);
+    }
+  };
   const send = async (event) => {
     event.preventDefault();
     if (!form.to.trim()) { setError('Add at least one recipient.'); return; }
@@ -974,17 +1419,21 @@ function ComposeModal({ account, accounts, onClose, onSent, initialReply }) {
       ...(initialReply?.replyToMessageId ? { replyToMessageId: initialReply.replyToMessageId } : {}),
     };
     try {
-      await api('/messages', { method: 'POST', body: JSON.stringify(payload) });
-      onSent(payload, false, senderAccount);
+      const result = await api('/messages', { method: 'POST', body: JSON.stringify(payload) });
+      if (draftId) {
+        if (isDemo) onDraftRemoved(draftId);
+        else void api(`/drafts/${encodeURIComponent(draftId)}`, { method: 'DELETE' }).then(() => onDraftRemoved(draftId)).catch(() => undefined);
+      }
+      onSent(payload, false, senderAccount, result);
       onClose();
     } catch (requestError) {
-      // A disconnected local API should not make a draft disappear in preview mode.
-      if (String(requestError.message).includes('Failed to fetch')) {
-        onSent(payload, true, senderAccount);
-        onClose();
-      } else {
-        setError('Could not send this message. Your draft is still open.');
-      }
+      const rejectedDelivery = requestError.details?.delivery;
+      const rejectedCount = Number(rejectedDelivery?.recipientCount) || 0;
+      setError(requestError.status === 401 || requestError.status === 403
+        ? 'Unlock GigaMail before sending. Your message is still open.'
+        : rejectedDelivery?.status === 'rejected'
+          ? `The provider rejected ${rejectedCount ? `all ${rejectedCount} recipients` : 'all recipients'}. Check the addresses and try again; your message is still open.`
+          : 'Could not send this message. Check the connection and try again, or save it as a draft.');
     } finally {
       setIsSending(false);
     }
@@ -992,11 +1441,11 @@ function ComposeModal({ account, accounts, onClose, onSent, initialReply }) {
   return (
     <div className={`compose-window ${isMinimized ? 'is-minimized' : ''}`} role="dialog" aria-modal="true" aria-label="New message">
       <div className="compose-titlebar">
-        <span>New Message</span>
+        <span>{draftId ? 'Draft' : initialReply?.mode === 'reply' || initialReply?.mode === 'reply-all' ? 'Reply' : initialReply?.mode === 'forward' ? 'Forward' : 'New Message'}</span>
         <div>
           <IconButton label={isMinimized ? 'Restore' : 'Minimize'} onClick={() => setIsMinimized((value) => !value)}><Icon name="minimize" size={17} /></IconButton>
           <IconButton label="Full screen"><Icon name="expand" size={16} /></IconButton>
-          <IconButton label="Save and close" onClick={onClose}><Icon name="close" size={17} /></IconButton>
+          <IconButton label={isSavingDraft ? 'Saving draft' : 'Save and close'} onClick={saveDraft} disabled={isSending || isSavingDraft}><Icon name="close" size={17} /></IconButton>
         </div>
       </div>
       {!isMinimized && (
@@ -1008,7 +1457,7 @@ function ComposeModal({ account, accounts, onClose, onSent, initialReply }) {
           {accounts.length > 1 && (
             <div className="recipient-line from-line">
               <span>From</span>
-              <select value={senderId} onChange={(event) => setSenderId(event.target.value)} aria-label="Send from account">
+              <select value={senderId} onChange={(event) => setSenderId(event.target.value)} aria-label="Send from account" disabled={Boolean(draftId)} title={draftId ? 'A saved draft stays with its original account' : undefined}>
                 {accounts.map((item) => <option key={item.id} value={item.id}>{item.name} &lt;{item.email}&gt;</option>)}
               </select>
             </div>
@@ -1019,12 +1468,12 @@ function ComposeModal({ account, accounts, onClose, onSent, initialReply }) {
           {senderAccount?.signature && <div className="signature-preview">{senderAccount.signature}</div>}
           {error && <p className="compose-error">{error}</p>}
           <div className="compose-footer">
-            <button type="submit" className="send-button" disabled={isSending}>{isSending ? 'Sending…' : 'Send'}</button>
+            <button type="submit" className="send-button" disabled={isSending || isSavingDraft}>{isSending ? 'Sending…' : 'Send'}</button>
             <IconButton label="Attach files"><Icon name="attachment" /></IconButton>
             <IconButton label="Insert link"><Icon name="link" /></IconButton>
             <IconButton label="More options"><Icon name="more" /></IconButton>
             <span className="compose-spacer" />
-            <IconButton label="Discard draft" onClick={onClose}><Icon name="trash" /></IconButton>
+            <IconButton label="Discard draft" onClick={discardDraft} disabled={isSending || isSavingDraft}><Icon name="trash" /></IconButton>
           </div>
         </form>
       )}
@@ -1115,11 +1564,102 @@ function readFileAsDataUrl(file) {
   });
 }
 
+function accountConnectionError(error) {
+  if (error?.status === 401 || error?.status === 403) return 'Unlock GigaMail before adding an account.';
+  if (error?.status === 409) return error.message || 'An account with this email is already connected.';
+  if (error?.code === 'CREDENTIAL_ENCRYPTION_UNAVAILABLE') {
+    return error.message || 'Credential encryption is not configured on this GigaMail server.';
+  }
+  const safeMessage = String(error?.message || '').trim();
+  if (safeMessage && !safeMessage.startsWith('<') && safeMessage.length <= 360 && error?.status >= 400 && error?.status < 600) return safeMessage;
+  return 'Could not verify this account. Check the email, server settings, and app password, then try again.';
+}
+
 function AddAccountModal({ onClose, onAdded }) {
-  const [form, setForm] = useState({ name: '', email: '', provider: 'gmail', appPassword: '', signature: '', color: '#0b57d0', imapHost: '', imapPort: '993', smtpHost: '', smtpPort: '465', avatarUrl: '' });
+  const initialProvider = PROVIDER_PRESETS.gmail;
+  const [step, setStep] = useState('provider');
+  const [form, setForm] = useState({
+    name: '',
+    email: '',
+    username: '',
+    imapUsername: '',
+    providerKey: initialProvider.id,
+    appPassword: '',
+    signature: '',
+    color: initialProvider.color,
+    imapHost: initialProvider.imapHost,
+    imapPort: initialProvider.imapPort,
+    smtpHost: initialProvider.smtpHost,
+    smtpPort: initialProvider.smtpPort,
+    avatarUrl: '',
+  });
   const [saving, setSaving] = useState(false);
+  const [savingPhase, setSavingPhase] = useState('');
+  const [protocolStatus, setProtocolStatus] = useState({ imap: 'idle', smtp: 'idle' });
+  const [passwordVisible, setPasswordVisible] = useState(false);
   const [error, setError] = useState('');
+  const dialogRef = useRef(null);
+  const firstProviderRef = useRef(null);
+  const emailRef = useRef(null);
+  const savingRef = useRef(false);
+  const selectedProvider = PROVIDER_PRESETS[form.providerKey] || PROVIDER_PRESETS.custom;
   const update = (key) => (event) => setForm((current) => ({ ...current, [key]: event.target.value }));
+  const updateEmail = (event) => {
+    const value = event.target.value;
+    setForm((current) => {
+      const previousLocalPart = current.email.split('@')[0];
+      return {
+        ...current,
+        email: value,
+        username: !current.username || current.username === current.email ? value : current.username,
+        imapUsername: current.providerKey === 'icloud' && (!current.imapUsername || current.imapUsername === previousLocalPart) ? value.split('@')[0] : current.imapUsername,
+      };
+    });
+  };
+  const chooseProvider = (providerKey) => {
+    const provider = PROVIDER_PRESETS[providerKey];
+    setForm((current) => ({
+      ...current,
+      providerKey,
+      username: current.email,
+      imapUsername: providerKey === 'icloud' ? current.email.split('@')[0] : '',
+      appPassword: '',
+      color: provider.color,
+      imapHost: provider.imapHost,
+      imapPort: provider.imapPort,
+      smtpHost: provider.smtpHost,
+      smtpPort: provider.smtpPort,
+    }));
+    setError('');
+    setPasswordVisible(false);
+    setProtocolStatus({ imap: 'idle', smtp: 'idle' });
+    setStep('details');
+    window.requestAnimationFrame(() => emailRef.current?.focus());
+  };
+  useEffect(() => { savingRef.current = saving; }, [saving]);
+  useEffect(() => {
+    const previousFocus = document.activeElement;
+    firstProviderRef.current?.focus();
+    const handleDialogKeys = (event) => {
+      if (event.key === 'Escape' && !savingRef.current) {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== 'Tab' || !dialogRef.current) return;
+      const focusable = [...dialogRef.current.querySelectorAll('button:not(:disabled), a[href], input:not(:disabled), textarea:not(:disabled), select:not(:disabled), summary')];
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable.at(-1);
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    window.addEventListener('keydown', handleDialogKeys);
+    return () => {
+      window.removeEventListener('keydown', handleDialogKeys);
+      previousFocus?.focus?.();
+    };
+  }, []); // The modal is mounted for one onboarding session.
   const chooseAvatar = async (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -1133,48 +1673,157 @@ function AddAccountModal({ onClose, onAdded }) {
   };
   const submit = async (event) => {
     event.preventDefault();
-    if (!form.name.trim() || !form.email.trim() || !form.appPassword) { setError('Display name, email, and an app password are required.'); return; }
-    if (['custom', 'imap'].includes(form.provider) && (!form.imapHost.trim() || !form.smtpHost.trim())) { setError('Add both IMAP and SMTP hosts for a custom provider.'); return; }
-    setSaving(true); setError('');
+    if (step !== 'details') return;
+    const email = form.email.trim().toLowerCase();
+    const password = form.providerKey === 'gmail' ? form.appPassword.replace(/\s/g, '') : form.appPassword.trim();
+    if (!email || !password) { setError(`Email address and ${form.providerKey === 'mailinabox' ? 'a mailbox password' : 'an app password'} are required.`); return; }
+    if (!form.imapHost.trim() || !form.smtpHost.trim()) { setError('Add both IMAP and SMTP server hosts.'); return; }
+    if (![form.imapPort, form.smtpPort].every((port) => Number(port) > 0 && Number(port) <= 65535)) { setError('Enter valid IMAP and SMTP ports.'); return; }
+    savingRef.current = true;
+    setSaving(true);
+    setSavingPhase('Checking IMAP & SMTP…');
+    setProtocolStatus({ imap: 'checking', smtp: 'checking' });
+    setError('');
+    const displayName = form.name.trim() || email.split('@')[0].replace(/[._-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
     const payload = {
-      name: form.name.trim(),
-      displayName: form.name.trim(),
-      email: form.email.trim(),
-      provider: form.provider,
-      credentials: { username: form.email.trim(), email: form.email.trim(), password: form.appPassword },
+      name: displayName,
+      displayName,
+      email,
+      provider: selectedProvider.provider,
+      credentials: {
+        username: form.username.trim() || email,
+        email,
+        password,
+        ...(form.providerKey === 'icloud' ? { imapUsername: form.imapUsername.trim() || email.split('@')[0], smtpUsername: email } : {}),
+      },
       signature: form.signature,
       color: form.color,
       avatarDataUrl: form.avatarUrl || undefined,
-      ...(['custom', 'imap'].includes(form.provider) ? {
-        imap: { host: form.imapHost.trim(), port: Number(form.imapPort) || 993, secure: Number(form.imapPort) === 993, username: form.email.trim() },
-        smtp: { host: form.smtpHost.trim(), port: Number(form.smtpPort) || 465, secure: Number(form.smtpPort) === 465, username: form.email.trim() },
-      } : {}),
+      imap: { host: form.imapHost.trim(), port: Number(form.imapPort) || 993, secure: Number(form.imapPort) === 993 },
+      smtp: { host: form.smtpHost.trim(), port: Number(form.smtpPort) || 465, secure: Number(form.smtpPort) === 465 },
     };
+    let savingPhaseTimer;
     try {
+      savingPhaseTimer = window.setTimeout(() => setSavingPhase('Verifying & saving securely…'), 1200);
       const result = await api('/accounts', { method: 'POST', body: JSON.stringify(payload) });
+      setProtocolStatus({ imap: 'passed', smtp: 'passed' });
       onAdded(normalizeAccount(result?.account || result || payload));
       onClose();
     } catch (requestError) {
-      setError(requestError.status === 401 ? 'Unlock GigaMail before adding an account.' : 'Could not connect this account. Check the provider details and app password.');
-    } finally { setSaving(false); }
+      const protocols = requestError.details?.protocols || {};
+      const hasProtocolDetails = Object.keys(protocols).length > 0;
+      const outcome = (value, fallback) => {
+        if (value === true || value?.ok === true || ['ok', 'passed', 'connected', 'success'].includes(String(value?.status || value || '').toLowerCase())) return 'passed';
+        if (value === false || value?.ok === false || ['failed', 'error', 'rejected', 'timeout'].includes(String(value?.status || value || '').toLowerCase())) return 'failed';
+        return fallback;
+      };
+      setProtocolStatus((current) => requestError.code === 'CREDENTIAL_ENCRYPTION_UNAVAILABLE' ? { imap: 'idle', smtp: 'idle' } : ({
+        imap: outcome(protocols.imap, requestError.code?.startsWith('IMAP_') || (!hasProtocolDetails && current.imap === 'checking') ? 'failed' : current.imap),
+        smtp: outcome(protocols.smtp, requestError.code?.startsWith('SMTP_') || (!hasProtocolDetails && current.smtp === 'checking') ? 'failed' : current.smtp),
+      }));
+      setError(accountConnectionError(requestError));
+    } finally {
+      window.clearTimeout(savingPhaseTimer);
+      savingRef.current = false;
+      setSaving(false);
+      setSavingPhase('');
+    }
   };
   return (
-    <div className="modal-layer" role="dialog" aria-modal="true" aria-label="Add email account">
-      <button type="button" className="modal-scrim" onClick={onClose} aria-label="Close add account" />
-      <form className="account-modal" onSubmit={submit}>
-        <div className="account-modal-header"><div><h2>Add an email account</h2><p>Connect up to 12 inboxes in one private workspace.</p></div><IconButton label="Close" onClick={onClose}><Icon name="close" /></IconButton></div>
-        <div className="account-modal-scroll">
-          <div className="account-profile-row"><Avatar person={{ name: form.name || form.email || 'G', color: form.color, avatarUrl: form.avatarUrl }} size="hero" /><label className="photo-upload"><input type="file" accept="image/*" onChange={chooseAvatar} />{form.avatarUrl ? 'Replace profile photo' : 'Upload profile photo'}</label></div>
-          <label className="form-field"><span>Display name</span><input value={form.name} onChange={update('name')} placeholder="e.g. Nova Centauri" autoFocus /></label>
-          <label className="form-field"><span>Email address</span><input type="email" value={form.email} onChange={update('email')} placeholder="you@example.com" /></label>
-          <label className="form-field"><span>Provider</span><select value={form.provider} onChange={update('provider')}><option value="gmail">Gmail / Google Workspace</option><option value="outlook">Outlook / Microsoft 365</option><option value="imap">Standard IMAP</option><option value="custom">Custom IMAP + SMTP</option></select></label>
-          <label className="form-field"><span>App password</span><input type="password" value={form.appPassword} onChange={update('appPassword')} placeholder="Never stored in the browser" autoComplete="new-password" /><small>Create an app password with your mail provider; do not use your normal sign-in password.</small></label>
-          {['custom', 'imap'].includes(form.provider) && <div className="provider-grid"><label className="form-field"><span>IMAP host</span><input value={form.imapHost} onChange={update('imapHost')} placeholder="imap.example.com" /></label><label className="form-field"><span>IMAP port</span><input inputMode="numeric" value={form.imapPort} onChange={update('imapPort')} /></label><label className="form-field"><span>SMTP host</span><input value={form.smtpHost} onChange={update('smtpHost')} placeholder="smtp.example.com" /></label><label className="form-field"><span>SMTP port</span><input inputMode="numeric" value={form.smtpPort} onChange={update('smtpPort')} /></label></div>}
-          <label className="form-field"><span>Signature <em>optional</em></span><textarea value={form.signature} onChange={update('signature')} placeholder="Kind regards," /></label>
-          <div className="color-picker"><span>Profile color</span><div>{['#0b57d0', '#8e24aa', '#e8710a', '#00897b', '#c2185b', '#455a64'].map((color) => <button type="button" key={color} onClick={() => setForm((current) => ({ ...current, color }))} className={form.color === color ? 'is-selected' : ''} style={{ '--swatch': color }} aria-label={`Choose ${color}`} />)}</div></div>
-          {error && <p className="form-error">{error}</p>}
+    <div className="modal-layer">
+      <button type="button" className="modal-scrim" onClick={saving ? undefined : onClose} aria-label="Close add account" disabled={saving} />
+      <form ref={dialogRef} className="account-modal account-onboarding" onSubmit={submit} role="dialog" aria-modal="true" aria-labelledby="add-account-title" aria-describedby="add-account-subtitle">
+        <div className="account-modal-header">
+          <div className="account-modal-title">
+            {step === 'details' && <IconButton label="Choose a different provider" onClick={() => { setStep('provider'); setError(''); }} disabled={saving} className="modal-back"><Icon name="back" /></IconButton>}
+            <div><h2 id="add-account-title">{step === 'provider' ? 'Add an email account' : selectedProvider.title}</h2><p id="add-account-subtitle">{step === 'provider' ? 'Choose a provider. Every inbox lands in one private workspace.' : `Step 2 of 2 · ${selectedProvider.caption}`}</p></div>
+          </div>
+          <IconButton label="Close" onClick={onClose} disabled={saving}><Icon name="close" /></IconButton>
         </div>
-        <div className="account-modal-footer"><button type="button" className="text-button" onClick={onClose}>Cancel</button><button type="submit" className="primary-button" disabled={saving}>{saving ? 'Connecting…' : 'Connect account'}</button></div>
+        <div className="account-step-track" aria-hidden="true"><i className="is-complete" /><i className={step === 'details' ? 'is-complete' : ''} /></div>
+        {step === 'provider' ? (
+          <div className="account-modal-scroll provider-picker-step">
+            <div className="provider-picker-heading"><span className="provider-picker-icon"><Icon name="mail" size={22} /></span><div><strong>Where is your email hosted?</strong><p>Connection settings are filled in automatically for common providers.</p></div></div>
+            <div className="provider-card-grid">
+              {Object.values(PROVIDER_PRESETS).map((provider, index) => (
+                <button type="button" ref={index === 0 ? firstProviderRef : undefined} className="provider-card" key={provider.id} onClick={() => chooseProvider(provider.id)} style={{ '--provider-color': provider.color }}>
+                  <span className="provider-card-mark">{provider.mark}</span>
+                  <span className="provider-card-copy"><strong>{provider.label}</strong><small>{provider.caption}</small></span>
+                  <Icon name="chevronRight" size={18} />
+                </button>
+              ))}
+            </div>
+            <div className="provider-picker-security"><Icon name="shield" size={19} /><span><strong>Private by design</strong><small>Mailbox credentials are sent only to your GigaMail server. The server refuses to save them unless encrypted-at-rest storage is configured.</small></span></div>
+          </div>
+        ) : (
+          <div className="account-modal-scroll account-details-step">
+            <div className="selected-provider-card" style={{ '--provider-color': selectedProvider.color }}>
+              <span className="provider-card-mark">{selectedProvider.mark}</span>
+              <span><strong>{selectedProvider.label}</strong><small>{selectedProvider.caption}</small></span>
+              <button type="button" onClick={() => { setStep('provider'); setError(''); }} disabled={saving}>Change</button>
+            </div>
+
+            <aside className="provider-guidance">
+              <span className="guidance-icon"><Icon name="lock" size={18} /></span>
+              <div><strong>{selectedProvider.passwordTitle}</strong><p>{selectedProvider.passwordHint}</p>{selectedProvider.helpUrl && <a href={selectedProvider.helpUrl} target="_blank" rel="noreferrer">{selectedProvider.helpLabel} <span aria-hidden="true">↗</span></a>}</div>
+            </aside>
+
+            <div className="account-fields-grid">
+              <label className="form-field"><span>Email address</span><input ref={emailRef} type="email" required value={form.email} onChange={updateEmail} placeholder={form.providerKey === 'icloud' ? 'you@icloud.com' : 'you@example.com'} autoComplete="email" spellCheck="false" autoCapitalize="none" /></label>
+              <label className="form-field"><span>Display name <em>optional</em></span><input value={form.name} onChange={update('name')} placeholder="Name recipients will see" autoComplete="name" /></label>
+            </div>
+
+            <label className="form-field password-field">
+              <span>{form.providerKey === 'mailinabox' ? 'Mailbox password' : 'App password'}</span>
+              <span className="password-input"><input type={passwordVisible ? 'text' : 'password'} required value={form.appPassword} onChange={update('appPassword')} placeholder="Not saved in this browser" autoComplete="off" spellCheck="false" autoCapitalize="none" /><IconButton label={passwordVisible ? 'Hide password' : 'Show password'} onClick={() => setPasswordVisible((value) => !value)}><Icon name={passwordVisible ? 'eyeOff' : 'eye'} size={18} /></IconButton></span>
+              <small>Used only to verify IMAP and SMTP, then encrypted by the server before storage.</small>
+            </label>
+
+            {form.providerKey === 'mailinabox' && (
+              <label className="form-field"><span>Mail server hostname</span><input value={form.imapHost} onChange={(event) => { const value = event.target.value; setForm((current) => ({ ...current, imapHost: value, smtpHost: current.smtpHost === current.imapHost ? value : current.smtpHost })); }} placeholder="box.yourdomain.com" spellCheck="false" autoCapitalize="none" /><small>Verified as box.xer5.com so TLS certificates validate correctly. The LAN address remains private to the server.</small></label>
+            )}
+
+            {['custom', 'mailinabox'].includes(form.providerKey) ? (
+              <details className="advanced-connection" open={form.providerKey === 'custom'}>
+                <summary>{form.providerKey === 'custom' ? 'IMAP and SMTP settings' : 'Advanced connection settings'}</summary>
+                <label className="form-field connection-username"><span>Mailbox username <em>usually the full email address</em></span><input value={form.username} onChange={update('username')} placeholder={form.email || 'you@example.com'} spellCheck="false" autoCapitalize="none" /></label>
+                <div className="provider-grid">
+                  <label className="form-field"><span>IMAP host</span><input value={form.imapHost} onChange={update('imapHost')} placeholder="imap.example.com" spellCheck="false" autoCapitalize="none" /></label>
+                  <label className="form-field"><span>Port</span><input type="number" min="1" max="65535" inputMode="numeric" value={form.imapPort} onChange={update('imapPort')} /></label>
+                  <label className="form-field"><span>SMTP host</span><input value={form.smtpHost} onChange={update('smtpHost')} placeholder="smtp.example.com" spellCheck="false" autoCapitalize="none" /></label>
+                  <label className="form-field"><span>Port</span><input type="number" min="1" max="65535" inputMode="numeric" value={form.smtpPort} onChange={update('smtpPort')} /></label>
+                </div>
+              </details>
+            ) : (
+              <div className="connection-summary" aria-label="Provider connection settings"><span><Icon name="lock" size={14} /> IMAP {form.imapHost}:{form.imapPort}</span><span><Icon name="send" size={14} /> SMTP {form.smtpHost}:{form.smtpPort}</span></div>
+            )}
+
+            {form.providerKey === 'icloud' && (
+              <details className="advanced-connection icloud-connection">
+                <summary>Advanced iCloud sign-in</summary>
+                <label className="form-field connection-username"><span>IMAP username</span><input value={form.imapUsername} onChange={update('imapUsername')} placeholder={form.email.split('@')[0] || 'yourname'} spellCheck="false" autoCapitalize="none" /><small>Apple usually accepts the part before @icloud.com. If sign-in fails, try the full iCloud email address here. SMTP always uses the full address.</small></label>
+              </details>
+            )}
+
+            <details className="identity-details">
+              <summary>Sending identity and appearance</summary>
+              <div className="account-profile-row"><Avatar person={{ name: form.name || form.email || selectedProvider.label, color: form.color, avatarUrl: form.avatarUrl }} size="hero" /><label className="photo-upload"><input type="file" accept="image/png,image/jpeg,image/gif,image/webp" onChange={chooseAvatar} />{form.avatarUrl ? 'Replace profile photo' : 'Upload profile photo'}</label></div>
+              <label className="form-field"><span>Signature <em>optional</em></span><textarea value={form.signature} onChange={update('signature')} placeholder="Kind regards," /></label>
+              <div className="color-picker"><span>Profile color</span><div>{['#0b57d0', '#8e24aa', '#e8710a', '#00897b', '#c2185b', '#455a64'].map((color) => <button type="button" key={color} onClick={() => setForm((current) => ({ ...current, color }))} className={form.color === color ? 'is-selected' : ''} style={{ '--swatch': color }} aria-label={`Choose ${color}`} />)}</div></div>
+            </details>
+
+            <div className="credential-security-note"><Icon name="shield" size={19} /><span><strong>Encrypted, never browser-stored</strong><small>This form keeps the password only in memory. GigaMail verifies both connections before persisting anything, then encrypts the credential on the server.</small></span></div>
+            {Object.values(protocolStatus).some((status) => status !== 'idle') && (
+              <div className="protocol-status-row" aria-live="polite">
+                {['imap', 'smtp'].map((protocol) => <span key={protocol} className={`protocol-status is-${protocolStatus[protocol]}`}><i>{protocolStatus[protocol] === 'passed' ? '✓' : protocolStatus[protocol] === 'failed' ? '!' : ''}</i><strong>{protocol.toUpperCase()}</strong><small>{protocolStatus[protocol] === 'passed' ? 'Verified' : protocolStatus[protocol] === 'failed' ? 'Failed' : protocolStatus[protocol] === 'checking' ? 'Checking…' : 'Waiting'}</small></span>)}
+              </div>
+            )}
+            {error && <p className="form-error account-form-error" role="alert">{error}</p>}
+          </div>
+        )}
+        <div className="account-modal-footer">
+          {step === 'provider' ? <><span className="modal-footer-hint">Select a provider to continue</span><button type="button" className="text-button" onClick={onClose}>Cancel</button></> : <><button type="button" className="text-button" onClick={() => setStep('provider')} disabled={saving}>Back</button><button type="submit" className="primary-button connect-account-button" disabled={saving || !form.email.trim() || !form.appPassword}>{saving ? savingPhase || 'Connecting…' : 'Test & add account'}</button></>}
+        </div>
       </form>
     </div>
   );
@@ -1248,8 +1897,13 @@ export default function App() {
   const [selectedThread, setSelectedThread] = useState(null);
   const [selectedIds, setSelectedIds] = useState([]);
   const [query, setQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
+  const [activeCategory, setActiveCategory] = useState('all');
+  const [mailTotal, setMailTotal] = useState(0);
+  const [categoryCounts, setCategoryCounts] = useState(() => countSmartCategories([]));
   const [loading, setLoading] = useState(true);
   const [isDemo, setIsDemo] = useState(false);
+  const [offline, setOffline] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [composeOpen, setComposeOpen] = useState(false);
@@ -1260,6 +1914,13 @@ export default function App() {
   const [accessOpen, setAccessOpen] = useState(false);
   const [authRequired, setAuthRequired] = useState(false);
   const [addAccountOpen, setAddAccountOpen] = useState(false);
+  const loadRequestRef = useRef(0);
+  const demoDraftsRef = useRef([]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedQuery(query.trim()), 280);
+    return () => window.clearTimeout(timer);
+  }, [query]);
 
   const openNewCompose = () => {
     setComposeContext(null);
@@ -1271,17 +1932,39 @@ export default function App() {
     setComposeContext(null);
   };
 
-  const openReplyComposer = (thread, message) => {
+  const openReplyComposer = (thread, message, { replyAll = false } = {}) => {
     const subject = /^re:/i.test(thread.subject || '') ? thread.subject : `Re: ${thread.subject || '(no subject)'}`;
     const sender = message.from?.name || message.from?.email || 'the sender';
     const original = String(message.body || '').trim();
+    const sentMessage = Boolean(message.isSent || thread.isSent || thread.folder === 'sent');
+    const replyTo = recipientArray(message.replyTo);
+    const primaryRecipients = sentMessage ? recipientArray(message.to) : replyTo.length ? replyTo : [message.from];
+    const toCandidates = replyAll
+      ? [...primaryRecipients, ...(!sentMessage ? recipientArray(message.to) : [])]
+      : primaryRecipients.slice(0, 1);
+    const identityList = accounts.length ? accounts : isDemo ? demoAccounts : [];
+    const ownAddresses = new Set(identityList.map((item) => String(item.email || '').toLowerCase()).filter(Boolean));
+    const seen = new Set();
+    const uniqueRecipients = (values) => values.filter(Boolean).map((value) => normalizePerson(value)).filter((person) => {
+      const email = String(person.email || '').toLowerCase();
+      if (!email || seen.has(email) || (replyAll && ownAddresses.has(email))) return false;
+      seen.add(email);
+      return true;
+    });
+    // Keep original Cc recipients in Cc while de-duplicating them against To.
+    const originalCc = replyAll ? recipientArray(message.cc) : [];
+    const recipients = uniqueRecipients(toCandidates);
+    const ccRecipients = uniqueRecipients(originalCc);
+    if (!recipients.length && primaryRecipients[0]) recipients.push(normalizePerson(primaryRecipients[0]));
     setComposeContext({
-      mode: 'reply',
-      to: message.from?.email || '',
+      mode: replyAll ? 'reply-all' : 'reply',
+      accountId: message.accountId || thread.accountId || null,
+      to: formatRecipients(recipients),
+      cc: formatRecipients(ccRecipients),
       subject,
       body: original ? `\n\nOn ${formatMessageDate(message.timestamp)}, ${sender} wrote:\n${original}` : '',
       threadId: thread.threadId || thread.id,
-      replyToMessageId: message.rfcMessageId || message.id,
+      replyToMessageId: message.rfcMessageId || undefined,
     });
     setComposeOpen(true);
   };
@@ -1292,6 +1975,7 @@ export default function App() {
     const original = String(message.body || '').trim();
     setComposeContext({
       mode: 'forward',
+      accountId: message.accountId || thread.accountId || null,
       to: '',
       subject,
       body: `\n\n---------- Forwarded message ----------\nFrom: ${sender}\nDate: ${formatMessageDate(message.timestamp)}\nSubject: ${thread.subject || '(no subject)'}\n\n${original}`,
@@ -1300,6 +1984,7 @@ export default function App() {
   };
 
   const loadMailbox = useCallback(async ({ keepSelection = true } = {}) => {
+    const requestId = ++loadRequestRef.current;
     setLoading(true);
     try {
       let session = null;
@@ -1309,58 +1994,87 @@ export default function App() {
         if (sessionError.status === 401 || sessionError.status === 403) throw sessionError;
       }
       if (session?.protected && !session.authenticated) {
+        setOffline(false);
         setAuthRequired(true);
         setAccessOpen(true);
         setIsDemo(false);
         setAccounts([]);
         setThreads([]);
+        setMailTotal(0);
+        setCategoryCounts(countSmartCategories([]));
         setSelectedThread(null);
         return;
       }
-      const accountParam = activeAccount?.id ? `&accountId=${encodeURIComponent(activeAccount.id)}` : '';
+      const params = new URLSearchParams({ folder: activeFolder });
+      if (activeAccount?.id) params.set('accountId', activeAccount.id);
+      if (activeFolder === 'inbox' && activeCategory !== 'all') params.set('category', activeCategory);
+      if (debouncedQuery) params.set('q', debouncedQuery);
       const [accountData, mailData] = await Promise.all([
-        api('/accounts').catch(() => null),
-        api(`/messages?folder=${encodeURIComponent(activeFolder)}${accountParam}`),
+        api('/accounts'),
+        api(`/messages?${params.toString()}`),
       ]);
+      if (requestId !== loadRequestRef.current) return;
       const nextAccounts = getArray(accountData, ['accounts', 'items']).map(normalizeAccount);
       const rawThreads = getArray(mailData, ['threads', 'messages', 'items', 'data']);
       const nextThreads = rawThreads.map(normalizeThread);
       const isFreshSetup = nextAccounts.length === 0 && nextThreads.length === 0;
+      const previewThreads = [...demoDraftsRef.current, ...demoMailboxThreads];
+      const responseTotal = Number(mailData?.total);
+      const nextCategoryCounts = mailData?.categoryCounts && typeof mailData.categoryCounts === 'object'
+        ? Object.fromEntries(SMART_CATEGORIES.filter((item) => item.id !== 'all').map((item) => [item.id, Number(mailData.categoryCounts[item.id] || 0)]))
+        : countSmartCategories(nextThreads);
       setAuthRequired(false);
+      setOffline(false);
       setAccounts(isFreshSetup ? [] : nextAccounts);
       // Null represents the unified inbox. Preserve an explicit per-account choice,
       // but start every newly loaded mailbox with all connected accounts visible.
       setActiveAccount((current) => nextAccounts.find((item) => item.id === current?.id) || null);
-      setThreads(isFreshSetup ? demoThreads : nextThreads);
+      setThreads(isFreshSetup ? previewThreads : nextThreads);
+      setMailTotal(isFreshSetup ? previewThreads.length : Number.isFinite(responseTotal) ? responseTotal : nextThreads.length);
+      setCategoryCounts(isFreshSetup ? countSmartCategories(previewThreads) : nextCategoryCounts);
       setIsDemo(isFreshSetup);
       if (keepSelection && selectedThread) {
-        const replacement = (isFreshSetup ? demoThreads : nextThreads).find((item) => item.id === selectedThread.id);
+        const replacement = (isFreshSetup ? previewThreads : nextThreads).find((item) => item.id === selectedThread.id);
         setSelectedThread(replacement || null);
       } else {
         setSelectedThread(null);
       }
     } catch (error) {
+      if (requestId !== loadRequestRef.current) return;
       if (error.status === 401 || error.status === 403) {
+        setOffline(false);
         setAuthRequired(true);
         setAccessOpen(true);
         setIsDemo(false);
         setAccounts([]);
         setThreads([]);
+        setMailTotal(0);
+        setCategoryCounts(countSmartCategories([]));
         setSelectedThread(null);
       } else {
-        // A temporary API outage still leaves a first-run installation easy to explore.
-        setAccounts([]);
-        setActiveAccount(null);
-        setThreads(demoThreads);
-        setIsDemo(true);
-        if (!keepSelection) setSelectedThread(null);
+        // Keep the last confirmed mailbox intact. Preview data is only enabled
+        // after a successful zero-account response, never as an outage fallback.
+        setOffline(true);
+        setNotice('GigaMail is offline. Showing the last mailbox loaded from this server.');
       }
     } finally {
-      setLoading(false);
+      if (requestId === loadRequestRef.current) setLoading(false);
     }
-  }, [accessToken, activeAccount?.id, activeFolder, selectedThread]);
+  }, [accessToken, activeAccount?.id, activeCategory, activeFolder, debouncedQuery, selectedThread]);
 
-  useEffect(() => { loadMailbox({ keepSelection: false }); }, [activeFolder, activeAccount?.id, accessToken]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadMailbox({ keepSelection: false }); }, [activeFolder, activeAccount?.id, activeCategory, debouncedQuery, accessToken]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    setSelectedIds([]);
+    setSelectedThread(null);
+  }, [activeAccount?.id, activeCategory, activeFolder, debouncedQuery, accessToken]);
+
+  useEffect(() => {
+    if (activeFolder !== 'inbox' && activeCategory !== 'all') {
+      setActiveCategory('all');
+      setSelectedIds([]);
+    }
+  }, [activeCategory, activeFolder]);
 
   const refreshMailbox = async () => {
     if (isDemo) {
@@ -1371,8 +2085,15 @@ export default function App() {
     setNotice(activeAccount ? `Syncing ${activeAccount.email}…` : 'Syncing all connected accounts…');
     try {
       // Sync is deliberately explicit: polling is off by default for an isolated self-hosted deployment.
-      await api('/sync', { method: 'POST', body: JSON.stringify({ mailbox: 'INBOX' }) });
-      setNotice('Mailbox sync complete.');
+      const syncPath = activeAccount?.id ? `/accounts/${encodeURIComponent(activeAccount.id)}/sync` : '/sync';
+      const response = await api(syncPath, { method: 'POST', body: JSON.stringify({ mailbox: 'INBOX' }) });
+      const status = syncResultStatus(response);
+      const skippedMessages = syncSkippedMessageCount(response);
+      if (status === 'failed') setNotice('Mailbox sync failed. Showing the latest stored mail.');
+      else if (skippedMessages) setNotice(`Mailbox sync kept running; ${skippedMessages} ${skippedMessages === 1 ? 'message was' : 'messages were'} skipped by the download safety limit.`);
+      else if (status === 'partial') setNotice('Mailbox sync finished with some folders unavailable.');
+      else if (status === 'skipped') setNotice('Sync is disabled for this account.');
+      else setNotice('Mailbox sync complete.');
     } catch {
       setNotice('Sync could not complete. Showing the latest stored mail.');
     } finally {
@@ -1402,10 +2123,13 @@ export default function App() {
     return threads.filter((thread) => {
       const inFolder = activeFolder === 'all' || thread.folder === activeFolder || (activeFolder === 'starred' && thread.starred) || (activeFolder === 'drafts' && thread.folder === 'drafts');
       if (!inFolder) return false;
+      if (activeFolder === 'inbox' && activeCategory !== 'all' && smartCategoryMetadata(thread).category !== activeCategory) return false;
       if (!search) return true;
-      return [thread.subject, thread.snippet, thread.from?.name, thread.from?.email, ...(thread.labels || [])].join(' ').toLowerCase().includes(search);
+      return [thread.subject, thread.snippet, thread.from?.name, thread.from?.email, thread.categoryLabel, thread.categoryReason, ...(thread.labels || [])].join(' ').toLowerCase().includes(search);
     });
-  }, [threads, activeFolder, query]);
+  }, [threads, activeFolder, activeCategory, query]);
+
+  const visibleTotal = isDemo ? visibleThreads.length : mailTotal;
 
   const counts = useMemo(() => ({
     inbox: threads.filter((thread) => thread.folder === 'inbox' && thread.unread).length,
@@ -1414,6 +2138,22 @@ export default function App() {
   }), [threads]);
 
   const openThread = async (thread) => {
+    if (thread.folder === 'drafts' || thread.draftId) {
+      const draftMessage = thread.messages?.at(-1) || thread;
+      setComposeContext({
+        mode: 'draft',
+        draftId: thread.draftId || String(thread.id).replace(/^draft:/, ''),
+        accountId: thread.accountId || draftMessage.accountId || null,
+        threadId: thread.threadId && thread.threadId !== thread.id ? thread.threadId : null,
+        to: formatRecipients(thread.to || draftMessage.to),
+        cc: formatRecipients(thread.cc || draftMessage.cc),
+        bcc: formatRecipients(thread.bcc || draftMessage.bcc),
+        subject: thread.subject === '(no subject)' ? '' : thread.subject,
+        body: draftMessage.body || '',
+      });
+      setComposeOpen(true);
+      return;
+    }
     const alreadyRead = !thread.unread;
     const provisional = { ...thread, unread: false };
     setSelectedThread(provisional);
@@ -1485,19 +2225,73 @@ export default function App() {
     }
   };
 
-  const sendMessage = (payload, localOnly, senderAccount) => {
+  const sendMessage = (payload, localOnly, senderAccount, result) => {
     const from = senderAccount || activeAccount || accounts[0] || demoAccounts[0];
+    const deliveredMessage = result?.message && typeof result.message === 'object' ? result.message : null;
+    const delivery = result?.delivery || deliveredMessage?.delivery;
     const sentThread = normalizeThread({
-      id: `sent-${Date.now()}`,
-      subject: payload.subject || '(no subject)',
-      snippet: payload.textBody,
+      id: deliveredMessage?.id ? `sent-${deliveredMessage.id}` : `sent-${Date.now()}`,
+      threadId: deliveredMessage?.threadId,
+      accountId: deliveredMessage?.accountId || payload.accountId,
+      subject: deliveredMessage?.subject || payload.subject || '(no subject)',
+      snippet: deliveredMessage?.snippet || payload.textBody,
       from,
-      timestamp: new Date().toISOString(),
+      timestamp: deliveredMessage?.sentAt || new Date().toISOString(),
       folder: 'sent',
-      messages: [{ ...payload, id: `sent-message-${Date.now()}`, from, timestamp: new Date().toISOString() }],
+      messages: [deliveredMessage || { ...payload, id: `sent-message-${Date.now()}`, from, timestamp: new Date().toISOString(), isSent: true }],
     });
     setThreads((current) => [sentThread, ...current]);
-    setNotice(localOnly ? 'Message saved in the local preview.' : 'Message sent');
+    setNotice(localOnly
+      ? 'Message saved in the local preview.'
+      : delivery?.status === 'partial'
+        ? `Partially delivered: ${delivery.acceptedCount || 0} accepted, ${delivery.rejectedCount || 0} rejected.`
+        : 'Message sent');
+  };
+
+  const draftSaved = (draft, senderAccount, localOnly) => {
+    const id = String(draft?.id || `preview-${Date.now()}`);
+    const replacesExisting = threads.some((item) => item.draftId === id || item.id === `draft:${id}`);
+    const accountId = String(draft?.accountId || senderAccount?.id || '');
+    const timestamp = draft?.updatedAt || new Date().toISOString();
+    const draftThread = normalizeThread({
+      id: `draft:${id}`,
+      draftId: id,
+      threadId: draft?.threadId || `draft:${id}`,
+      accountId,
+      folder: 'drafts',
+      subject: draft?.subject || '(no subject)',
+      snippet: String(draft?.textBody || '').replace(/\s+/g, ' ').slice(0, 170),
+      from: senderAccount,
+      to: draft?.to || [],
+      cc: draft?.cc || [],
+      bcc: draft?.bcc || [],
+      timestamp,
+      updatedAt: timestamp,
+      messages: [{
+        id: `draft-message:${id}`,
+        accountId,
+        from: senderAccount,
+        to: draft?.to || [],
+        cc: draft?.cc || [],
+        bcc: draft?.bcc || [],
+        textBody: draft?.textBody || '',
+        htmlBody: draft?.htmlBody || '',
+        timestamp,
+      }],
+    });
+    if (localOnly) demoDraftsRef.current = [draftThread, ...demoDraftsRef.current.filter((item) => item.draftId !== id)];
+    setThreads((current) => [draftThread, ...current.filter((item) => item.draftId !== id && item.id !== `draft:${id}`)]);
+    if (!localOnly && activeFolder === 'drafts' && !replacesExisting) setMailTotal((current) => current + 1);
+    setNotice(localOnly ? 'Draft saved in this preview.' : 'Draft saved.');
+  };
+
+  const draftRemoved = (draftId) => {
+    const id = String(draftId);
+    const existed = threads.some((item) => item.draftId === id || item.id === `draft:${id}`);
+    demoDraftsRef.current = demoDraftsRef.current.filter((item) => item.draftId !== id && item.id !== `draft:${id}`);
+    setThreads((current) => current.filter((item) => item.draftId !== id && item.id !== `draft:${id}`));
+    if (!isDemo && activeFolder === 'drafts' && existed) setMailTotal((current) => Math.max(0, current - 1));
+    setSelectedThread((current) => current?.draftId === id || current?.id === `draft:${id}` ? null : current);
   };
 
   const unlockServer = async (token) => {
@@ -1535,14 +2329,19 @@ export default function App() {
   };
 
   const accountAdded = (account) => {
+    setOffline(false);
     setAccounts((current) => [...current.filter((item) => item.id !== account.id), account]);
     setActiveAccount(null);
     setIsDemo(false);
     setNotice(`${account.email} connected. Syncing mail…`);
     void (async () => {
       try {
-        await api(`/accounts/${encodeURIComponent(account.id)}/sync`, { method: 'POST', body: JSON.stringify({ mailbox: 'INBOX' }) });
-        setNotice(`${account.email} synced.`);
+        const response = await api(`/accounts/${encodeURIComponent(account.id)}/sync`, { method: 'POST', body: JSON.stringify({ mailbox: 'INBOX' }) });
+        const status = syncResultStatus(response);
+        if (status === 'failed') setNotice(`${account.email} is connected, but initial sync failed.`);
+        else if (status === 'partial') setNotice(`${account.email} is connected. Some folders could not sync yet.`);
+        else if (status === 'skipped') setNotice(`${account.email} is connected. Sync is disabled for this account.`);
+        else setNotice(`${account.email} synced.`);
       } catch {
         setNotice(`${account.email} is connected. Initial sync could not complete yet.`);
       } finally {
@@ -1552,19 +2351,22 @@ export default function App() {
   };
 
   const hasConnectedAccounts = accounts.length > 0;
-  const displayAccount = activeAccount || (hasConnectedAccounts ? UNIFIED_ACCOUNT : demoAccounts[0]);
-  const identityAccounts = hasConnectedAccounts ? accounts : demoAccounts;
+  const displayAccount = activeAccount || (hasConnectedAccounts ? UNIFIED_ACCOUNT : isDemo ? demoAccounts[0] : UNIFIED_ACCOUNT);
+  const identityAccounts = hasConnectedAccounts ? accounts : isDemo ? demoAccounts : [];
   const composeAccount = activeAccount || identityAccounts[0] || null;
 
   return (
     <div className={`mail-app ${sidebarCompact ? 'sidebar-compact' : ''} ${selectedThread ? 'thread-open' : ''}`}>
       <Topbar
         onToggleSidebar={() => window.innerWidth <= 840 ? setMobileSidebarOpen((value) => !value) : setSidebarCompact((value) => !value)}
-        sidebarCompact={sidebarCompact}
         query={query}
         setQuery={setQuery}
         onOpenSettings={() => setSettingsOpen(true)}
         onOpenProfile={() => setProfileOpen(true)}
+        onFocusSmartFilters={() => {
+          if (activeFolder !== 'inbox') setActiveFolder('inbox');
+          window.setTimeout(() => document.querySelector('#smart-mail-filters [aria-selected="true"]')?.focus(), 0);
+        }}
         account={displayAccount}
         isDemo={isDemo}
       />
@@ -1584,14 +2386,18 @@ export default function App() {
         isDemo={isDemo}
       />
       <main className="mail-workspace">
-        {isDemo && <div className="demo-banner"><Icon name="shield" size={16} /><span>Preview mailbox — connect your first account to replace this sample data.</span><button type="button" onClick={() => setAddAccountOpen(true)}>Add account</button></div>}
+        {offline ? <div className="demo-banner offline-banner" role="status"><Icon name="eyeOff" size={16} /><span>Offline — showing the last mailbox loaded from this server.</span><button type="button" onClick={() => loadMailbox({ keepSelection: true })}>Retry</button></div> : isDemo && <div className="demo-banner"><Icon name="shield" size={16} /><span>Preview mailbox — connect your first account to replace this sample data.</span><button type="button" onClick={() => setAddAccountOpen(true)}>Add account</button></div>}
         <div className="mail-split">
           <MailList
             threads={visibleThreads}
+            totalCount={visibleTotal}
+            categoryCounts={categoryCounts}
             selectedThread={selectedThread}
             loading={loading}
             folder={activeFolder}
             query={query}
+            activeCategory={activeCategory}
+            setActiveCategory={(category) => { setActiveCategory(category); setSelectedIds([]); }}
             selectedIds={selectedIds}
             setSelectedIds={setSelectedIds}
             onOpenThread={openThread}
@@ -1599,18 +2405,14 @@ export default function App() {
             onRefresh={refreshMailbox}
             onBulkAction={applyAction}
             onCompose={openNewCompose}
+            onClearSearch={() => setQuery('')}
           />
-          {selectedThread ? <ThreadView key={selectedThread.id} thread={selectedThread} activeFolder={activeFolder} onBack={() => setSelectedThread(null)} onAction={applyAction} onLoadRemote={loadRemoteContent} onReply={openReplyComposer} onForward={openForwardComposer} allowPrivateImages={privacy.privateImages} /> : (
-            <section className="reader-placeholder" aria-label="No conversation selected">
-              <div className="reader-placeholder-mark"><span>G</span></div>
-              <h2>Select a conversation</h2>
-              <p>Choose a message to read it here.</p>
-              <div className="privacy-summary"><Icon name="shield" size={18} /><span><strong>Privacy is on</strong> — known tracking pixels are blocked before they can report back.</span></div>
-            </section>
+          {selectedThread ? <ThreadView key={selectedThread.id} thread={selectedThread} activeFolder={activeFolder} onBack={() => setSelectedThread(null)} onAction={applyAction} onLoadRemote={loadRemoteContent} onReply={openReplyComposer} onReplyAll={(thread, message) => openReplyComposer(thread, message, { replyAll: true })} onForward={openForwardComposer} allowPrivateImages={privacy.privateImages} /> : (
+            <ReaderPlaceholder isDemo={isDemo} onAddAccount={() => setAddAccountOpen(true)} />
           )}
         </div>
       </main>
-      {composeOpen && <ComposeModal account={composeAccount} accounts={identityAccounts} initialReply={composeContext} onClose={closeCompose} onSent={sendMessage} />}
+      {composeOpen && <ComposeModal account={composeAccount} accounts={identityAccounts} isDemo={isDemo} initialReply={composeContext} onClose={closeCompose} onSent={sendMessage} onDraftSaved={draftSaved} onDraftRemoved={draftRemoved} />}
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} accounts={identityAccounts} activeAccount={activeAccount} setActiveAccount={setActiveAccount} privacy={privacy} setPrivacy={setPrivacy} onAddAccount={() => setAddAccountOpen(true)} onUnlock={() => setAccessOpen(true)} onSaveSignature={saveAccountSignature} showUnified={hasConnectedAccounts} />
       <ProfileMenu open={profileOpen} onClose={() => setProfileOpen(false)} account={displayAccount} accounts={identityAccounts} setActiveAccount={setActiveAccount} onSelectUnified={() => setActiveAccount(null)} onOpenSettings={() => setSettingsOpen(true)} showUnified={hasConnectedAccounts} />
       {addAccountOpen && <AddAccountModal onClose={() => setAddAccountOpen(false)} onAdded={accountAdded} />}

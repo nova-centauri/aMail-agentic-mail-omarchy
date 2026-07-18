@@ -1,6 +1,13 @@
 import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
+import {
+  SMART_CATEGORY_SLUGS,
+  SMART_FILTER_VERSION,
+  categoryLabel,
+  classifyMessage,
+  isSmartCategory,
+} from './services/smart-filter.js';
 
 const json = (value, fallback = []) => {
   if (value === null || value === undefined || value === '') return fallback;
@@ -35,6 +42,7 @@ function publicAccount(row) {
 
 function publicMessage(row) {
   if (!row) return null;
+  const category = isSmartCategory(row.smart_category) ? row.smart_category : 'primary';
   return {
     id: row.id,
     accountId: row.account_id,
@@ -64,6 +72,9 @@ function publicMessage(row) {
     isSpam: Boolean(row.is_spam),
     snoozedUntil: row.snoozed_until,
     isSent: Boolean(row.is_sent),
+    category,
+    categoryLabel: categoryLabel(category),
+    categoryReason: row.smart_category_reason || 'No automated category signal matched.',
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -176,6 +187,10 @@ function initSchema(db) {
       is_spam INTEGER NOT NULL DEFAULT 0,
       snoozed_until TEXT,
       is_sent INTEGER NOT NULL DEFAULT 0,
+      smart_category TEXT NOT NULL DEFAULT 'primary' CHECK (smart_category IN ('primary', 'github_ci', 'logs', 'status')),
+      smart_category_reason TEXT NOT NULL DEFAULT '',
+      smart_category_rule TEXT NOT NULL DEFAULT '',
+      smart_category_version INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       UNIQUE(account_id, mailbox, uid)
@@ -219,6 +234,39 @@ function initSchema(db) {
   const messageColumns = new Set(db.prepare('PRAGMA table_info(messages)').all().map((column) => column.name));
   if (!messageColumns.has('is_spam')) db.exec('ALTER TABLE messages ADD COLUMN is_spam INTEGER NOT NULL DEFAULT 0');
   if (!messageColumns.has('snoozed_until')) db.exec('ALTER TABLE messages ADD COLUMN snoozed_until TEXT');
+  if (!messageColumns.has('smart_category')) db.exec("ALTER TABLE messages ADD COLUMN smart_category TEXT NOT NULL DEFAULT 'primary'");
+  if (!messageColumns.has('smart_category_reason')) db.exec("ALTER TABLE messages ADD COLUMN smart_category_reason TEXT NOT NULL DEFAULT ''");
+  if (!messageColumns.has('smart_category_rule')) db.exec("ALTER TABLE messages ADD COLUMN smart_category_rule TEXT NOT NULL DEFAULT ''");
+  if (!messageColumns.has('smart_category_version')) db.exec('ALTER TABLE messages ADD COLUMN smart_category_version INTEGER NOT NULL DEFAULT 0');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_messages_smart_category ON messages(account_id, smart_category, sent_at DESC)');
+
+  const staleMessages = db.prepare(`SELECT id, subject, from_name, from_email, labels_json, snippet, text_body
+    FROM messages
+    WHERE smart_category_version <> ?
+      OR smart_category_reason = ''
+      OR smart_category_rule = ''
+      OR smart_category NOT IN (${SMART_CATEGORY_SLUGS.map(() => '?').join(', ')})`)
+    .all(SMART_FILTER_VERSION, ...SMART_CATEGORY_SLUGS);
+  if (staleMessages.length) {
+    const updateCategory = db.prepare(`UPDATE messages SET
+      smart_category = @smart_category,
+      smart_category_reason = @smart_category_reason,
+      smart_category_rule = @smart_category_rule,
+      smart_category_version = @smart_category_version
+      WHERE id = @id`);
+    db.transaction((messages) => {
+      for (const message of messages) {
+        const classification = classifyMessage(message);
+        updateCategory.run({
+          id: message.id,
+          smart_category: classification.category,
+          smart_category_reason: classification.categoryReason,
+          smart_category_rule: classification.rule,
+          smart_category_version: classification.version,
+        });
+      }
+    })(staleMessages);
+  }
 }
 
 export function createDatabase(config) {
@@ -289,6 +337,7 @@ export function createRepositories(db) {
           WHEN 'archive' THEN m.is_archived = 1 AND m.is_trashed = 0 AND (m.snoozed_until IS NULL OR m.snoozed_until <= @now)
           ELSE m.mailbox = @mailbox AND m.is_trashed = 0 AND m.is_spam = 0
         END
+        AND (@category = '' OR m.smart_category = @category)
         AND (@query = '' OR m.subject LIKE @likeQuery OR m.from_name LIKE @likeQuery OR m.from_email LIKE @likeQuery OR m.snippet LIKE @likeQuery)
       ORDER BY COALESCE(m.sent_at, m.received_at, m.created_at) DESC LIMIT @limit OFFSET @offset`),
     messageCount: db.prepare(`SELECT COUNT(*) AS count FROM messages m
@@ -305,17 +354,48 @@ export function createRepositories(db) {
           WHEN 'archive' THEN m.is_archived = 1 AND m.is_trashed = 0 AND (m.snoozed_until IS NULL OR m.snoozed_until <= @now)
           ELSE m.mailbox = @mailbox AND m.is_trashed = 0 AND m.is_spam = 0
         END
+        AND (@category = '' OR m.smart_category = @category)
         AND (@query = '' OR m.subject LIKE @likeQuery OR m.from_name LIKE @likeQuery OR m.from_email LIKE @likeQuery OR m.snippet LIKE @likeQuery)`),
+    messageCategoryCounts: db.prepare(`WITH scoped AS (
+      SELECT m.*,
+        CASE WHEN @query = '' OR m.subject LIKE @likeQuery OR m.from_name LIKE @likeQuery OR m.from_email LIKE @likeQuery OR m.snippet LIKE @likeQuery THEN 1 ELSE 0 END AS query_match
+      FROM messages m
+      WHERE m.account_id = @accountId AND
+        CASE @folder
+          WHEN 'inbox' THEN m.mailbox = 'INBOX' AND m.is_archived = 0 AND m.is_trashed = 0 AND m.is_spam = 0 AND (m.snoozed_until IS NULL OR m.snoozed_until <= @now)
+          WHEN 'starred' THEN m.is_starred = 1 AND m.is_trashed = 0
+          WHEN 'sent' THEN m.is_sent = 1 AND m.is_trashed = 0
+          WHEN 'drafts' THEN 0
+          WHEN 'snoozed' THEN m.snoozed_until > @now AND m.is_trashed = 0 AND m.is_spam = 0
+          WHEN 'all' THEN m.is_trashed = 0 AND m.is_spam = 0
+          WHEN 'trash' THEN m.is_trashed = 1
+          WHEN 'spam' THEN m.is_spam = 1 AND m.is_trashed = 0
+          WHEN 'archive' THEN m.is_archived = 1 AND m.is_trashed = 0 AND (m.snoozed_until IS NULL OR m.snoozed_until <= @now)
+          ELSE m.mailbox = @mailbox AND m.is_trashed = 0 AND m.is_spam = 0
+        END
+    ), ranked AS (
+      SELECT smart_category AS category,
+        ROW_NUMBER() OVER (PARTITION BY thread_id ORDER BY COALESCE(sent_at, received_at, created_at) DESC, id DESC) AS message_rank,
+        MAX(query_match) OVER (PARTITION BY thread_id) AS thread_matches
+      FROM scoped
+    )
+    SELECT category, COUNT(*) AS count FROM ranked
+      WHERE message_rank = 1 AND (@query = '' OR thread_matches = 1)
+      GROUP BY category`),
     messageInsert: db.prepare(`INSERT INTO messages (
       id, account_id, thread_id, mailbox, uid, rfc_message_id, in_reply_to, references_json,
       subject, from_name, from_email, to_json, cc_json, bcc_json, reply_to_json,
       sent_at, received_at, html_body, text_body, snippet, attachments_json, labels_json,
-      is_read, is_starred, is_archived, is_trashed, is_spam, snoozed_until, is_sent, created_at, updated_at
+      is_read, is_starred, is_archived, is_trashed, is_spam, snoozed_until, is_sent,
+      smart_category, smart_category_reason, smart_category_rule, smart_category_version,
+      created_at, updated_at
     ) VALUES (
       @id, @account_id, @thread_id, @mailbox, @uid, @rfc_message_id, @in_reply_to, @references_json,
       @subject, @from_name, @from_email, @to_json, @cc_json, @bcc_json, @reply_to_json,
       @sent_at, @received_at, @html_body, @text_body, @snippet, @attachments_json, @labels_json,
-      @is_read, @is_starred, @is_archived, @is_trashed, @is_spam, @snoozed_until, @is_sent, @created_at, @updated_at
+      @is_read, @is_starred, @is_archived, @is_trashed, @is_spam, @snoozed_until, @is_sent,
+      @smart_category, @smart_category_reason, @smart_category_rule, @smart_category_version,
+      @created_at, @updated_at
     )`),
     messageUpdate: db.prepare(`UPDATE messages SET
       thread_id = @thread_id, mailbox = @mailbox, uid = @uid, rfc_message_id = @rfc_message_id,
@@ -326,7 +406,9 @@ export function createRepositories(db) {
       attachments_json = @attachments_json, labels_json = @labels_json, is_read = @is_read,
       is_starred = @is_starred, is_archived = @is_archived, is_trashed = @is_trashed,
       is_spam = @is_spam, snoozed_until = @snoozed_until,
-      is_sent = @is_sent, updated_at = @updated_at
+      is_sent = @is_sent, smart_category = @smart_category,
+      smart_category_reason = @smart_category_reason, smart_category_rule = @smart_category_rule,
+      smart_category_version = @smart_category_version, updated_at = @updated_at
       WHERE id = @id`),
     messageRelocate: db.prepare(`UPDATE messages SET mailbox = @mailbox, uid = @uid, updated_at = @updated_at WHERE id = @id`),
     messageState: db.prepare(`UPDATE messages SET
@@ -417,24 +499,58 @@ export function createRepositories(db) {
     messages: {
       get: (id) => publicMessage(queries.messageById.get(id)),
       getRaw: (id) => queries.messageById.get(id) || null,
-      list({ accountId, folder = 'inbox', mailbox = 'INBOX', query = '', limit = 50, offset = 0 }) {
-        const params = { accountId, folder, mailbox, query, likeQuery: `%${query}%`, limit, offset, now: now() };
+      list({ accountId, folder = 'inbox', mailbox = 'INBOX', query = '', category = '', limit = 50, offset = 0 }) {
+        const params = {
+          accountId,
+          folder,
+          mailbox,
+          query,
+          category: category ? String(category) : '',
+          likeQuery: `%${query}%`,
+          limit,
+          offset,
+          now: now(),
+        };
         const items = queries.messageList.all(params).map(publicMessage);
         return { items, total: queries.messageCount.get(params).count };
+      },
+      categoryCounts({ accountId, folder = 'inbox', mailbox = 'INBOX', query = '' }) {
+        const counts = Object.fromEntries(SMART_CATEGORY_SLUGS.map((category) => [category, 0]));
+        const rows = queries.messageCategoryCounts.all({
+          accountId,
+          folder,
+          mailbox,
+          query,
+          likeQuery: `%${query}%`,
+          now: now(),
+        });
+        for (const row of rows) {
+          if (isSmartCategory(row.category)) counts[row.category] = row.count;
+        }
+        return counts;
       },
       forThread: (threadId) => queries.messagesByThread.all(threadId).map(publicMessage),
       findByRfcId: (accountId, messageId) => publicMessage(queries.messageByRfcId.get(accountId, messageId)),
       upsert(input) {
-        const byUid = input.uid === null || input.uid === undefined
+        const classification = classifyMessage(input);
+        const classifiedInput = {
+          ...input,
+          smart_category: classification.category,
+          smart_category_reason: classification.categoryReason,
+          smart_category_rule: classification.rule,
+          smart_category_version: classification.version,
+        };
+        const byUid = classifiedInput.uid === null || classifiedInput.uid === undefined
           ? null
-          : db.prepare('SELECT * FROM messages WHERE account_id = ? AND mailbox = ? AND uid = ?').get(input.account_id, input.mailbox, input.uid);
+          : db.prepare('SELECT * FROM messages WHERE account_id = ? AND mailbox = ? AND uid = ?')
+            .get(classifiedInput.account_id, classifiedInput.mailbox, classifiedInput.uid);
         // A MOVE without UIDPLUS cannot tell us the destination UID. Reusing an
         // RFC Message-ID here prevents a later mailbox sync from duplicating it.
-        const existing = byUid || (input.rfc_message_id
-          ? queries.messageByRfcId.get(input.account_id, input.rfc_message_id)
+        const existing = byUid || (classifiedInput.rfc_message_id
+          ? queries.messageByRfcId.get(classifiedInput.account_id, classifiedInput.rfc_message_id)
           : null);
         const timestamp = now();
-        const row = { ...input, updated_at: timestamp };
+        const row = { ...classifiedInput, updated_at: timestamp };
         if (existing) {
           row.id = existing.id;
           queries.messageUpdate.run(row);

@@ -33,6 +33,9 @@ export function loadConfig(env = process.env) {
     dataDir,
     dbPath: path.join(dataDir, 'gigamail.sqlite'),
     staticDir: path.resolve(env.GIGAMAIL_STATIC_DIR || path.join(process.cwd(), 'dist')),
+    releaseSha: /^[0-9a-f]{40}$/i.test(String(env.GIGAMAIL_RELEASE_SHA || ''))
+      ? String(env.GIGAMAIL_RELEASE_SHA).toLowerCase()
+      : null,
     credentialKey,
     remoteTokenKey,
     accessToken: env.GIGAMAIL_ACCESS_TOKEN || null,
@@ -42,6 +45,12 @@ export function loadConfig(env = process.env) {
     allowInsecureTls: boolean(env.GIGAMAIL_ALLOW_INSECURE_TLS),
     syncBatchSize: integer(env.GIGAMAIL_SYNC_BATCH_SIZE, 200, { min: 1, max: 1000 }),
     syncTimeoutMs: integer(env.GIGAMAIL_SYNC_TIMEOUT_MS, 60_000, { min: 5_000, max: 300_000 }),
+    // The raw RFC822 source includes attachments. Keep each parse bounded so a
+    // single unexpectedly large message cannot consume unrestricted memory.
+    syncMaxMessageBytes: integer(env.GIGAMAIL_SYNC_MAX_MESSAGE_BYTES, 10 * 1024 * 1024, {
+      min: 64 * 1024,
+      max: 50 * 1024 * 1024,
+    }),
     // 0 disables background polling. Sync calls open short-lived connections;
     // GigaMail intentionally does not maintain an IDLE socket per account.
     syncIntervalMinutes: integer(env.SYNC_INTERVAL_MINUTES, 0, { min: 0, max: 1440 }),

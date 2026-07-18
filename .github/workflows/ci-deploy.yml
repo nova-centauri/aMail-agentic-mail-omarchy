@@ -1,0 +1,120 @@
+name: CI and production deploy
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || 'production' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  NODE_VERSION: "22"
+
+jobs:
+  verify:
+    name: Test and validate containers
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      COMPOSE_PROJECT_NAME: gigamail-ci-${{ github.run_id }}-${{ github.run_attempt }}
+      GIGAMAIL_BIND_ADDRESS: 127.0.0.1
+      GIGAMAIL_PORT: 3080
+    steps:
+      - name: Check out the tested commit
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run tests and build checks
+        run: |
+          npm test
+          npm run check
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Validate deployment files
+        run: |
+          cp .env.example .env
+          sh -n deploy/launch.sh
+          sh -n deploy/production-deploy.sh
+          docker compose --env-file .env --profile privacy config --quiet
+
+      - name: Build application and privacy images
+        run: docker compose --env-file .env --profile privacy build
+
+      - name: Start the application image
+        run: |
+          REMOTE_CONTENT_PROXY_URL=http://tor-proxy:8118 \
+            docker compose --env-file .env --profile privacy up --detach --no-build --wait --wait-timeout 180
+
+      - name: Exercise health and authentication gates
+        run: |
+          health=$(curl --fail --silent --show-error --max-time 10 http://127.0.0.1:3080/api/health)
+          printf '%s\n' "$health" | grep -q '"status":"ok"'
+          printf '%s\n' "$health" | grep -q '"authProtected":true'
+          printf '%s\n' "$health" | grep -q '"credentialsConfigured":true'
+          printf '%s\n' "$health" | grep -q '"remoteContentProxyConfigured":true'
+          status=$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 10 http://127.0.0.1:3080/api/accounts)
+          test "$status" = "401"
+
+      - name: Remove ephemeral CI containers and volumes
+        if: always()
+        run: |
+          if [ -f .env ]; then
+            docker compose --env-file .env --profile privacy down --volumes --timeout 15
+          fi
+
+  deploy:
+    name: Recreate production
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: verify
+    runs-on:
+      - self-hosted
+      - linux
+      - gigamail-prod
+    timeout-minutes: 20
+    environment:
+      name: production
+      url: https://mail.xer0.io
+    env:
+      PRODUCTION_REPO: /home/mitsubishi/apps/GigaMail
+      DEPLOY_MODE: privacy
+    steps:
+      - name: Check out deployment tooling
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Deploy the exact tested commit
+        run: sh deploy/production-deploy.sh "$GITHUB_SHA" "$PRODUCTION_REPO" "$DEPLOY_MODE" "$GITHUB_WORKSPACE"
+
+  verify-public:
+    name: Verify public HTTPS
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Check the public health endpoint
+        run: |
+          health=$(curl --fail --silent --show-error \
+            --retry 12 --retry-all-errors --retry-delay 5 \
+            --connect-timeout 10 --max-time 120 \
+            https://mail.xer0.io/api/health)
+          printf '%s\n' "$health" | grep -q '"status":"ok"'
+          printf '%s\n' "$health" | grep -q "\"releaseSha\":\"$GITHUB_SHA\""

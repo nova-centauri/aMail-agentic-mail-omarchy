@@ -6,9 +6,11 @@ import { decryptJson } from './crypto.js';
 import { sanitizeEmailHtml, textSnippet, toSafeHtmlFromText } from './message-html.js';
 import {
   addressList,
+  accountConnection,
   appendSignature,
   buildAuth,
   folderForMailbox,
+  isEmail,
   normalizeMessageIds,
   normalizeSubject,
   recipientList,
@@ -16,6 +18,8 @@ import {
 } from '../utils/mail.js';
 import { NotFoundError, ServiceUnavailableError, ValidationError } from '../errors.js';
 import { stringify } from '../db.js';
+
+const DEFAULT_SYNC_MAX_MESSAGE_BYTES = 10 * 1024 * 1024;
 
 const asIso = (value) => {
   const date = value ? new Date(value) : null;
@@ -45,29 +49,177 @@ function attachmentMetadata(attachments = []) {
   }));
 }
 
-function buildImapOptions(account, credentials, config) {
+export function buildImapOptions(account, credentials, config) {
+  const secure = Boolean(account.imap_secure);
   return {
     host: account.imap_host,
     port: account.imap_port,
-    secure: Boolean(account.imap_secure),
-    auth: buildAuth(credentials, account.email),
+    secure,
+    // For explicit TLS, the socket is encrypted from byte one. For a cleartext
+    // IMAP port, require STARTTLS before ImapFlow is allowed to authenticate.
+    doSTARTTLS: secure ? undefined : true,
+    auth: buildAuth(credentials, account.email, 'imap'),
     logger: false,
     socketTimeout: config.syncTimeoutMs,
     tls: { rejectUnauthorized: !config.allowInsecureTls },
   };
 }
 
-function buildSmtpTransport(account, credentials, config) {
-  return nodemailer.createTransport({
+export function buildSmtpOptions(account, credentials, config) {
+  const secure = Boolean(account.smtp_secure);
+  return {
     host: account.smtp_host,
     port: account.smtp_port,
-    secure: Boolean(account.smtp_secure),
-    auth: buildAuth(credentials, account.email),
+    secure,
+    // Nodemailer can otherwise continue without STARTTLS when a server on 587
+    // does not advertise it. Requiring the upgrade keeps credentials off a
+    // plaintext connection for every non-implicit-TLS account.
+    requireTLS: !secure,
+    auth: buildAuth(credentials, account.email, 'smtp'),
     tls: { rejectUnauthorized: !config.allowInsecureTls },
     connectionTimeout: config.syncTimeoutMs,
     greetingTimeout: config.syncTimeoutMs,
     socketTimeout: config.syncTimeoutMs,
+  };
+}
+
+/**
+ * Compile mail through Nodemailer's documented stream transport. This avoids
+ * depending on private MailComposer modules and gives SMTP and IMAP APPEND the
+ * exact same RFC822 bytes.
+ */
+export async function compileRfc822Message(message) {
+  const compiler = nodemailer.createTransport({
+    streamTransport: true,
+    buffer: true,
+    newline: 'windows',
   });
+  const result = await compiler.sendMail({
+    ...message,
+    // Mail bodies are values, never instructions to load server-side paths or
+    // URLs. Keep that invariant if attachment support is added later.
+    disableFileAccess: true,
+    disableUrlAccess: true,
+  });
+  if (!Buffer.isBuffer(result.message)) {
+    throw new Error('RFC822 compiler did not return a message buffer.');
+  }
+  return result.message;
+}
+
+function upstreamErrorText(error) {
+  return [
+    error?.code,
+    error?.responseCode,
+    error?.response,
+    error?.serverResponseCode,
+    error?.message,
+  ].filter(Boolean).join(' ').toLowerCase();
+}
+
+function authenticationHelp(provider, protocol) {
+  const protocolLabel = protocol.toUpperCase();
+  if (provider === 'gmail') {
+    return `Gmail rejected the ${protocolLabel} credentials. Use the full Google email address and a 16-character app password created after enabling 2-Step Verification.`;
+  }
+  if (provider === 'icloud') {
+    return `iCloud rejected the ${protocolLabel} credentials. Generate an Apple app-specific password; for SMTP, use the full iCloud email address as the username.`;
+  }
+  if (provider === 'mailinabox') {
+    return `Mail-in-a-Box rejected the ${protocolLabel} credentials. Use the full mailbox address and its mailbox or app password.`;
+  }
+  return `${protocolLabel} authentication was rejected. Check the username and use an app password when the provider offers one.`;
+}
+
+export function classifyMailConnectionError(error, { protocol, provider = 'custom' }) {
+  const name = String(protocol || '').toLowerCase() === 'smtp' ? 'smtp' : 'imap';
+  const label = name.toUpperCase();
+  const text = upstreamErrorText(error);
+  const authFailure = error?.authenticationFailed
+    || error?.code === 'EAUTH'
+    || [530, 534, 535].includes(Number(error?.responseCode))
+    || /auth(?:entication)?(?:failed| error| rejected)|invalid credentials|username and password not accepted|login failed/.test(text);
+  if (authFailure) {
+    return { code: `${label}_AUTH_FAILED`, message: authenticationHelp(provider, name) };
+  }
+  if (['ENOTFOUND', 'EAI_AGAIN'].includes(error?.code) || /getaddrinfo|name or service not known/.test(text)) {
+    return { code: `${label}_DNS_FAILED`, message: `${label} server hostname could not be resolved. Check the server hostname and DNS.` };
+  }
+  if (error?.code === 'ECONNREFUSED' || /connection refused/.test(text)) {
+    return { code: `${label}_CONNECTION_REFUSED`, message: `${label} server refused the connection. Check the hostname, port, and firewall.` };
+  }
+  if (['ETIMEDOUT', 'ESOCKETTIMEDOUT'].includes(error?.code) || /timed?\s*out|timeout/.test(text)) {
+    return { code: `${label}_TIMEOUT`, message: `${label} server did not respond in time. Check the hostname, port, firewall, and server availability.` };
+  }
+  if (
+    ['CERT_HAS_EXPIRED', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'ERR_TLS_CERT_ALTNAME_INVALID', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE'].includes(error?.code)
+    || /certificate|self[- ]signed|tls|ssl/.test(text)
+  ) {
+    return { code: `${label}_TLS_FAILED`, message: `${label} TLS verification failed. Use the hostname on the server certificate and confirm its certificate chain is valid.` };
+  }
+  return { code: `${label}_CONNECTION_FAILED`, message: `${label} connection failed. Check the server settings and try again.` };
+}
+
+function connectionTestError(results) {
+  const failures = Object.values(results).filter((result) => !result.ok);
+  const code = failures.length === 1 ? failures[0].code : 'MAIL_CONNECTION_TEST_FAILED';
+  const error = new ServiceUnavailableError(failures.map((failure) => failure.message).join(' '), code);
+  // These sanitized details are safe for a setup UI. Raw upstream strings can
+  // contain server banners or authentication context and are never returned.
+  error.details = {
+    protocols: Object.fromEntries(Object.entries(results).map(([protocol, result]) => [
+      protocol,
+      result.ok ? { ok: true } : { ok: false, code: result.code, message: result.message },
+    ])),
+  };
+  return error;
+}
+
+function sentAppendFailureCode(error, account) {
+  if (error?.code === 'IMAP_APPEND_REJECTED') return error.code;
+  const text = upstreamErrorText(error);
+  if (/overquota|quota exceeded/.test(text)) return 'IMAP_APPEND_QUOTA_EXCEEDED';
+  if (/toobig|too large|appendlimit/.test(text)) return 'IMAP_APPEND_TOO_LARGE';
+  const classified = classifyMailConnectionError(error, { protocol: 'imap', provider: account.provider });
+  return classified.code === 'IMAP_CONNECTION_FAILED' ? 'IMAP_APPEND_FAILED' : classified.code;
+}
+
+function smtpDeliverySummary(value, recipientCount, { resolved = false } = {}) {
+  const total = Math.max(0, Number(recipientCount) || 0);
+  const hasAccepted = Array.isArray(value?.accepted);
+  const hasRejected = Array.isArray(value?.rejected);
+  let acceptedCount = hasAccepted ? Math.min(total, value.accepted.length) : null;
+  let rejectedCount = hasRejected ? Math.min(total, value.rejected.length) : null;
+
+  if (acceptedCount === null && rejectedCount !== null) acceptedCount = Math.max(0, total - rejectedCount);
+  if (rejectedCount === null && acceptedCount !== null) rejectedCount = Math.max(0, total - acceptedCount);
+  // Some injected/custom transports do not expose SMTP recipient arrays. A
+  // resolved send remains the compatibility signal that all were accepted.
+  if (acceptedCount === null && rejectedCount === null) {
+    acceptedCount = resolved ? total : 0;
+    rejectedCount = 0;
+  }
+
+  const unconfirmedCount = Math.max(0, total - acceptedCount - rejectedCount);
+  let status = 'failed';
+  if (acceptedCount === 0 && rejectedCount >= total && total > 0) status = 'rejected';
+  else if (acceptedCount > 0 && rejectedCount === 0 && unconfirmedCount === 0) status = 'accepted';
+  else if (acceptedCount > 0) status = 'partial';
+  else if (resolved) status = 'unconfirmed';
+
+  return { status, recipientCount: total, acceptedCount, rejectedCount, unconfirmedCount };
+}
+
+function rejectedDeliveryError(delivery) {
+  const allRejected = delivery.status === 'rejected';
+  const error = new ServiceUnavailableError(
+    allRejected
+      ? 'The SMTP server rejected every recipient. Check the recipient addresses and try again.'
+      : 'The SMTP server did not confirm any recipient. The message was not saved as sent.',
+    allRejected ? 'SMTP_ALL_RECIPIENTS_REJECTED' : 'SMTP_DELIVERY_UNCONFIRMED',
+  );
+  error.details = { delivery };
+  return error;
 }
 
 const MOVE_SPECIAL_USE = {
@@ -159,7 +311,18 @@ export function discoverSyncMailboxes(folders) {
   });
 }
 
-export function createMailService({ config, repos, logger }) {
+export function createMailService({
+  config,
+  repos,
+  logger,
+  ImapClient = ImapFlow,
+  createSmtpTransport = (options) => nodemailer.createTransport(options),
+  compileMessage = compileRfc822Message,
+  createMessageId = () => `<${randomUUID()}@gigamail.local>`,
+}) {
+  const newImapClient = (account, credentials) => new ImapClient(buildImapOptions(account, credentials, config));
+  const newSmtpTransport = (account, credentials) => createSmtpTransport(buildSmtpOptions(account, credentials, config));
+
   function accountAndCredentials(accountId) {
     const account = repos.accounts.getRaw(accountId);
     if (!account) throw new NotFoundError('Mail account not found.');
@@ -253,15 +416,23 @@ export function createMailService({ config, repos, logger }) {
 
   async function syncMailbox({ account, client, descriptor, limit }) {
     const { mailbox, role, allMailMirror = false } = descriptor;
+    const maxMessageBytes = Number.isSafeInteger(config.syncMaxMessageBytes)
+      ? config.syncMaxMessageBytes
+      : DEFAULT_SYNC_MAX_MESSAGE_BYTES;
     let lock;
     let imported = 0;
+    let skippedTooLarge = 0;
+    let skippedUnavailable = 0;
     const previousSync = repos.sync.get(account.id, mailbox);
     let lastUid = previousSync?.last_uid || 0;
     let uidValidity = null;
+    let uidValidityChanged = false;
     try {
       lock = await client.getMailboxLock(mailbox);
       uidValidity = Number(client.mailbox?.uidValidity) || null;
-      if (previousSync?.uid_validity && uidValidity && previousSync.uid_validity !== uidValidity) {
+      const previousUidValidity = Number(previousSync?.uid_validity) || null;
+      if (previousUidValidity && uidValidity && previousUidValidity !== uidValidity) {
+        uidValidityChanged = true;
         logger.info({ accountId: account.id, mailbox }, 'IMAP UIDVALIDITY changed; resynchronizing mailbox window');
         lastUid = 0;
       }
@@ -269,18 +440,76 @@ export function createMailService({ config, repos, logger }) {
       const latestUid = Math.max(0, uidNext - 1);
       if (latestUid > lastUid) {
         const firstUid = Math.max(lastUid + 1, latestUid - limit + 1, 1);
-        for await (const message of client.fetch(`${firstUid}:*`, {
+        const pending = [];
+        // Do not ask IMAP for RFC822 source in this pass. A message's reported
+        // size lets us reject oversized mail without transferring any body or
+        // attachment data, and this metadata window is capped by `limit`.
+        for await (const message of client.fetch(`${firstUid}:${latestUid}`, {
           uid: true,
           envelope: true,
           flags: true,
           labels: true,
           internalDate: true,
-          source: true,
+          size: true,
         }, { uid: true })) {
-          const saved = await ingestImapMessage({ account, mailbox, role, allMailMirror, message });
-          if (saved) imported += 1;
-          lastUid = Math.max(lastUid, Number(message.uid || 0));
+          pending.push(message);
         }
+
+        // Fetch and parse one source at a time. `maxLength + 1` is a sentinel:
+        // it detects an oversized source even when a server omits or misreports
+        // RFC822.SIZE, while still keeping the response buffer strictly bounded.
+        for (const message of pending) {
+          const uid = Number(message.uid || 0);
+          const reportedSize = Number(message.size);
+          const hasReportedSize = Number.isSafeInteger(reportedSize) && reportedSize >= 0;
+          if (hasReportedSize && reportedSize > maxMessageBytes) {
+            skippedTooLarge += 1;
+            lastUid = Math.max(lastUid, uid);
+            continue;
+          }
+
+          const sourceMessage = await client.fetchOne(uid, {
+            uid: true,
+            source: { start: 0, maxLength: maxMessageBytes + 1 },
+          }, { uid: true });
+          const source = sourceMessage?.source;
+          if (!Buffer.isBuffer(source)) {
+            skippedUnavailable += 1;
+            lastUid = Math.max(lastUid, uid);
+            continue;
+          }
+          if (source.length > maxMessageBytes) {
+            skippedTooLarge += 1;
+            lastUid = Math.max(lastUid, uid);
+            continue;
+          }
+          if (hasReportedSize && source.length !== reportedSize) {
+            skippedUnavailable += 1;
+            lastUid = Math.max(lastUid, uid);
+            continue;
+          }
+
+          const saved = await ingestImapMessage({
+            account,
+            mailbox,
+            role,
+            allMailMirror,
+            message: { ...message, source },
+          });
+          if (saved) imported += 1;
+          lastUid = Math.max(lastUid, uid);
+        }
+      }
+      const skipped = skippedTooLarge + skippedUnavailable;
+      const skipReasons = [
+        skippedTooLarge && { code: 'IMAP_MESSAGE_TOO_LARGE', count: skippedTooLarge, maxBytes: maxMessageBytes },
+        skippedUnavailable && { code: 'IMAP_MESSAGE_SOURCE_UNAVAILABLE', count: skippedUnavailable },
+      ].filter(Boolean);
+      if (skipped) {
+        logger.info(
+          { accountId: account.id, mailbox, skipped, skippedTooLarge, skippedUnavailable, maxMessageBytes },
+          'IMAP messages skipped without importing source content',
+        );
       }
       repos.sync.save({
         account_id: account.id,
@@ -291,7 +520,16 @@ export function createMailService({ config, repos, logger }) {
         synced_at: new Date().toISOString(),
       });
       repos.accounts.markSynced(account.id);
-      return { mailbox, role, status: 'ok', imported, lastUid };
+      return {
+        mailbox,
+        role,
+        status: skipped ? 'partial' : 'ok',
+        imported,
+        skipped,
+        skipReasons,
+        lastUid,
+        uidValidityChanged,
+      };
     } catch (error) {
       repos.sync.save({
         account_id: account.id,
@@ -324,7 +562,7 @@ export function createMailService({ config, repos, logger }) {
         mailboxes: [],
       };
     }
-    const client = new ImapFlow(buildImapOptions(account, credentials, config));
+    const client = newImapClient(account, credentials);
     try {
       await client.connect();
     } catch (error) {
@@ -350,14 +588,25 @@ export function createMailService({ config, repos, logger }) {
         }
       }
       const imported = mailboxes.reduce((sum, item) => sum + (item.imported || 0), 0);
+      const skipped = mailboxes.reduce((sum, item) => sum + (item.skipped || 0), 0);
       const status = mailboxes.some((item) => item.status === 'failed')
-        ? (mailboxes.some((item) => item.status === 'ok') ? 'partial' : 'failed')
-        : 'ok';
+        ? (mailboxes.some((item) => item.status !== 'failed') ? 'partial' : 'failed')
+        : (mailboxes.some((item) => item.status === 'partial') ? 'partial' : 'ok');
       if (singleMailbox) {
         const summary = mailboxes[0] || { mailbox: explicitMailbox, imported: 0, lastUid: 0, status };
-        return { accountId, mailbox: explicitMailbox, imported: summary.imported || 0, lastUid: summary.lastUid || 0, status, mailboxes };
+        return {
+          accountId,
+          mailbox: explicitMailbox,
+          imported: summary.imported || 0,
+          skipped: summary.skipped || 0,
+          skipReasons: summary.skipReasons || [],
+          lastUid: summary.lastUid || 0,
+          uidValidityChanged: Boolean(summary.uidValidityChanged),
+          status,
+          mailboxes,
+        };
       }
-      return { accountId, imported, status, mailboxes };
+      return { accountId, imported, skipped, status, mailboxes };
     } finally {
       await client.logout().catch(() => {});
     }
@@ -377,16 +626,99 @@ export function createMailService({ config, repos, logger }) {
     return results;
   }
 
+  async function verifyAccountConnections(account, credentials) {
+    // Validate both auth variants synchronously so malformed input is a 400 and
+    // never opens either socket.
+    buildAuth(credentials, account.email, 'imap');
+    buildAuth(credentials, account.email, 'smtp');
+
+    const checkImap = async () => {
+      const client = newImapClient(account, credentials);
+      try {
+        await client.connect();
+      } finally {
+        await client.logout().catch(() => {});
+      }
+    };
+    const checkSmtp = async () => {
+      const transport = newSmtpTransport(account, credentials);
+      try {
+        await transport.verify();
+      } finally {
+        transport.close?.();
+      }
+    };
+    const [imap, smtp] = await Promise.allSettled([checkImap(), checkSmtp()]);
+    const outcomes = {
+      imap: imap.status === 'fulfilled'
+        ? { ok: true }
+        : { ok: false, ...classifyMailConnectionError(imap.reason, { protocol: 'imap', provider: account.provider }) },
+      smtp: smtp.status === 'fulfilled'
+        ? { ok: true }
+        : { ok: false, ...classifyMailConnectionError(smtp.reason, { protocol: 'smtp', provider: account.provider }) },
+    };
+    if (!outcomes.imap.ok || !outcomes.smtp.ok) throw connectionTestError(outcomes);
+    return { imap: true, smtp: true };
+  }
+
+  async function testSettings(input) {
+    const email = String(input?.email || '').trim().toLowerCase();
+    if (!isEmail(email)) throw new ValidationError('A valid account email is required.');
+    if (!input?.credentials || typeof input.credentials !== 'object') {
+      throw new ValidationError('Account credentials are required for a connection test.');
+    }
+    const connection = accountConnection({ ...input, email });
+    return verifyAccountConnections({
+      email,
+      provider: connection.provider,
+      imap_host: connection.imap.host,
+      imap_port: connection.imap.port,
+      imap_secure: Number(connection.imap.secure),
+      smtp_host: connection.smtp.host,
+      smtp_port: connection.smtp.port,
+      smtp_secure: Number(connection.smtp.secure),
+    }, input.credentials);
+  }
+
   async function testAccount(accountId) {
     const { account, credentials } = accountAndCredentials(accountId);
-    const client = new ImapFlow(buildImapOptions(account, credentials, config));
+    return verifyAccountConnections(account, credentials);
+  }
+
+  async function appendProviderSentCopy({ account, credentials, rawMessage, sentAt }) {
+    if (String(account.provider || '').toLowerCase() === 'gmail') {
+      const status = { attempted: false, status: 'provider-managed', reason: 'gmail-auto-copies-sent' };
+      logger.info({ accountId: account.id, sentCopy: status }, 'Provider Sent copy status');
+      return status;
+    }
+
+    let client;
     try {
+      client = newImapClient(account, credentials);
       await client.connect();
-      return { imap: true };
-    } catch {
-      throw new ServiceUnavailableError('IMAP connection test failed. Check the account settings.', 'IMAP_TEST_FAILED');
+      const sent = discoverSyncMailboxes(await client.list()).find((descriptor) => descriptor.role === 'sent');
+      if (!sent) {
+        const status = { attempted: true, status: 'skipped', reason: 'sent-mailbox-not-found' };
+        logger.info({ accountId: account.id, sentCopy: status }, 'Provider Sent copy status');
+        return status;
+      }
+      const appended = await client.append(sent.mailbox, rawMessage, ['\\Seen'], sentAt);
+      if (!appended) {
+        const error = new Error('IMAP server rejected APPEND.');
+        error.code = 'IMAP_APPEND_REJECTED';
+        throw error;
+      }
+      const status = { attempted: true, status: 'appended', mailbox: sent.mailbox };
+      logger.info({ accountId: account.id, sentCopy: status }, 'Provider Sent copy status');
+      return status;
+    } catch (error) {
+      const status = { attempted: true, status: 'failed', reason: sentAppendFailureCode(error, account) };
+      // Do not attach the upstream Error object: an IMAP response can include
+      // authentication context or server implementation details.
+      logger.warn({ accountId: account.id, sentCopy: status }, 'Provider Sent copy could not be appended after SMTP accepted the message');
+      return status;
     } finally {
-      await client.logout().catch(() => {});
+      await client?.logout().catch(() => {});
     }
   }
 
@@ -400,6 +732,68 @@ export function createMailService({ config, repos, logger }) {
     const parent = input.replyToMessageId ? repos.messages.findByRfcId(account.id, input.replyToMessageId) : null;
     const subject = String(input.subject || parent?.subject || '').trim() || '(no subject)';
     const references = [...new Set([...(parent?.references || []), parent?.messageId].filter(Boolean))];
+    const signed = appendSignature({
+      html: String(input.htmlBody || ''),
+      text: String(input.textBody || textSnippet(input.htmlBody || '')),
+      signature: account.signature,
+      includeSignature: input.includeSignature !== false,
+    });
+    const messageId = createMessageId(account);
+    const sentAt = new Date();
+    const envelope = {
+      from: account.email,
+      to: [...to, ...cc, ...bcc].map((recipient) => recipient.email),
+    };
+    const message = {
+      envelope,
+      messageId,
+      date: sentAt,
+      from: { name: account.display_name, address: account.email },
+      to: recipientsToHeader(to) || undefined,
+      cc: recipientsToHeader(cc) || undefined,
+      // Bcc intentionally exists only in the SMTP envelope. Putting it in the
+      // compiled raw message would disclose hidden recipients to everyone.
+      subject,
+      text: signed.text,
+      html: signed.html || undefined,
+      inReplyTo: parent?.messageId || input.inReplyTo || undefined,
+      references: references.length ? references.join(' ') : undefined,
+      headers: { 'X-Mailer': 'GigaMail' },
+    };
+    let transport;
+    let rawMessage;
+    let delivery;
+    try {
+      const compiled = await compileMessage(message);
+      rawMessage = Buffer.isBuffer(compiled)
+        ? compiled
+        : (typeof compiled === 'string' ? Buffer.from(compiled) : null);
+      if (!rawMessage?.length) throw new Error('RFC822 compilation produced an empty message.');
+      transport = newSmtpTransport(account, credentials);
+      const smtpResult = await transport.sendMail({ envelope, raw: rawMessage });
+      delivery = smtpDeliverySummary(smtpResult, envelope.to.length, { resolved: true });
+    } catch (error) {
+      const rejected = smtpDeliverySummary(error, envelope.to.length);
+      if (rejected.status === 'rejected') {
+        logger.warn({ accountId: account.id, delivery: rejected }, 'SMTP rejected every message recipient');
+        throw rejectedDeliveryError(rejected);
+      }
+      logger.warn({ accountId: account.id, err: cleanupError(error) }, 'SMTP send failed');
+      throw new ServiceUnavailableError('Message could not be sent. Check SMTP settings and app password.', 'SMTP_SEND_FAILED');
+    } finally {
+      transport?.close?.();
+    }
+
+    if (delivery.acceptedCount === 0) {
+      logger.warn({ accountId: account.id, delivery }, 'SMTP did not confirm any message recipient');
+      throw rejectedDeliveryError(delivery);
+    }
+    if (delivery.status === 'partial') {
+      logger.warn({ accountId: account.id, delivery }, 'SMTP accepted the message for only some recipients');
+    }
+
+    // Creating a local thread is a write. Defer it until SMTP confirms at least
+    // one recipient so an all-rejected attempt cannot leave an empty thread.
     const thread = resolveThread({
       accountId: account.id,
       subject,
@@ -407,35 +801,6 @@ export function createMailService({ config, repos, logger }) {
       references,
       threadId: input.threadId,
     });
-    const signed = appendSignature({
-      html: String(input.htmlBody || ''),
-      text: String(input.textBody || textSnippet(input.htmlBody || '')),
-      signature: account.signature,
-      includeSignature: input.includeSignature !== false,
-    });
-    const transport = buildSmtpTransport(account, credentials, config);
-    let result;
-    try {
-      result = await transport.sendMail({
-        from: { name: account.display_name, address: account.email },
-        to: recipientsToHeader(to),
-        cc: recipientsToHeader(cc) || undefined,
-        bcc: recipientsToHeader(bcc) || undefined,
-        subject,
-        text: signed.text,
-        html: signed.html || undefined,
-        inReplyTo: parent?.messageId || input.inReplyTo || undefined,
-        references: references.length ? references.join(' ') : undefined,
-        headers: { 'X-Mailer': 'GigaMail' },
-      });
-    } catch (error) {
-      logger.warn({ accountId: account.id, err: cleanupError(error) }, 'SMTP send failed');
-      throw new ServiceUnavailableError('Message could not be sent. Check SMTP settings and app password.', 'SMTP_SEND_FAILED');
-    } finally {
-      transport.close?.();
-    }
-
-    const messageId = result.messageId || `<${randomUUID()}@gigamail.local>`;
     const sanitized = sanitizeEmailHtml(signed.html || toSafeHtmlFromText(signed.text));
     const saved = repos.messages.upsert({
       account_id: account.id,
@@ -452,8 +817,8 @@ export function createMailService({ config, repos, logger }) {
       cc_json: stringify(cc),
       bcc_json: stringify(bcc),
       reply_to_json: null,
-      sent_at: new Date().toISOString(),
-      received_at: new Date().toISOString(),
+      sent_at: sentAt.toISOString(),
+      received_at: sentAt.toISOString(),
       html_body: sanitized.html,
       text_body: signed.text,
       snippet: textSnippet(signed.text),
@@ -468,7 +833,8 @@ export function createMailService({ config, repos, logger }) {
       is_sent: 1,
     });
     if (input.draftId) repos.drafts.remove(input.draftId);
-    return saved;
+    const sentCopy = await appendProviderSentCopy({ account, credentials, rawMessage, sentAt });
+    return { ...saved, delivery, sentCopy };
   }
 
   async function syncMessageStateToImap(message, state) {
@@ -487,7 +853,7 @@ export function createMailService({ config, repos, logger }) {
       };
     }
     const { account, credentials } = accountAndCredentials(message.accountId);
-    const client = new ImapFlow(buildImapOptions(account, credentials, config));
+    const client = newImapClient(account, credentials);
     let lock;
     const action = remoteMoveAction(state);
     try {
@@ -567,5 +933,5 @@ export function createMailService({ config, repos, logger }) {
     }
   }
 
-  return { syncAccount, syncAll, testAccount, sendMessage, updateMessageState };
+  return { syncAccount, syncAll, testSettings, testAccount, sendMessage, updateMessageState };
 }

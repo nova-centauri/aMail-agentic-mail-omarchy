@@ -133,3 +133,81 @@ To update, pull or copy the new source, review `.env` changes, then rerun the
 same `deploy/launch.sh` command. Do not delete the `gigamail-data` volume
 unless intentionally discarding all accounts, cached mail metadata, and
 settings.
+
+## Continuous deployment from `main`
+
+The repository includes `.github/workflows/ci-deploy.yml`. Pull requests run
+the Node tests, production build, dependency audit, Compose validation, both
+Docker builds, a live application health check, and an unauthenticated API
+check. A push to `main` must pass the same checks before the production job is
+allowed to run.
+
+The VM has a private `10.0.0.15` address, so a GitHub-hosted runner cannot
+connect to it directly. Install a dedicated GitHub Actions self-hosted runner
+on the VM instead of publishing SSH or adding a long-lived deployment key:
+
+1. In the GitHub repository, open **Settings → Actions → Runners → New
+   self-hosted runner** and select Linux.
+2. Run GitHub's generated install and configuration commands as
+   `mitsubishi`. Add the custom label `gigamail-prod` when configuring it.
+   Use a runner dedicated to this repository, not a shared organization
+   runner.
+3. Install the runner as a service using the `svc.sh` commands GitHub displays.
+4. Confirm the service user can run the deployment prerequisites without
+   `sudo`:
+
+   ```sh
+   git --version
+   docker version
+   docker compose version
+   flock --version
+   test -d /home/mitsubishi/apps/GigaMail/.git
+   test "$(stat -c '%a' /home/mitsubishi/apps/GigaMail/.env)" = 600
+   ```
+
+The production job uses the GitHub environment named `production` and is
+intentionally triggerable only by a push to `main`; branch-selectable manual
+dispatch is disabled because it would let branch-controlled code reach the
+Docker-capable runner. In **Settings → Environments → production**, restrict
+deployment branches to `main`. In branch protection for `main`, require the
+**Test and validate containers** check and disallow bypasses for ordinary
+merges.
+
+No GitHub deployment secrets or long-lived repository credentials are
+required. The deploy script imports the exact tested Git commit from the
+already-authenticated Actions workspace into the persistent production clone;
+it never copies an untested working tree. The protected `.env` remains only on
+the VM, and the runner service must run as `mitsubishi` so that it can read the
+repository and invoke Docker. Never configure this production runner to
+execute pull-request jobs from forks. The supplied workflow schedules only
+the main-push deployment job on it; all pull-request code runs on
+GitHub-hosted runners.
+
+On a successful push, `deploy/production-deploy.sh`:
+
+- locks deployment on both GitHub and the VM and deploys the exact tested commit;
+- refuses tracked or untracked production-source changes, duplicate secret
+  declarations, or an `.env` whose mode is not `600`;
+- creates an online SQLite backup in the named data volume, retaining five;
+- checks out the exact commit that passed CI and force-recreates both project
+  containers without touching another Compose project;
+- waits up to five minutes for GigaMail health and a local Tor control-port
+  check proving that the privacy relay reached 100% bootstrap; and
+- restores the last known-good commit and recreates its containers if health
+  fails.
+
+Rollback intentionally does not restore the database automatically: doing so
+could discard mail received after the pre-deploy snapshot. Database migrations
+must therefore remain backward-compatible. The retained SQLite snapshot is a
+manual disaster-recovery point if an operator determines that losing the
+post-snapshot writes is preferable to an incompatible database.
+
+After the VM reports healthy, a separate GitHub-hosted job verifies
+`https://mail.xer0.io/api/health` and requires its release SHA to equal the
+commit that passed CI. A failure of that external check reports a failed
+workflow but does not roll back a healthy internal deployment, because DNS,
+TLS, or Nginx Proxy Manager can fail independently of the application.
+
+The most recent five pre-deploy database snapshots live at
+`/data/deploy-backups` inside the `gigamail-data` volume. The successful commit
+is recorded in `.git/gigamail-last-successful-sha` in the production checkout.

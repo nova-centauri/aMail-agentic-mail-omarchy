@@ -1,8 +1,15 @@
 import express from 'express';
 import rateLimit from 'express-rate-limit';
-import { encryptJson, timingSafeMatch } from '../services/crypto.js';
+import { decryptJson, encryptJson, timingSafeMatch } from '../services/crypto.js';
 import { hydrateRemoteContent } from '../services/message-html.js';
-import { accountConnection, DEFAULT_ACCOUNT_COLOR, isEmail } from '../utils/mail.js';
+import { isSmartCategory, SMART_CATEGORY_SLUGS } from '../services/smart-filter.js';
+import {
+  accountConnection,
+  DEFAULT_ACCOUNT_COLOR,
+  discoverAccountProvider,
+  isEmail,
+  mailProviderCatalog,
+} from '../utils/mail.js';
 import { ConflictError, NotFoundError, ValidationError } from '../errors.js';
 import { accessGate, requestHasAccess, sessionCookieOptions } from '../middleware/auth.js';
 
@@ -14,6 +21,25 @@ const parseNumber = (value, fallback, min, max) => {
 const normalizeFolder = (value) => {
   const folder = String(value || 'inbox').toLowerCase();
   return ['inbox', 'starred', 'snoozed', 'sent', 'drafts', 'all', 'trash', 'spam', 'archive'].includes(folder) ? folder : 'inbox';
+};
+
+const normalizeCategory = (value) => {
+  const category = String(value || '').trim().toLowerCase();
+  if (!category || category === 'all') return '';
+  if (!isSmartCategory(category)) {
+    throw new ValidationError(`Unknown smart filter. Choose one of: ${SMART_CATEGORY_SLUGS.join(', ')}.`);
+  }
+  return category;
+};
+
+const emptyCategoryCounts = () => Object.fromEntries(SMART_CATEGORY_SLUGS.map((category) => [category, 0]));
+
+const booleanField = (value, fallback, fieldName) => {
+  if (value === undefined) return fallback;
+  if (typeof value === 'boolean') return value;
+  if (value === 1 || value === '1' || String(value).toLowerCase() === 'true') return true;
+  if (value === 0 || value === '0' || String(value).toLowerCase() === 'false') return false;
+  throw new ValidationError(`${fieldName} must be true or false.`);
 };
 
 function initials(value) {
@@ -81,7 +107,28 @@ function serializeAccountInput(body, existing, config) {
     smtp_secure: Number(connection.smtp.secure),
     credential_ciphertext: credentials,
     signature: String(body.signature ?? existing?.signature ?? '').slice(0, 20_000),
-    sync_enabled: Number(body.syncEnabled ?? (existing ? Boolean(existing.sync_enabled) : true)),
+    sync_enabled: Number(booleanField(body.syncEnabled, existing ? Boolean(existing.sync_enabled) : true, 'Sync enabled')),
+  };
+}
+
+function accountTestInput(body, existing, config) {
+  return {
+    email: existing.email,
+    provider: body.provider ?? existing.provider,
+    serverHost: body.serverHost,
+    imap: {
+      host: existing.imap_host,
+      port: existing.imap_port,
+      secure: Boolean(existing.imap_secure),
+      ...(body.imap || {}),
+    },
+    smtp: {
+      host: existing.smtp_host,
+      port: existing.smtp_port,
+      secure: Boolean(existing.smtp_secure),
+      ...(body.smtp || {}),
+    },
+    credentials: body.credentials ?? decryptJson(existing.credential_ciphertext, config.credentialKey),
   };
 }
 
@@ -155,6 +202,7 @@ export function registerApi(app, { config, repos, mailService, remoteContent }) 
     response.json({
       status: 'ok',
       version: '0.1.0',
+      releaseSha: config.releaseSha || null,
       accounts: repos.accounts.list().length,
       authProtected: Boolean(config.accessToken),
       credentialsConfigured: Boolean(config.credentialKey),
@@ -206,18 +254,53 @@ export function registerApi(app, { config, repos, mailService, remoteContent }) 
   const router = express.Router();
   router.use(accessGate(config));
 
-  router.get('/accounts', (_request, response) => response.json({ accounts: repos.accounts.list() }));
-  router.post('/accounts', (request, response) => {
-    const input = serializeAccountInput(request.body || {}, null, config);
-    if (repos.accounts.getByEmailRaw(input.email)) throw new ConflictError('An account with this email already exists.');
-    const account = repos.accounts.create(input);
-    response.status(201).json({ account });
+  // Custom account probes can target operator-supplied hosts. Keep this behind
+  // the access gate and tightly rate-limited so it cannot become a LAN scanner.
+  const accountProbeLimiter = rateLimit({
+    windowMs: 10 * 60_000,
+    limit: 20,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
   });
-  router.patch('/accounts/:id', (request, response) => {
+
+  router.get('/accounts', (_request, response) => response.json({ accounts: repos.accounts.list() }));
+  router.get('/accounts/providers', (request, response) => {
+    const discoveryInput = {
+      email: String(request.query.email || '').trim(),
+      serverHost: String(request.query.serverHost || request.query.host || '').trim(),
+    };
+    response.json({
+      providers: mailProviderCatalog(),
+      discovery: discoverAccountProvider(discoveryInput),
+    });
+  });
+  // This accepts the same connection/credential fields as POST /accounts, but
+  // uses them only in memory and never encrypts or persists them.
+  router.post('/accounts/test', accountProbeLimiter, async (request, response) => {
+    response.json({ result: await mailService.testSettings(request.body || {}) });
+  });
+  router.post('/accounts', accountProbeLimiter, async (request, response) => {
+    const body = request.body || {};
+    const input = serializeAccountInput(body, null, config);
+    if (repos.accounts.getByEmailRaw(input.email)) throw new ConflictError('An account with this email already exists.');
+    // Creation is atomic from the API's perspective: bad credentials or an
+    // unreachable receiving/sending server never leave a broken saved account.
+    const connection = await mailService.testSettings(body);
+    const account = repos.accounts.create(input);
+    response.status(201).json({ account, connection });
+  });
+  router.patch('/accounts/:id', accountProbeLimiter, async (request, response) => {
     const existing = repos.accounts.getRaw(request.params.id);
     if (!existing) throw new NotFoundError('Mail account not found.');
-    const account = repos.accounts.update(existing.id, serializeAccountInput(request.body || {}, existing, config));
-    response.json({ account });
+    const body = request.body || {};
+    const input = serializeAccountInput(body, existing, config);
+    const connectionChanged = ['credentials', 'provider', 'serverHost', 'imap', 'smtp']
+      .some((field) => Object.hasOwn(body, field));
+    const connection = connectionChanged
+      ? await mailService.testSettings(accountTestInput(body, existing, config))
+      : undefined;
+    const account = repos.accounts.update(existing.id, input);
+    response.json({ account, ...(connection ? { connection } : {}) });
   });
   router.delete('/accounts/:id', (request, response) => {
     if (!repos.accounts.remove(request.params.id)) throw new NotFoundError('Mail account not found.');
@@ -255,6 +338,7 @@ export function registerApi(app, { config, repos, mailService, remoteContent }) 
   router.get('/messages', (request, response) => {
     const accountId = request.query.accountId ? String(request.query.accountId) : null;
     const folder = normalizeFolder(request.query.folder);
+    const category = normalizeCategory(request.query.category);
     const page = parseNumber(request.query.page, 1, 1, 100_000);
     const pageSize = parseNumber(request.query.pageSize || request.query.limit, 50, 1, 200);
     const query = String(request.query.q || '').trim().slice(0, 200);
@@ -268,29 +352,52 @@ export function registerApi(app, { config, repos, mailService, remoteContent }) 
       ).sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)));
       const start = (page - 1) * pageSize;
       return response.json({
-        messages: drafts.slice(start, start + pageSize),
-        total: drafts.length,
+        messages: category ? [] : drafts.slice(start, start + pageSize),
+        total: category ? 0 : drafts.length,
         page,
         pageSize,
+        categoryCounts: emptyCategoryCounts(),
       });
     }
+    const mailbox = String(request.query.mailbox || 'INBOX');
+    const normalizedQuery = query.toLocaleLowerCase();
     const results = accounts.map((account) => repos.messages.list({
       accountId: account.id,
       folder,
-      mailbox: String(request.query.mailbox || 'INBOX'),
-      query,
+      mailbox,
+      // Search and smart filters are conversation-level operations. Load the
+      // scoped messages first so an older matching message can surface its
+      // conversation without borrowing that message's category or summary.
+      query: '',
+      category: '',
       limit: 1000,
       offset: 0,
     }));
     const byThread = new Map();
     for (const message of results.flatMap((result) => result.items)) {
-      const existing = byThread.get(message.threadId);
+      const key = `${message.accountId}:${message.threadId}`;
+      const existing = byThread.get(key);
       const messageTime = String(message.sentAt || message.receivedAt || message.createdAt);
-      const existingTime = String(existing?.sentAt || existing?.receivedAt || existing?.createdAt || '');
-      if (!existing || messageTime > existingTime) byThread.set(message.threadId, message);
+      const existingTime = String(existing?.latest?.sentAt || existing?.latest?.receivedAt || existing?.latest?.createdAt || '');
+      if (!existing) {
+        byThread.set(key, { latest: message, messages: [message] });
+      } else {
+        existing.messages.push(message);
+        if (messageTime > existingTime) existing.latest = message;
+      }
     }
-    const all = [...byThread.values()].map((latestMessage) => {
+    const conversations = [...byThread.values()]
+      .filter(({ messages }) => !normalizedQuery || messages.some((message) => [
+        message.subject,
+        message.from?.name,
+        message.from?.email,
+        message.snippet,
+        ...(message.to || []).flatMap((recipient) => [recipient.name, recipient.email]),
+        ...(message.cc || []).flatMap((recipient) => [recipient.name, recipient.email]),
+      ].join(' ').toLocaleLowerCase().includes(normalizedQuery)))
+      .map(({ latest: latestMessage }) => {
       const thread = repos.threads.get(latestMessage.threadId);
+      const latestAt = latestMessage.sentAt || latestMessage.receivedAt || latestMessage.createdAt;
       return {
         ...latestMessage,
         // Gmail's list is made of conversations. The thread id is intentionally
@@ -301,20 +408,26 @@ export function registerApi(app, { config, repos, mailService, remoteContent }) 
         messageCount: thread?.messageCount || 1,
         unreadCount: thread?.unreadCount || 0,
         participants: thread?.participants || [latestMessage.from],
-        latestAt: thread?.latestAt || latestMessage.sentAt || latestMessage.receivedAt,
-        snippet: thread?.snippet || latestMessage.snippet,
+        latestAt,
+        snippet: latestMessage.snippet,
         isRead: (thread?.unreadCount || 0) === 0,
         isStarred: thread?.isStarred ?? latestMessage.isStarred,
         ...(folder === 'snoozed' ? { folder: 'snoozed' } : {}),
       };
     }).sort((left, right) =>
       String(right.latestAt || right.sentAt || right.receivedAt || right.createdAt).localeCompare(String(left.latestAt || left.sentAt || left.receivedAt || left.createdAt)));
+    const categoryCounts = emptyCategoryCounts();
+    for (const conversation of conversations) categoryCounts[conversation.category] += 1;
+    const all = category
+      ? conversations.filter((conversation) => conversation.category === category)
+      : conversations;
     const start = (page - 1) * pageSize;
     response.json({
       messages: all.slice(start, start + pageSize),
       total: all.length,
       page,
       pageSize,
+      categoryCounts,
     });
   });
   router.get('/messages/:id', (request, response) => {

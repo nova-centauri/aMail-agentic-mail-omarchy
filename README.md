@@ -7,6 +7,8 @@ GigaMail is a self-hosted, Gmail-inspired inbox for multiple IMAP/SMTP accounts.
 ## What it includes
 
 - One unified inbox for up to 12 (or more) IMAP/SMTP accounts
+- Guided Gmail, iCloud, Mail-in-a-Box, and custom IMAP/SMTP onboarding that checks both incoming and outgoing mail before saving
+- Explainable smart views for GitHub/CI notifications, logs and alerts, and service-status updates
 - Conversation threading from `Message-ID`, `In-Reply-To`, `References`, and a safe subject fallback
 - Per-account identities, signatures, profile photos/initials, compose, reply, archive, trash, read and star actions
 - Server-side IMAP syncing and SMTP sending; no browser-to-mail-provider credentials
@@ -47,9 +49,24 @@ full reverse-proxy configuration is in [`deploy/README.md`](deploy/README.md).
 
 ## Account settings
 
-For each account, enter its email address, display name, IMAP host/port/security, SMTP host/port/security, username, and provider-specific app password or OAuth credentials where supported by your provider. Do not use an ordinary account password when your provider offers an app password.
+Use **Settings → Add account**, select a provider, and enter the mailbox identity and provider-specific credential. GigaMail tests IMAP and SMTP in memory first; the account is persisted only after both checks succeed. Saved credentials are encrypted server-side and are never returned by the API.
+
+- **Gmail / Google Workspace:** use the full email address and a Google app password. App passwords require 2-Step Verification and may be unavailable for some managed or Advanced Protection accounts.
+- **iCloud Mail:** use an Apple app-specific password. GigaMail uses the mailbox name for IMAP and the full address for SMTP, matching Apple's client settings.
+- **Mail-in-a-Box:** use the public hostname from the box's TLS certificate and the full mailbox address. This checkout includes a preset for `box.xer5.com` (IMAPS 993 and SMTP submission 587 with required STARTTLS); do not substitute its raw LAN IP because TLS hostname verification would fail.
+- **Custom:** enter separate IMAP/SMTP hosts, ports, and TLS modes. Non-implicit-TLS connections require STARTTLS before authentication.
+
+The setup API also exposes `GET /api/accounts/providers` for provider metadata and `POST /api/accounts/test` for a rate-limited, non-persisting connection check.
+
+## Smart inbox views
+
+Every synchronized message is classified locally into **Primary**, **GitHub & CI**, **Logs & alerts**, or **Status updates**. Classification is deterministic—no message content is sent to an external model—and every message includes a human-readable reason for its category. A conversation appears under the category of its latest message, while search can still find text in older messages without showing a stale conversation summary. Existing databases are backfilled automatically when the smart-filter rule version changes.
+
+Use `GET /api/messages?category=github_ci` (or `primary`, `logs`, `status`) with the existing `folder`, `accountId`, and `q` parameters. Omitting `category` returns all messages, and the response includes zero-filled conversation `categoryCounts` for the current folder/account/search scope.
 
 Most hosted providers have IMAP disabled by default or require an app password. GigaMail validates an account connection before saving it.
+
+IMAP synchronization reads message metadata first and downloads raw message sources one at a time. `GIGAMAIL_SYNC_MAX_MESSAGE_BYTES` caps each raw RFC822 download (10 MiB by default; configurable from 64 KiB to 50 MiB). Messages above the cap are left on the mail server and reported as sanitized `IMAP_MESSAGE_TOO_LARGE` skips in the sync result, without downloading their body or attachments. Set the cap before an account's first sync: skipped UIDs are advanced so changing the cap later applies to future messages and does not backfill previously skipped mail.
 
 ## Privacy model
 
@@ -71,7 +88,7 @@ npm install
 npm run dev
 ```
 
-The Vite UI runs on `http://localhost:5173`; API requests proxy to the server at port 3000. Before submitting changes, run:
+The Vite UI runs on `http://localhost:5173` and binds to loopback only; API requests proxy to the loopback server at port 3000. Before submitting changes, run:
 
 ```sh
 npm run check

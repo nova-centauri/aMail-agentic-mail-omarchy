@@ -2,6 +2,11 @@
 # can use it. The Compose service does not publish either proxy port to the
 # Docker host.
 SocksPort 127.0.0.1:9050
+# The control port is loopback-only inside this unprivileged container and is
+# not published or attached to another container. Compose uses it solely to
+# confirm that Tor reached 100% bootstrap before declaring the relay healthy.
+ControlPort 127.0.0.1:9051
+CookieAuthentication 0
 DataDirectory /var/lib/tor
 Log notice stdout
 RunAsDaemon 0

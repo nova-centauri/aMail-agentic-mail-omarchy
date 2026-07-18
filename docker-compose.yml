@@ -18,6 +18,9 @@ services:
       PORT: "3000"
       GIGAMAIL_DATA_DIR: /data
       GIGAMAIL_STATIC_DIR: /app/dist
+      # Set by the production deploy script so health checks can prove which
+      # exact tested revision is serving traffic.
+      GIGAMAIL_RELEASE_SHA: ${GIGAMAIL_RELEASE_SHA:-}
       # The privacy launcher provides this only for its own Compose invocation.
       # An empty value keeps remote-content requests on their normal path.
       REMOTE_CONTENT_PROXY_URL: ${REMOTE_CONTENT_PROXY_URL:-}
@@ -74,7 +77,13 @@ services:
       - privacy-net
       - tor-egress
     healthcheck:
-      test: ["CMD", "nc", "-z", "127.0.0.1", "8118"]
+      test:
+        - CMD-SHELL
+        - >-
+          nc -z -w 3 127.0.0.1 8118 &&
+          printf 'AUTHENTICATE\r\nGETINFO status/bootstrap-phase\r\nQUIT\r\n' |
+          nc -w 3 127.0.0.1 9051 |
+          grep -q 'PROGRESS=100'
       interval: 30s
       timeout: 5s
       start_period: 45s
