@@ -34,6 +34,18 @@ const normalizeCategory = (value) => {
 
 const emptyCategoryCounts = () => Object.fromEntries(SMART_CATEGORY_SLUGS.map((category) => [category, 0]));
 
+const emptyFolderCounts = () => ({ inbox: 0, starred: 0, snoozed: 0, drafts: 0 });
+
+const sumFolderCounts = (accounts, repos) => accounts.reduce((totals, account) => {
+  const counts = repos.messages.folderCounts(account.id);
+  return {
+    inbox: totals.inbox + counts.inbox,
+    starred: totals.starred + counts.starred,
+    snoozed: totals.snoozed + counts.snoozed,
+    drafts: totals.drafts + counts.drafts,
+  };
+}, emptyFolderCounts());
+
 const booleanField = (value, fallback, fieldName) => {
   if (value === undefined) return fallback;
   if (typeof value === 'boolean') return value;
@@ -357,6 +369,7 @@ export function registerApi(app, { config, repos, mailService, remoteContent }) 
         page,
         pageSize,
         categoryCounts: emptyCategoryCounts(),
+        folderCounts: sumFolderCounts(accounts, repos),
       });
     }
     const mailbox = String(request.query.mailbox || 'INBOX');
@@ -428,6 +441,7 @@ export function registerApi(app, { config, repos, mailService, remoteContent }) 
       page,
       pageSize,
       categoryCounts,
+      folderCounts: sumFolderCounts(accounts, repos),
     });
   });
   router.get('/messages/:id', (request, response) => {

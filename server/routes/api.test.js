@@ -175,6 +175,11 @@ test('message API filters unified mail by smart category and account creation is
   const all = await allResponse.json();
   assert.equal(all.total, 5);
   assert.equal(Object.values(all.categoryCounts).reduce((sum, count) => sum + count, 0), all.total);
+  // Sidebar badges are conversation-level and stay available regardless of the
+  // active folder view. All five seeded messages are unread inbox mail.
+  assert.equal(all.folderCounts.inbox, 5);
+  assert.equal(all.folderCounts.starred, 0);
+  assert.equal(all.folderCounts.drafts, 0);
 
   const invalidResponse = await fetch(`${origin}/api/messages?category=unknown`);
   assert.equal(invalidResponse.status, 400);

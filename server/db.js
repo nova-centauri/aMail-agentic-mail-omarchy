@@ -382,6 +382,39 @@ export function createRepositories(db) {
     SELECT category, COUNT(*) AS count FROM ranked
       WHERE message_rank = 1 AND (@query = '' OR thread_matches = 1)
       GROUP BY category`),
+    // Conversation-level badges for the sidebar: unread inbox threads, starred
+    // threads, and drafts. Counts are account-scoped and independent of the list
+    // filter so switching folders does not zero out the badges.
+    folderBadgeCounts: db.prepare(`SELECT
+      (
+        SELECT COUNT(*) FROM (
+          SELECT thread_id FROM messages
+          WHERE account_id = @accountId
+            AND mailbox = 'INBOX'
+            AND is_archived = 0 AND is_trashed = 0 AND is_spam = 0
+            AND is_read = 0
+            AND (snoozed_until IS NULL OR snoozed_until <= @now)
+          GROUP BY thread_id
+        )
+      ) AS inbox,
+      (
+        SELECT COUNT(*) FROM (
+          SELECT thread_id FROM messages
+          WHERE account_id = @accountId
+            AND is_starred = 1 AND is_trashed = 0
+          GROUP BY thread_id
+        )
+      ) AS starred,
+      (
+        SELECT COUNT(*) FROM (
+          SELECT thread_id FROM messages
+          WHERE account_id = @accountId
+            AND snoozed_until > @now AND is_trashed = 0 AND is_spam = 0
+          GROUP BY thread_id
+        )
+      ) AS snoozed,
+      (SELECT COUNT(*) FROM drafts WHERE account_id = @accountId) AS drafts
+    `),
     messageInsert: db.prepare(`INSERT INTO messages (
       id, account_id, thread_id, mailbox, uid, rfc_message_id, in_reply_to, references_json,
       subject, from_name, from_email, to_json, cc_json, bcc_json, reply_to_json,
@@ -528,6 +561,15 @@ export function createRepositories(db) {
           if (isSmartCategory(row.category)) counts[row.category] = row.count;
         }
         return counts;
+      },
+      folderCounts(accountId) {
+        const row = queries.folderBadgeCounts.get({ accountId, now: now() }) || {};
+        return {
+          inbox: Number(row.inbox) || 0,
+          starred: Number(row.starred) || 0,
+          snoozed: Number(row.snoozed) || 0,
+          drafts: Number(row.drafts) || 0,
+        };
       },
       forThread: (threadId) => queries.messagesByThread.all(threadId).map(publicMessage),
       findByRfcId: (accountId, messageId) => publicMessage(queries.messageByRfcId.get(accountId, messageId)),

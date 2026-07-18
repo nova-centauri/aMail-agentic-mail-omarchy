@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 const API_BASE = (import.meta.env.VITE_API_BASE || '/api').replace(/\/$/, '');
 const ACCESS_TOKEN_KEY = 'gigamail-access-token';
+const PREFS_KEY = 'gigamail-ui-prefs';
+const EMPTY_FOLDER_COUNTS = { inbox: 0, starred: 0, snoozed: 0, drafts: 0 };
 
 function getAccessToken() {
   try {
@@ -17,6 +19,27 @@ function persistAccessToken(token) {
     else window.sessionStorage.removeItem(ACCESS_TOKEN_KEY);
   } catch {
     // Private browsing can deny session storage. The token still works for this page request.
+  }
+}
+
+function readUiPrefs() {
+  try {
+    const raw = window.localStorage.getItem(PREFS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeUiPrefs(partial) {
+  try {
+    const next = { ...readUiPrefs(), ...partial };
+    window.localStorage.setItem(PREFS_KEY, JSON.stringify(next));
+    return next;
+  } catch {
+    return partial;
   }
 }
 
@@ -553,9 +576,15 @@ function normalizeMessage(raw, index = 0) {
 
 function inferFolder(raw = {}) {
   if (raw.folder) return String(raw.folder).toLowerCase();
+  if (raw.isDraft || raw.draftId || raw.draft_id) return 'drafts';
   if (raw.isSent) return 'sent';
   if (raw.isTrashed) return 'trash';
   if (raw.isSpam) return 'spam';
+  const snoozedUntil = raw.snoozedUntil || raw.snoozed_until;
+  if (snoozedUntil) {
+    const until = new Date(snoozedUntil);
+    if (!Number.isNaN(until.valueOf()) && until > new Date()) return 'snoozed';
+  }
   if (raw.isArchived) return 'archive';
   const mailbox = String(raw.mailbox || 'inbox').toLowerCase();
   if (/sent/.test(mailbox)) return 'sent';
@@ -564,6 +593,16 @@ function inferFolder(raw = {}) {
   if (/(spam|junk)/.test(mailbox)) return 'spam';
   if (/(archive|all mail)/.test(mailbox)) return 'archive';
   return 'inbox';
+}
+
+function formatAttachmentSize(size) {
+  if (size == null || size === '') return '';
+  if (typeof size === 'string' && /[a-z]/i.test(size)) return size;
+  const bytes = Number(size);
+  if (!Number.isFinite(bytes) || bytes < 0) return String(size);
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
 }
 
 function normalizeThread(raw, index = 0) {
@@ -816,6 +855,7 @@ function Avatar({ person, size = 'md', className = '' }) {
   const [imageFailed, setImageFailed] = useState(false);
   const source = person || {};
   const image = source.avatarUrl || source.avatar;
+  useEffect(() => { setImageFailed(false); }, [image]);
   const style = source.color ? { '--avatar-color': source.color } : undefined;
   return (
     <span className={`avatar avatar-${size} ${className}`} style={style} aria-label={source.name || source.email || 'Profile'}>
@@ -843,7 +883,7 @@ function Tooltip({ children, text }) {
   return <span className="tooltip-wrap" data-tooltip={text}>{children}</span>;
 }
 
-function Topbar({ onToggleSidebar, query, setQuery, onOpenSettings, onOpenProfile, onFocusSmartFilters, account, isDemo }) {
+function Topbar({ onToggleSidebar, onGoHome, query, setQuery, onOpenSettings, onOpenProfile, onFocusSmartFilters, account, isDemo }) {
   const searchRef = useRef(null);
   useEffect(() => {
     const focusSearch = (event) => {
@@ -863,7 +903,7 @@ function Topbar({ onToggleSidebar, query, setQuery, onOpenSettings, onOpenProfil
           <Icon name="menu" />
         </IconButton>
       </Tooltip>
-      <button type="button" className="brand" aria-label="GigaMail home">
+      <button type="button" className="brand" aria-label="GigaMail home" onClick={onGoHome}>
         <span className="brand-mark"><span>G</span></span>
         <span className="brand-name">GigaMail</span>
         {isDemo && <span className="preview-pill">Preview</span>}
@@ -890,14 +930,8 @@ function Topbar({ onToggleSidebar, query, setQuery, onOpenSettings, onOpenProfil
         </Tooltip>
       </div>
       <div className="top-actions">
-        <Tooltip text="Support">
-          <IconButton label="Support"><Icon name="help" /></IconButton>
-        </Tooltip>
         <Tooltip text="Quick settings">
           <IconButton label="Quick settings" onClick={onOpenSettings}><Icon name="settings" /></IconButton>
-        </Tooltip>
-        <Tooltip text="Google apps">
-          <IconButton label="Apps"><Icon name="apps" /></IconButton>
         </Tooltip>
         <button type="button" className="account-trigger" onClick={onOpenProfile} aria-label="Open account menu">
           <Avatar person={account} size="top" />
@@ -907,12 +941,13 @@ function Topbar({ onToggleSidebar, query, setQuery, onOpenSettings, onOpenProfil
   );
 }
 
-function Sidebar({ compact, mobileOpen, onCloseMobile, activeFolder, setActiveFolder, counts, onCompose, accounts, activeAccount, setActiveAccount, onSelectUnified, onOpenSettings, isDemo }) {
+function Sidebar({ compact, mobileOpen, onCloseMobile, activeFolder, setActiveFolder, counts, onCompose, accounts, activeAccount, setActiveAccount, onSelectUnified, onOpenSettings, isDemo, onAddAccount }) {
   const [showMore, setShowMore] = useState(false);
   const displayAccounts = accounts.length ? accounts : isDemo ? demoAccounts : [];
   const items = showMore
     ? [...folders, { id: 'all', label: 'All mail', icon: 'mail' }, { id: 'spam', label: 'Spam', icon: 'spam' }, { id: 'trash', label: 'Trash', icon: 'trash' }]
     : folders;
+  const connectedCount = accounts.length;
   return (
     <>
       {mobileOpen && <button type="button" className="sidebar-scrim" aria-label="Close navigation" onClick={onCloseMobile} />}
@@ -936,22 +971,16 @@ function Sidebar({ compact, mobileOpen, onCloseMobile, activeFolder, setActiveFo
                 {counts[item.id] > 0 && <span className="nav-count">{counts[item.id]}</span>}
               </button>
             ))}
-            <button type="button" className="nav-item more-nav" onClick={() => setShowMore((value) => !value)} title={compact ? 'More' : undefined}>
+            <button type="button" className="nav-item more-nav" onClick={() => setShowMore((value) => !value)} title={compact ? 'More' : undefined} aria-expanded={showMore}>
               <Icon name={showMore ? 'chevronDown' : 'chevronRight'} size={19} />
               <span className="nav-label">{showMore ? 'Less' : 'More'}</span>
             </button>
           </nav>
-          <div className="labels-section">
-            <div className="side-section-heading">
-              <span>Labels</span>
-              <IconButton label="Create new label"><Icon name="plus" size={18} /></IconButton>
-            </div>
-            <button type="button" className="nav-item label-nav"><span className="label-dot label-work" /><span className="nav-label">Work</span></button>
-            <button type="button" className="nav-item label-nav"><span className="label-dot label-important" /><span className="nav-label">Important</span></button>
-            <button type="button" className="nav-item label-nav"><span className="label-dot label-receipts" /><span className="nav-label">Receipts</span></button>
-          </div>
           <div className="accounts-section">
-            <div className="side-section-heading"><span>Accounts</span></div>
+            <div className="side-section-heading">
+              <span>Accounts</span>
+              <IconButton label="Add account" onClick={() => { onAddAccount?.(); onCloseMobile(); }}><Icon name="plus" size={18} /></IconButton>
+            </div>
             {accounts.length > 0 && (
               <button type="button" className={`account-row unified-account-row ${!activeAccount ? 'is-active' : ''}`} onClick={() => { onSelectUnified(); onCloseMobile(); }} title={compact ? 'All inboxes' : undefined}>
                 <Avatar person={UNIFIED_ACCOUNT} size="sm" />
@@ -960,17 +989,25 @@ function Sidebar({ compact, mobileOpen, onCloseMobile, activeFolder, setActiveFo
               </button>
             )}
             {displayAccounts.map((account) => (
-              <button type="button" key={account.id} className={`account-row ${activeAccount?.id === account.id ? 'is-active' : ''}`} onClick={() => setActiveAccount(account)} title={compact ? account.email : undefined}>
+              <button type="button" key={account.id} className={`account-row ${activeAccount?.id === account.id ? 'is-active' : ''}`} onClick={() => { setActiveAccount(account); onCloseMobile(); }} title={compact ? account.email : undefined}>
                 <Avatar person={account} size="sm" />
                 <span className="account-row-text"><strong>{account.name}</strong><small>{account.email}</small></span>
-                <span className={`connection-dot ${account.connected ? 'is-connected' : ''}`} />
+                <span className={`connection-dot ${account.connected ? 'is-connected' : ''}`} title={account.connected ? 'Connected' : 'Needs attention'} />
               </button>
             ))}
+            {!accounts.length && !isDemo && (
+              <button type="button" className="account-row" onClick={() => { onAddAccount?.(); onCloseMobile(); }}>
+                <span className="account-row-text"><strong>Connect an account</strong><small>Gmail, iCloud, or IMAP</small></span>
+              </button>
+            )}
           </div>
         </div>
-        <button type="button" className="storage-card" onClick={onOpenSettings} title={compact ? 'Storage and settings' : undefined}>
-          <span className="storage-meter"><i /></span>
-          <span className="storage-copy"><strong>3.1 GB of 20 GB</strong><small>Storage used</small></span>
+        <button type="button" className="storage-card" onClick={onOpenSettings} title={compact ? 'Settings' : undefined}>
+          <span className="storage-privacy-mark" aria-hidden="true"><Icon name="shield" size={16} /></span>
+          <span className="storage-copy">
+            <strong>{connectedCount ? `${connectedCount} account${connectedCount === 1 ? '' : 's'} connected` : isDemo ? 'Preview mailbox' : 'No accounts yet'}</strong>
+            <small>Trackers blocked · private images optional</small>
+          </span>
         </button>
       </aside>
     </>
@@ -982,24 +1019,20 @@ function ListToolbar({ visibleCount, totalCount, selectedCount, onRefresh, onBul
     <div className="list-toolbar">
       <div className="toolbar-left">
         <Checkbox checked={allSelected} onChange={onToggleAll} label="Select all conversations" />
-        <IconButton label="Select options"><Icon name="chevronDown" size={17} /></IconButton>
         {selectedCount > 0 ? (
           <>
             <IconButton label="Archive" onClick={() => onBulkAction('archive')}><Icon name="archive" /></IconButton>
             <IconButton label="Report spam" onClick={() => onBulkAction('spam')}><Icon name="spam" /></IconButton>
             <IconButton label="Delete" onClick={() => onBulkAction('trash')}><Icon name="trash" /></IconButton>
             <IconButton label="Mark as unread" onClick={() => onBulkAction('unread')}><Icon name="unread" /></IconButton>
-            <IconButton label="Snooze" onClick={() => onBulkAction('snooze')}><Icon name="snooze" /></IconButton>
+            <IconButton label="Snooze until tomorrow" onClick={() => onBulkAction('snooze')}><Icon name="snooze" /></IconButton>
           </>
         ) : (
           <IconButton label="Refresh" onClick={onRefresh} disabled={loading} className={loading ? 'is-spinning' : ''}><Icon name="refresh" /></IconButton>
         )}
-        <IconButton label="More"><Icon name="more" /></IconButton>
       </div>
       <div className="toolbar-right">
         <span className="range-copy">{visibleCount ? `1–${visibleCount} of ${totalCount}` : '0 of 0'}</span>
-        <IconButton label="Newer (pagination not yet available)" disabled><Icon name="back" size={19} /></IconButton>
-        <IconButton label="Older (pagination not yet available)" disabled><Icon name="forward" size={19} /></IconButton>
       </div>
     </div>
   );
@@ -1199,14 +1232,7 @@ function ThreadToolbar({ onBack, onAction, isRead }) {
         <IconButton label="Report spam" onClick={() => onAction('spam')}><Icon name="spam" /></IconButton>
         <IconButton label="Delete" onClick={() => onAction('trash')}><Icon name="trash" /></IconButton>
         <IconButton label={isRead ? 'Mark as unread' : 'Mark as read'} onClick={() => onAction(isRead ? 'unread' : 'read')}><Icon name={isRead ? 'unread' : 'mail'} /></IconButton>
-        <IconButton label="Snooze" onClick={() => onAction('snooze')}><Icon name="snooze" /></IconButton>
-        <IconButton label="Move to" onClick={() => onAction('move')}><Icon name="move" /></IconButton>
-        <IconButton label="Labels" onClick={() => onAction('label')}><Icon name="tag" /></IconButton>
-        <IconButton label="More"><Icon name="more" /></IconButton>
-      </div>
-      <div className="toolbar-right">
-        <IconButton label="Newer conversation (pagination not yet available)" disabled><Icon name="back" size={19} /></IconButton>
-        <IconButton label="Older conversation (pagination not yet available)" disabled><Icon name="forward" size={19} /></IconButton>
+        <IconButton label="Snooze until tomorrow" onClick={() => onAction('snooze')}><Icon name="snooze" /></IconButton>
       </div>
     </div>
   );
@@ -1236,13 +1262,16 @@ function MessageBody({ message, onLoadRemote, allowPrivateImages }) {
       ) : paragraphs.length ? paragraphs.map((paragraph, index) => <p key={index}>{paragraph}</p>) : <p className="muted-copy">This message has no plain-text preview.</p>}
       {message.attachments?.length > 0 && (
         <div className="attachments">
-          {message.attachments.map((attachment, index) => (
-            <button type="button" className="attachment-chip" key={attachment.id || attachment.name || index}>
-              <Icon name="attachment" size={17} />
-              <span>{attachment.name || 'Attachment'}</span>
-              {attachment.size && <small>{attachment.size}</small>}
-            </button>
-          ))}
+          {message.attachments.map((attachment, index) => {
+            const sizeLabel = formatAttachmentSize(attachment.size || attachment.sizeBytes || attachment.bytes);
+            return (
+              <span className="attachment-chip" key={attachment.id || attachment.name || index} title={attachment.name || 'Attachment'}>
+                <Icon name="attachment" size={17} />
+                <span>{attachment.name || 'Attachment'}</span>
+                {sizeLabel && <small>{sizeLabel}</small>}
+              </span>
+            );
+          })}
         </div>
       )}
     </div>
@@ -1267,7 +1296,7 @@ function MessageCard({ message, expanded, onToggle, onLoadRemote, onReply, onRep
             <span>to {recipientList || 'me'}</span>
             <div>
               <IconButton label="Reply" onClick={() => onReply(message)}><Icon name="reply" size={18} /></IconButton>
-              <IconButton label="More"><Icon name="more" size={18} /></IconButton>
+              <IconButton label="Forward" onClick={() => onForward(message)}><Icon name="forward" size={18} /></IconButton>
             </div>
           </div>
           <MessageBody message={message} onLoadRemote={onLoadRemote} allowPrivateImages={allowPrivateImages} />
@@ -1329,7 +1358,7 @@ function ThreadView({ thread, activeFolder, onBack, onAction, onLoadRemote, onRe
   );
 }
 
-function ComposeModal({ account, accounts, isDemo, onClose, onSent, onDraftSaved, onDraftRemoved, initialReply }) {
+function ComposeModal({ account, accounts, isDemo, onClose, onSent, onDraftSaved, onDraftRemoved, initialReply, onNotice }) {
   const [form, setForm] = useState({
     to: initialReply?.to || '',
     cc: initialReply?.cc || '',
@@ -1339,17 +1368,26 @@ function ComposeModal({ account, accounts, isDemo, onClose, onSent, onDraftSaved
   });
   const [extraFields, setExtraFields] = useState(Boolean(initialReply?.cc || initialReply?.bcc));
   const [isMinimized, setIsMinimized] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
   const [isSending, setIsSending] = useState(false);
   const [isSavingDraft, setIsSavingDraft] = useState(false);
   const [draftId, setDraftId] = useState(initialReply?.draftId || '');
   const [error, setError] = useState('');
   const [senderId, setSenderId] = useState(initialReply?.accountId || account?.id || accounts[0]?.id || '');
+  const formRef = useRef(form);
+  const draftIdRef = useRef(draftId);
+  formRef.current = form;
+  draftIdRef.current = draftId;
   const update = (key) => (event) => setForm((current) => ({ ...current, [key]: event.target.value }));
   useEffect(() => {
     setSenderId((current) => accounts.some((item) => item.id === current) ? current : initialReply?.accountId || account?.id || accounts[0]?.id || '');
   }, [account?.id, accounts, initialReply?.accountId]);
   const senderAccount = accounts.find((item) => item.id === senderId) || account || accounts[0] || null;
   const addressValues = (value) => value.split(',').map((item) => item.trim()).filter(Boolean);
+  const hasUnsavedContent = () => {
+    const current = formRef.current;
+    return Boolean(current.to.trim() || current.cc.trim() || current.bcc.trim() || current.subject.trim() || current.body.trim() || draftIdRef.current);
+  };
   const draftPayload = () => ({
     accountId: senderAccount?.id,
     threadId: initialReply?.threadId || null,
@@ -1360,9 +1398,16 @@ function ComposeModal({ account, accounts, isDemo, onClose, onSent, onDraftSaved
     textBody: form.body,
     htmlBody: plainTextToHtml(form.body),
   });
-  const saveDraft = async () => {
-    if (isSending || isSavingDraft) return;
-    if (!senderAccount?.id) { setError('Connect an account before saving this draft.'); return; }
+  const saveDraft = async ({ closeAfter = true } = {}) => {
+    if (isSending || isSavingDraft) return false;
+    if (!hasUnsavedContent()) {
+      if (closeAfter) onClose();
+      return true;
+    }
+    if (!senderAccount?.id) {
+      setError('Connect an account before saving this draft.');
+      return false;
+    }
     setError('');
     setIsSavingDraft(true);
     const payload = draftPayload();
@@ -1378,9 +1423,11 @@ function ComposeModal({ account, accounts, isDemo, onClose, onSent, onDraftSaved
         setDraftId(draft?.id || draftId);
         onDraftSaved(draft, senderAccount, false);
       }
-      onClose();
+      if (closeAfter) onClose();
+      return true;
     } catch (requestError) {
       setError(requestError.status === 401 || requestError.status === 403 ? 'Unlock GigaMail before saving this draft.' : `Draft could not be saved. ${requestError.message || 'Check the server connection and try again.'}`);
+      return false;
     } finally {
       setIsSavingDraft(false);
     }
@@ -1400,9 +1447,28 @@ function ComposeModal({ account, accounts, isDemo, onClose, onSent, onDraftSaved
       setIsSavingDraft(false);
     }
   };
+  useEffect(() => {
+    const handleEscape = (event) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (isExpanded) {
+        setIsExpanded(false);
+        return;
+      }
+      if (isMinimized) {
+        onClose();
+        return;
+      }
+      void saveDraft({ closeAfter: true });
+    };
+    window.addEventListener('keydown', handleEscape, true);
+    return () => window.removeEventListener('keydown', handleEscape, true);
+  });
   const send = async (event) => {
     event.preventDefault();
     if (!form.to.trim()) { setError('Add at least one recipient.'); return; }
+    if (!senderAccount?.id && !isDemo) { setError('Connect an account before sending.'); return; }
     setError('');
     setIsSending(true);
     // The server appends the selected identity's stored signature exactly once.
@@ -1419,10 +1485,15 @@ function ComposeModal({ account, accounts, isDemo, onClose, onSent, onDraftSaved
       ...(initialReply?.replyToMessageId ? { replyToMessageId: initialReply.replyToMessageId } : {}),
     };
     try {
+      if (isDemo) {
+        if (draftId) onDraftRemoved(draftId);
+        onSent(payload, true, senderAccount, null);
+        onClose();
+        return;
+      }
       const result = await api('/messages', { method: 'POST', body: JSON.stringify(payload) });
       if (draftId) {
-        if (isDemo) onDraftRemoved(draftId);
-        else void api(`/drafts/${encodeURIComponent(draftId)}`, { method: 'DELETE' }).then(() => onDraftRemoved(draftId)).catch(() => undefined);
+        void api(`/drafts/${encodeURIComponent(draftId)}`, { method: 'DELETE' }).then(() => onDraftRemoved(draftId)).catch(() => undefined);
       }
       onSent(payload, false, senderAccount, result);
       onClose();
@@ -1438,14 +1509,15 @@ function ComposeModal({ account, accounts, isDemo, onClose, onSent, onDraftSaved
       setIsSending(false);
     }
   };
+  const unavailable = (feature) => () => onNotice?.(`${feature} is not available yet in GigaMail.`);
   return (
-    <div className={`compose-window ${isMinimized ? 'is-minimized' : ''}`} role="dialog" aria-modal="true" aria-label="New message">
+    <div className={`compose-window ${isMinimized ? 'is-minimized' : ''} ${isExpanded ? 'is-expanded' : ''}`} role="dialog" aria-modal="true" aria-label="New message">
       <div className="compose-titlebar">
         <span>{draftId ? 'Draft' : initialReply?.mode === 'reply' || initialReply?.mode === 'reply-all' ? 'Reply' : initialReply?.mode === 'forward' ? 'Forward' : 'New Message'}</span>
         <div>
-          <IconButton label={isMinimized ? 'Restore' : 'Minimize'} onClick={() => setIsMinimized((value) => !value)}><Icon name="minimize" size={17} /></IconButton>
-          <IconButton label="Full screen"><Icon name="expand" size={16} /></IconButton>
-          <IconButton label={isSavingDraft ? 'Saving draft' : 'Save and close'} onClick={saveDraft} disabled={isSending || isSavingDraft}><Icon name="close" size={17} /></IconButton>
+          <IconButton label={isMinimized ? 'Restore' : 'Minimize'} onClick={() => { setIsMinimized((value) => !value); if (!isMinimized) setIsExpanded(false); }}><Icon name="minimize" size={17} /></IconButton>
+          <IconButton label={isExpanded ? 'Exit full screen' : 'Full screen'} onClick={() => { setIsExpanded((value) => !value); setIsMinimized(false); }}><Icon name="expand" size={16} /></IconButton>
+          <IconButton label={isSavingDraft ? 'Saving draft' : 'Save and close'} onClick={() => void saveDraft({ closeAfter: true })} disabled={isSending || isSavingDraft}><Icon name="close" size={17} /></IconButton>
         </div>
       </div>
       {!isMinimized && (
@@ -1466,12 +1538,11 @@ function ComposeModal({ account, accounts, isDemo, onClose, onSent, onDraftSaved
           <div className="recipient-line subject-line"><input value={form.subject} onChange={update('subject')} placeholder="Subject" aria-label="Subject" /></div>
           <textarea value={form.body} onChange={update('body')} placeholder="Write your message" aria-label="Message body" />
           {senderAccount?.signature && <div className="signature-preview">{senderAccount.signature}</div>}
-          {error && <p className="compose-error">{error}</p>}
+          {error && <p className="compose-error" role="alert">{error}</p>}
           <div className="compose-footer">
             <button type="submit" className="send-button" disabled={isSending || isSavingDraft}>{isSending ? 'Sending…' : 'Send'}</button>
-            <IconButton label="Attach files"><Icon name="attachment" /></IconButton>
-            <IconButton label="Insert link"><Icon name="link" /></IconButton>
-            <IconButton label="More options"><Icon name="more" /></IconButton>
+            <IconButton label="Attach files" onClick={unavailable('Attachments')}><Icon name="attachment" /></IconButton>
+            <IconButton label="Insert link" onClick={unavailable('Link insertion')}><Icon name="link" /></IconButton>
             <span className="compose-spacer" />
             <IconButton label="Discard draft" onClick={discardDraft} disabled={isSending || isSavingDraft}><Icon name="trash" /></IconButton>
           </div>
@@ -1491,8 +1562,7 @@ function Toggle({ checked, onChange, label, hint }) {
   );
 }
 
-function SettingsPanel({ open, onClose, accounts, activeAccount, setActiveAccount, privacy, setPrivacy, onAddAccount, onUnlock, onSaveSignature, showUnified }) {
-  const [density, setDensity] = useState('Default');
+function SettingsPanel({ open, onClose, accounts, activeAccount, setActiveAccount, privacy, setPrivacy, density, setDensity, onAddAccount, onUnlock, onSaveSignature, showUnified }) {
   const [signature, setSignature] = useState('');
   useEffect(() => setSignature(activeAccount?.signature || ''), [activeAccount?.id, activeAccount?.signature]);
   if (!open) return null;
@@ -1525,8 +1595,21 @@ function SettingsPanel({ open, onClose, accounts, activeAccount, setActiveAccoun
           </section>
           <section className="settings-section">
             <h3>Density</h3>
-            <div className="density-options">
-              {['Default', 'Comfortable', 'Compact'].map((option) => <button type="button" key={option} onClick={() => setDensity(option)} className={density === option ? 'is-selected' : ''}><span className={`density-preview density-${option.toLowerCase()}`}><i /><i /><i /></span>{option}</button>)}
+            <p className="settings-description">How much space each conversation uses in the list.</p>
+            <div className="density-options" role="radiogroup" aria-label="Mailbox density">
+              {['Default', 'Comfortable', 'Compact'].map((option) => (
+                <button
+                  type="button"
+                  key={option}
+                  role="radio"
+                  aria-checked={density === option}
+                  onClick={() => setDensity(option)}
+                  className={density === option ? 'is-selected' : ''}
+                >
+                  <span className={`density-preview density-${option.toLowerCase()}`}><i /><i /><i /></span>
+                  {option}
+                </button>
+              ))}
             </div>
           </section>
           <section className="settings-section privacy-section">
@@ -1536,7 +1619,16 @@ function SettingsPanel({ open, onClose, accounts, activeAccount, setActiveAccoun
               <span><strong>Block email trackers</strong><small>Always on for known tracking pixels, even when images are allowed.</small></span>
               <em><Icon name="shield" size={15} /> Locked on</em>
             </div>
-            <Toggle checked={privacy.privateImages} onChange={(value) => setPrivacy((current) => ({ ...current, privateImages: value }))} label="Offer private image loading" hint="Show a per-message option to load non-tracking images through the GigaMail relay." />
+            <Toggle
+              checked={privacy.privateImages}
+              onChange={(value) => setPrivacy((current) => {
+                const next = { ...current, privateImages: value };
+                writeUiPrefs({ privateImages: value });
+                return next;
+              })}
+              label="Offer private image loading"
+              hint="Show a per-message option to load non-tracking images through the GigaMail relay."
+            />
           </section>
           <section className="settings-section signature-section">
             <h3>Signature</h3>
@@ -1549,7 +1641,6 @@ function SettingsPanel({ open, onClose, accounts, activeAccount, setActiveAccoun
             <button type="button" className="secondary-button" onClick={onUnlock}>Unlock server</button>
           </section>
         </div>
-        <button type="button" className="full-settings-button">See all settings</button>
       </aside>
     </>
   );
@@ -1871,7 +1962,9 @@ function ProfileMenu({ open, onClose, account, accounts, setActiveAccount, onSel
           {showUnified && <button type="button" onClick={() => { onSelectUnified(); onClose(); }}><Avatar person={UNIFIED_ACCOUNT} size="sm" /><span>All inboxes</span>{account?.isUnified && <Icon name="check" size={17} />}</button>}
           {accounts.map((item) => <button type="button" key={item.id} onClick={() => { setActiveAccount(item); onClose(); }}><Avatar person={item} size="sm" /><span>{item.email}</span>{item.id === account?.id && <Icon name="check" size={17} />}</button>)}
         </div>
-        <div className="profile-menu-footer"><button type="button">Privacy Policy</button><i>•</i><button type="button">Terms of Service</button></div>
+        <div className="profile-menu-footer">
+          <span>Self-hosted · credentials stay on your server</span>
+        </div>
       </section>
     </>
   );
@@ -1888,7 +1981,8 @@ function Toast({ notice, onClose }) {
 }
 
 export default function App() {
-  const [sidebarCompact, setSidebarCompact] = useState(false);
+  const initialPrefs = useMemo(() => readUiPrefs(), []);
+  const [sidebarCompact, setSidebarCompact] = useState(Boolean(initialPrefs.sidebarCompact));
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [activeFolder, setActiveFolder] = useState('inbox');
   const [accounts, setAccounts] = useState([]);
@@ -1901,6 +1995,7 @@ export default function App() {
   const [activeCategory, setActiveCategory] = useState('all');
   const [mailTotal, setMailTotal] = useState(0);
   const [categoryCounts, setCategoryCounts] = useState(() => countSmartCategories([]));
+  const [folderCounts, setFolderCounts] = useState(() => ({ ...EMPTY_FOLDER_COUNTS }));
   const [loading, setLoading] = useState(true);
   const [isDemo, setIsDemo] = useState(false);
   const [offline, setOffline] = useState(false);
@@ -1909,7 +2004,8 @@ export default function App() {
   const [composeOpen, setComposeOpen] = useState(false);
   const [composeContext, setComposeContext] = useState(null);
   const [notice, setNotice] = useState('');
-  const [privacy, setPrivacy] = useState({ privateImages: true });
+  const [privacy, setPrivacy] = useState({ privateImages: initialPrefs.privateImages !== false });
+  const [density, setDensity] = useState(['Default', 'Comfortable', 'Compact'].includes(initialPrefs.density) ? initialPrefs.density : 'Default');
   const [accessToken, setAccessToken] = useState(() => getAccessToken());
   const [accessOpen, setAccessOpen] = useState(false);
   const [authRequired, setAuthRequired] = useState(false);
@@ -1917,10 +2013,28 @@ export default function App() {
   const loadRequestRef = useRef(0);
   const demoDraftsRef = useRef([]);
 
+  const updateDensity = (value) => {
+    setDensity(value);
+    writeUiPrefs({ density: value });
+  };
+
+  const toggleSidebarCompact = () => {
+    setSidebarCompact((current) => {
+      const next = !current;
+      writeUiPrefs({ sidebarCompact: next });
+      return next;
+    });
+  };
+
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedQuery(query.trim()), 280);
     return () => window.clearTimeout(timer);
   }, [query]);
+
+  useEffect(() => {
+    const unread = Number(folderCounts.inbox) || 0;
+    document.title = unread > 0 ? `(${unread}) GigaMail` : 'GigaMail';
+  }, [folderCounts.inbox]);
 
   const openNewCompose = () => {
     setComposeContext(null);
@@ -2002,6 +2116,7 @@ export default function App() {
         setThreads([]);
         setMailTotal(0);
         setCategoryCounts(countSmartCategories([]));
+        setFolderCounts({ ...EMPTY_FOLDER_COUNTS });
         setSelectedThread(null);
         return;
       }
@@ -2023,6 +2138,14 @@ export default function App() {
       const nextCategoryCounts = mailData?.categoryCounts && typeof mailData.categoryCounts === 'object'
         ? Object.fromEntries(SMART_CATEGORIES.filter((item) => item.id !== 'all').map((item) => [item.id, Number(mailData.categoryCounts[item.id] || 0)]))
         : countSmartCategories(nextThreads);
+      const nextFolderCounts = mailData?.folderCounts && typeof mailData.folderCounts === 'object'
+        ? {
+          inbox: Number(mailData.folderCounts.inbox) || 0,
+          starred: Number(mailData.folderCounts.starred) || 0,
+          snoozed: Number(mailData.folderCounts.snoozed) || 0,
+          drafts: Number(mailData.folderCounts.drafts) || 0,
+        }
+        : null;
       setAuthRequired(false);
       setOffline(false);
       setAccounts(isFreshSetup ? [] : nextAccounts);
@@ -2032,6 +2155,17 @@ export default function App() {
       setThreads(isFreshSetup ? previewThreads : nextThreads);
       setMailTotal(isFreshSetup ? previewThreads.length : Number.isFinite(responseTotal) ? responseTotal : nextThreads.length);
       setCategoryCounts(isFreshSetup ? countSmartCategories(previewThreads) : nextCategoryCounts);
+      if (isFreshSetup) {
+        const preview = previewThreads;
+        setFolderCounts({
+          inbox: preview.filter((thread) => thread.folder === 'inbox' && thread.unread).length,
+          starred: preview.filter((thread) => thread.starred).length,
+          snoozed: preview.filter((thread) => thread.folder === 'snoozed').length,
+          drafts: preview.filter((thread) => thread.folder === 'drafts').length + demoDraftsRef.current.length,
+        });
+      } else if (nextFolderCounts) {
+        setFolderCounts(nextFolderCounts);
+      }
       setIsDemo(isFreshSetup);
       if (keepSelection && selectedThread) {
         const replacement = (isFreshSetup ? previewThreads : nextThreads).find((item) => item.id === selectedThread.id);
@@ -2050,6 +2184,7 @@ export default function App() {
         setThreads([]);
         setMailTotal(0);
         setCategoryCounts(countSmartCategories([]));
+        setFolderCounts({ ...EMPTY_FOLDER_COUNTS });
         setSelectedThread(null);
       } else {
         // Keep the last confirmed mailbox intact. Preview data is only enabled
@@ -2103,20 +2238,22 @@ export default function App() {
 
   useEffect(() => {
     const handleKeys = (event) => {
-      if ((event.key === 'c' || event.key === 'C') && !event.metaKey && !event.ctrlKey && document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA') {
+      if ((event.key === 'c' || event.key === 'C') && !event.metaKey && !event.ctrlKey && document.activeElement?.tagName !== 'INPUT' && document.activeElement?.tagName !== 'TEXTAREA' && document.activeElement?.tagName !== 'SELECT') {
         event.preventDefault();
         openNewCompose();
       }
       if (event.key === 'Escape') {
-        closeCompose();
+        // Compose handles Escape itself (save-and-close) with a capturing listener.
+        if (composeOpen) return;
         setSettingsOpen(false);
         setProfileOpen(false);
         setMobileSidebarOpen(false);
+        setSelectedThread(null);
       }
     };
     window.addEventListener('keydown', handleKeys);
     return () => window.removeEventListener('keydown', handleKeys);
-  }, []);
+  }, [composeOpen]);
 
   const visibleThreads = useMemo(() => {
     const search = query.trim().toLowerCase();
@@ -2132,10 +2269,22 @@ export default function App() {
   const visibleTotal = isDemo ? visibleThreads.length : mailTotal;
 
   const counts = useMemo(() => ({
-    inbox: threads.filter((thread) => thread.folder === 'inbox' && thread.unread).length,
-    starred: threads.filter((thread) => thread.starred).length,
-    drafts: threads.filter((thread) => thread.folder === 'drafts').length,
-  }), [threads]);
+    inbox: folderCounts.inbox,
+    starred: folderCounts.starred,
+    snoozed: folderCounts.snoozed,
+    drafts: folderCounts.drafts,
+  }), [folderCounts]);
+
+  const goHome = () => {
+    setActiveFolder('inbox');
+    setActiveCategory('all');
+    setQuery('');
+    setSelectedThread(null);
+    setSelectedIds([]);
+    setMobileSidebarOpen(false);
+    setSettingsOpen(false);
+    setProfileOpen(false);
+  };
 
   const openThread = async (thread) => {
     if (thread.folder === 'drafts' || thread.draftId) {
@@ -2158,7 +2307,10 @@ export default function App() {
     const provisional = { ...thread, unread: false };
     setSelectedThread(provisional);
     setThreads((current) => current.map((item) => item.id === thread.id ? provisional : item));
-    if (!alreadyRead && !isDemo) api(`/messages/${encodeURIComponent(thread.id)}/read`, { method: 'POST' }).catch(() => undefined);
+    if (!alreadyRead) {
+      setFolderCounts((current) => ({ ...current, inbox: Math.max(0, current.inbox - 1) }));
+      if (!isDemo) api(`/messages/${encodeURIComponent(thread.id)}/read`, { method: 'POST' }).catch(() => undefined);
+    }
     if (isDemo || thread.messages?.length > 1) return;
     try {
       const data = await api(`/threads/${encodeURIComponent(thread.threadId)}`);
@@ -2178,6 +2330,10 @@ export default function App() {
     const next = { ...thread, starred: !thread.starred };
     setThreads((current) => current.map((item) => item.id === thread.id ? next : item));
     setSelectedThread((current) => current?.id === thread.id ? next : current);
+    setFolderCounts((current) => ({
+      ...current,
+      starred: Math.max(0, current.starred + (next.starred ? 1 : -1)),
+    }));
     if (!isDemo) api(`/messages/${encodeURIComponent(thread.id)}/star`, { method: 'POST', body: JSON.stringify({ starred: next.starred }) }).catch(() => setNotice('Could not update the star.'));
   };
 
@@ -2195,9 +2351,28 @@ export default function App() {
       if (selectedThread && affected.has(selectedThread.id)) setSelectedThread(null);
     }
     setSelectedIds([]);
-    const labels = { archive: 'Conversation archived', trash: 'Conversation moved to Trash', spam: 'Conversation reported as spam', snooze: 'Conversation snoozed', unread: 'Marked as unread', read: 'Marked as read', move: 'Move menu will be available with folders', label: 'Label menu will be available with labels' };
+    const labels = {
+      archive: 'Conversation archived',
+      trash: 'Conversation moved to Trash',
+      spam: 'Conversation reported as spam',
+      snooze: 'Conversation snoozed until tomorrow',
+      unread: 'Marked as unread',
+      read: 'Marked as read',
+    };
     setNotice(labels[action] || 'Updated');
-    if (!isDemo && !['move', 'label'].includes(action)) {
+    if (['archive', 'trash', 'spam', 'snooze', 'unread', 'read'].includes(action)) {
+      setFolderCounts((current) => {
+        // Keep badges roughly honest after optimistic local actions until the
+        // next full mailbox load replaces them with server totals.
+        const delta = targetIds.length;
+        if (action === 'unread') return { ...current, inbox: current.inbox + delta };
+        if (action === 'read') return { ...current, inbox: Math.max(0, current.inbox - delta) };
+        if (action === 'snooze') return { ...current, snoozed: current.snoozed + delta, inbox: Math.max(0, current.inbox - delta) };
+        if (['archive', 'trash', 'spam'].includes(action)) return { ...current, inbox: Math.max(0, current.inbox - delta) };
+        return current;
+      });
+    }
+    if (!isDemo && labels[action]) {
       void Promise.all(targetIds.map((id) => api(`/messages/${encodeURIComponent(id)}/${action}`, { method: 'POST' })))
         .then((results) => {
           const outcomes = results.flatMap((result) => result?.messages || (result?.message ? [result.message] : []))
@@ -2206,7 +2381,8 @@ export default function App() {
           const failed = outcomes.find((outcome) => outcome.status === 'failed');
           const unsynced = outcomes.find((outcome) => ['local-only', 'skipped'].includes(outcome.status));
           if (failed) setNotice(`${labels[action] || 'Updated'} locally; IMAP did not confirm the change.`);
-          else if (unsynced) setNotice(`${labels[action] || 'Updated'} locally; the provider change was not available.`);
+          else if (unsynced && action !== 'snooze') setNotice(`${labels[action] || 'Updated'} locally; the provider change was not available.`);
+          else if (action === 'snooze') setNotice(labels.snooze);
         })
         .catch(() => setNotice('The local view was updated; the server action failed.'));
     }
@@ -2281,16 +2457,23 @@ export default function App() {
     });
     if (localOnly) demoDraftsRef.current = [draftThread, ...demoDraftsRef.current.filter((item) => item.draftId !== id)];
     setThreads((current) => [draftThread, ...current.filter((item) => item.draftId !== id && item.id !== `draft:${id}`)]);
-    if (!localOnly && activeFolder === 'drafts' && !replacesExisting) setMailTotal((current) => current + 1);
+    if (!replacesExisting) {
+      setFolderCounts((current) => ({ ...current, drafts: current.drafts + 1 }));
+      if (!localOnly && activeFolder === 'drafts') setMailTotal((current) => current + 1);
+    }
     setNotice(localOnly ? 'Draft saved in this preview.' : 'Draft saved.');
   };
 
   const draftRemoved = (draftId) => {
     const id = String(draftId);
-    const existed = threads.some((item) => item.draftId === id || item.id === `draft:${id}`);
+    const existed = threads.some((item) => item.draftId === id || item.id === `draft:${id}`)
+      || demoDraftsRef.current.some((item) => item.draftId === id || item.id === `draft:${id}`);
     demoDraftsRef.current = demoDraftsRef.current.filter((item) => item.draftId !== id && item.id !== `draft:${id}`);
     setThreads((current) => current.filter((item) => item.draftId !== id && item.id !== `draft:${id}`));
-    if (!isDemo && activeFolder === 'drafts' && existed) setMailTotal((current) => Math.max(0, current - 1));
+    if (existed) {
+      setFolderCounts((current) => ({ ...current, drafts: Math.max(0, current.drafts - 1) }));
+      if (!isDemo && activeFolder === 'drafts') setMailTotal((current) => Math.max(0, current - 1));
+    }
     setSelectedThread((current) => current?.draftId === id || current?.id === `draft:${id}` ? null : current);
   };
 
@@ -2355,10 +2538,13 @@ export default function App() {
   const identityAccounts = hasConnectedAccounts ? accounts : isDemo ? demoAccounts : [];
   const composeAccount = activeAccount || identityAccounts[0] || null;
 
+  const densityClass = density === 'Comfortable' ? 'density-comfortable-ui' : density === 'Compact' ? 'density-compact-ui' : '';
+
   return (
-    <div className={`mail-app ${sidebarCompact ? 'sidebar-compact' : ''} ${selectedThread ? 'thread-open' : ''}`}>
+    <div className={`mail-app ${sidebarCompact ? 'sidebar-compact' : ''} ${selectedThread ? 'thread-open' : ''} ${densityClass}`.trim()}>
       <Topbar
-        onToggleSidebar={() => window.innerWidth <= 840 ? setMobileSidebarOpen((value) => !value) : setSidebarCompact((value) => !value)}
+        onToggleSidebar={() => (window.innerWidth <= 840 ? setMobileSidebarOpen((value) => !value) : toggleSidebarCompact())}
+        onGoHome={goHome}
         query={query}
         setQuery={setQuery}
         onOpenSettings={() => setSettingsOpen(true)}
@@ -2383,6 +2569,7 @@ export default function App() {
         setActiveAccount={setActiveAccount}
         onSelectUnified={() => setActiveAccount(null)}
         onOpenSettings={() => setSettingsOpen(true)}
+        onAddAccount={() => setAddAccountOpen(true)}
         isDemo={isDemo}
       />
       <main className="mail-workspace">
@@ -2412,8 +2599,8 @@ export default function App() {
           )}
         </div>
       </main>
-      {composeOpen && <ComposeModal account={composeAccount} accounts={identityAccounts} isDemo={isDemo} initialReply={composeContext} onClose={closeCompose} onSent={sendMessage} onDraftSaved={draftSaved} onDraftRemoved={draftRemoved} />}
-      <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} accounts={identityAccounts} activeAccount={activeAccount} setActiveAccount={setActiveAccount} privacy={privacy} setPrivacy={setPrivacy} onAddAccount={() => setAddAccountOpen(true)} onUnlock={() => setAccessOpen(true)} onSaveSignature={saveAccountSignature} showUnified={hasConnectedAccounts} />
+      {composeOpen && <ComposeModal account={composeAccount} accounts={identityAccounts} isDemo={isDemo} initialReply={composeContext} onClose={closeCompose} onSent={sendMessage} onDraftSaved={draftSaved} onDraftRemoved={draftRemoved} onNotice={setNotice} />}
+      <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} accounts={identityAccounts} activeAccount={activeAccount} setActiveAccount={setActiveAccount} privacy={privacy} setPrivacy={setPrivacy} density={density} setDensity={updateDensity} onAddAccount={() => setAddAccountOpen(true)} onUnlock={() => setAccessOpen(true)} onSaveSignature={saveAccountSignature} showUnified={hasConnectedAccounts} />
       <ProfileMenu open={profileOpen} onClose={() => setProfileOpen(false)} account={displayAccount} accounts={identityAccounts} setActiveAccount={setActiveAccount} onSelectUnified={() => setActiveAccount(null)} onOpenSettings={() => setSettingsOpen(true)} showUnified={hasConnectedAccounts} />
       {addAccountOpen && <AddAccountModal onClose={() => setAddAccountOpen(false)} onAdded={accountAdded} />}
       <AccessPanel open={accessOpen} required={authRequired} currentToken={accessToken} onSave={unlockServer} onClose={() => setAccessOpen(false)} />
