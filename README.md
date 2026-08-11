@@ -81,6 +81,50 @@ This protects your browser IP and stops open-tracking pixels by default. It does
 - Keep the service bound to localhost unless you put it behind TLS and an authentication-aware reverse proxy.
 - Use `docker compose logs -f gigamail` to diagnose connections and `docker compose pull && docker compose up -d` to update images.
 
+## MCP connector
+
+GigaMail exposes a Cursor-compatible **Streamable HTTP** MCP endpoint on the same Express app as the REST API:
+
+| | |
+| --- | --- |
+| URL | `https://<host>/mcp` (for example `https://mail.xer0.io/mcp`) |
+| Transport | Streamable HTTP (`POST /mcp`) |
+| Auth | Same gate as `/api`: `Authorization: Bearer <GIGAMAIL_ACCESS_TOKEN>` (or the existing `gigamail_session` cookie) |
+
+Unauthenticated requests receive `401` with `AUTH_REQUIRED`. Tools call the same repositories and `mailService` as the REST API; stored IMAP/SMTP credentials are never returned.
+
+### Cursor / remote MCP config
+
+In Cursor: **Settings → Tools & Integrations → MCP**, or add to `~/.cursor/mcp.json` / `.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "gigamail": {
+      "url": "https://mail.xer0.io/mcp",
+      "headers": {
+        "Authorization": "Bearer ${env:GIGAMAIL_ACCESS_TOKEN}"
+      }
+    }
+  }
+}
+```
+
+Replace the URL with your deployment host. Prefer `${env:GIGAMAIL_ACCESS_TOKEN}` so the token is not committed.
+
+### Tools
+
+| Tool | Purpose |
+| --- | --- |
+| `list_accounts` | Connected accounts (id, email, provider, sync status) |
+| `list_providers` | Provider presets / discovery for onboarding |
+| `list_messages` | List/search conversations (`folder`, `accountId`, `category`, `q`, `page`, `pageSize`) |
+| `get_message` / `get_thread` | Fetch one message or a full thread |
+| `send_message` | Compose/send via SMTP |
+| `message_action` | `read` / `unread` / `star` / `unstar` / `archive` / `unarchive` / `trash` / `untrash` / `spam` / `unspam` / `snooze` |
+| `sync_mail` | Sync one account or all |
+| `test_account` / `add_account` / `update_account` / `delete_account` | Account lifecycle (credentials accepted for connect/save only; never echoed) |
+
 ## Local development
 
 ```sh

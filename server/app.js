@@ -4,6 +4,7 @@ import express from 'express';
 import helmet from 'helmet';
 import pinoHttp from 'pino-http';
 import { registerApi } from './routes/api.js';
+import { registerMcp } from './routes/mcp.js';
 import { errorHandler, notFound } from './middleware/errors.js';
 
 function safeRequestUrl(value) {
@@ -64,11 +65,12 @@ export function createApp({ config, repos, mailService, remoteContent, logger })
   app.use(express.json({ limit: '2mb', type: ['application/json', 'application/*+json'] }));
 
   registerApi(app, { config, repos, mailService, remoteContent });
+  registerMcp(app, { config, repos, mailService, remoteContent });
   app.use('/api', notFound);
 
   if (fs.existsSync(config.staticDir)) {
     app.use(express.static(config.staticDir, { index: false, maxAge: config.env === 'production' ? '1h' : 0 }));
-    app.get(/^(?!\/api(?:\/|$)).*/, (request, response, next) => {
+    app.get(/^(?!\/(?:api|mcp)(?:\/|$)).*/, (request, response, next) => {
       if (!request.accepts('html')) return next();
       response.sendFile(path.join(config.staticDir, 'index.html'));
     });
