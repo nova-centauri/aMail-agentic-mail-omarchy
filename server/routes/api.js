@@ -1,87 +1,24 @@
 import express from 'express';
 import rateLimit from 'express-rate-limit';
-import { decryptJson, encryptJson, timingSafeMatch } from '../services/crypto.js';
+import { timingSafeMatch } from '../services/crypto.js';
 import { hydrateRemoteContent } from '../services/message-html.js';
 import {
-  getPersonFlag,
+  accountTestInput,
+  parseAvatar,
+  serializeAccountInput,
+} from '../services/account-input.js';
+import { listConversations, parseNumber } from '../services/inbox.js';
+import {
   HIDDEN_DEFAULT_CATEGORIES,
-  isHiddenDefaultCategory,
-  isPersonFlag,
-  isSmartCategory,
-  messageMatchesPersonFlag,
   PERSON_FLAGS,
-  SMART_CATEGORY_SLUGS,
 } from '../services/smart-filter.js';
 import {
-  accountConnection,
   DEFAULT_ACCOUNT_COLOR,
   discoverAccountProvider,
-  isEmail,
   mailProviderCatalog,
 } from '../utils/mail.js';
 import { ConflictError, NotFoundError, ValidationError } from '../errors.js';
 import { accessGate, requestHasAccess, sessionCookieOptions } from '../middleware/auth.js';
-
-const parseNumber = (value, fallback, min, max) => {
-  const number = Number.parseInt(value, 10);
-  return Number.isInteger(number) && number >= min && number <= max ? number : fallback;
-};
-
-const normalizeFolder = (value) => {
-  const folder = String(value || 'inbox').toLowerCase();
-  return ['inbox', 'starred', 'snoozed', 'sent', 'drafts', 'all', 'trash', 'spam', 'archive'].includes(folder) ? folder : 'inbox';
-};
-
-const normalizeCategory = (value) => {
-  const category = String(value || '').trim().toLowerCase();
-  if (!category || category === 'all') return '';
-  // ops_quiet is intentionally not selectable as a smart-view chip; it only
-  // exists so routine digests can be excluded from the default inbox.
-  if (category === 'ops_quiet') {
-    throw new ValidationError('Ops digests without errors are hidden. Use Ops errors for failures.');
-  }
-  if (!isSmartCategory(category) || isHiddenDefaultCategory(category)) {
-    throw new ValidationError(`Unknown smart filter. Choose one of: ${SMART_CATEGORY_SLUGS.filter((slug) => !isHiddenDefaultCategory(slug)).join(', ')}.`);
-  }
-  return category;
-};
-
-const normalizePersonFlag = (value) => {
-  const flag = String(value || '').trim().toLowerCase();
-  if (!flag) return '';
-  if (!isPersonFlag(flag)) {
-    throw new ValidationError(`Unknown person flag. Choose one of: ${PERSON_FLAGS.map((item) => item.id).join(', ')}.`);
-  }
-  return flag;
-};
-
-const emptyCategoryCounts = () => Object.fromEntries(
-  SMART_CATEGORY_SLUGS
-    .filter((category) => !isHiddenDefaultCategory(category))
-    .map((category) => [category, 0]),
-);
-
-const conversationTouchesPersonFlag = (conversationMessages, flagId) => conversationMessages.some((message) => messageMatchesPersonFlag(message, flagId));
-
-const emptyFolderCounts = () => ({ inbox: 0, starred: 0, snoozed: 0, drafts: 0 });
-
-const sumFolderCounts = (accounts, repos) => accounts.reduce((totals, account) => {
-  const counts = repos.messages.folderCounts(account.id);
-  return {
-    inbox: totals.inbox + counts.inbox,
-    starred: totals.starred + counts.starred,
-    snoozed: totals.snoozed + counts.snoozed,
-    drafts: totals.drafts + counts.drafts,
-  };
-}, emptyFolderCounts());
-
-const booleanField = (value, fallback, fieldName) => {
-  if (value === undefined) return fallback;
-  if (typeof value === 'boolean') return value;
-  if (value === 1 || value === '1' || String(value).toLowerCase() === 'true') return true;
-  if (value === 0 || value === '0' || String(value).toLowerCase() === 'false') return false;
-  throw new ValidationError(`${fieldName} must be true or false.`);
-};
 
 function initials(value) {
   return String(value || '?').split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase() || '?';
@@ -91,86 +28,6 @@ function initialAvatar(name, color = DEFAULT_ACCOUNT_COLOR) {
   const label = initials(name).replace(/[&<>"']/g, '');
   const safeColor = /^#[0-9a-f]{6}$/i.test(color) ? color : DEFAULT_ACCOUNT_COLOR;
   return Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96" role="img" aria-label="${label}"><rect width="96" height="96" rx="48" fill="${safeColor}"/><text x="48" y="59" text-anchor="middle" font-family="Arial,sans-serif" font-size="36" font-weight="600" fill="#fff">${label}</text></svg>`);
-}
-
-function parseAvatar(dataUrl) {
-  if (dataUrl === null) return { avatar_blob: null, avatar_mime: null };
-  if (typeof dataUrl !== 'string') throw new ValidationError('Avatar must be an image data URL.');
-  const match = dataUrl.match(/^data:(image\/(?:png|jpeg|gif|webp));base64,([a-z0-9+/=\s]+)$/i);
-  if (!match) throw new ValidationError('Avatar must be a PNG, JPEG, GIF, or WebP data URL.');
-  const buffer = Buffer.from(match[2], 'base64');
-  if (!buffer.length || buffer.length > 1_000_000) throw new ValidationError('Avatar must be smaller than 1 MB.');
-  return { avatar_blob: buffer, avatar_mime: match[1].toLowerCase() };
-}
-
-function serializeAccountInput(body, existing, config) {
-  const email = String(body.email ?? existing?.email ?? '').trim().toLowerCase();
-  if (!isEmail(email)) throw new ValidationError('A valid account email is required.');
-  if (existing && email !== existing.email.toLowerCase()) {
-    throw new ValidationError('Account email cannot be changed. Remove and re-add the account instead.');
-  }
-  const currentConnection = existing ? {
-    provider: existing.provider,
-    imap: { host: existing.imap_host, port: existing.imap_port, secure: Boolean(existing.imap_secure) },
-    smtp: { host: existing.smtp_host, port: existing.smtp_port, secure: Boolean(existing.smtp_secure) },
-  } : {};
-  const connection = accountConnection({
-    ...currentConnection,
-    ...body,
-    imap: { ...currentConnection.imap, ...(body.imap || {}) },
-    smtp: { ...currentConnection.smtp, ...(body.smtp || {}) },
-  });
-  let credentials;
-  if (body.credentials !== undefined) {
-    if (!body.credentials || typeof body.credentials !== 'object') throw new ValidationError('Account credentials are required.');
-    credentials = encryptJson(body.credentials, config.credentialKey);
-  } else if (existing) {
-    credentials = existing.credential_ciphertext;
-  } else {
-    throw new ValidationError('Account credentials are required.');
-  }
-  const avatar = body.avatarDataUrl === undefined
-    ? { avatar_blob: existing?.avatar_blob || null, avatar_mime: existing?.avatar_mime || null }
-    : parseAvatar(body.avatarDataUrl);
-  const color = String(body.color ?? existing?.color ?? DEFAULT_ACCOUNT_COLOR);
-  if (!/^#[0-9a-f]{6}$/i.test(color)) throw new ValidationError('Account color must be a six-digit hex color.');
-  return {
-    email,
-    display_name: String(body.displayName ?? existing?.display_name ?? email.split('@')[0]).trim().slice(0, 120) || email,
-    ...avatar,
-    color,
-    provider: connection.provider,
-    imap_host: connection.imap.host,
-    imap_port: connection.imap.port,
-    imap_secure: Number(connection.imap.secure),
-    smtp_host: connection.smtp.host,
-    smtp_port: connection.smtp.port,
-    smtp_secure: Number(connection.smtp.secure),
-    credential_ciphertext: credentials,
-    signature: String(body.signature ?? existing?.signature ?? '').slice(0, 20_000),
-    sync_enabled: Number(booleanField(body.syncEnabled, existing ? Boolean(existing.sync_enabled) : true, 'Sync enabled')),
-  };
-}
-
-function accountTestInput(body, existing, config) {
-  return {
-    email: existing.email,
-    provider: body.provider ?? existing.provider,
-    serverHost: body.serverHost,
-    imap: {
-      host: existing.imap_host,
-      port: existing.imap_port,
-      secure: Boolean(existing.imap_secure),
-      ...(body.imap || {}),
-    },
-    smtp: {
-      host: existing.smtp_host,
-      port: existing.smtp_port,
-      secure: Boolean(existing.smtp_secure),
-      ...(body.smtp || {}),
-    },
-    credentials: body.credentials ?? decryptJson(existing.credential_ciphertext, config.credentialKey),
-  };
 }
 
 function hydrateMessage(message, remoteContent) {
@@ -198,44 +55,6 @@ function updateTargets(repos, mailService, id, state) {
   const thread = repos.threads.get(id);
   if (!thread) throw new NotFoundError('Message or thread not found.');
   return Promise.all(repos.messages.forThread(thread.id).map((item) => mailService.updateMessageState(item.id, state)));
-}
-
-function draftListItem(draft, account) {
-  const id = `draft:${draft.id}`;
-  return {
-    id,
-    threadId: id,
-    latestMessageId: id,
-    draftId: draft.id,
-    isDraft: true,
-    accountId: draft.accountId,
-    mailbox: 'Drafts',
-    folder: 'drafts',
-    subject: draft.subject || '(no subject)',
-    from: { name: account?.displayName || account?.email || '', email: account?.email || '' },
-    to: draft.to || [],
-    cc: draft.cc || [],
-    bcc: draft.bcc || [],
-    participants: draft.to || [],
-    htmlBody: draft.htmlBody || '',
-    textBody: draft.textBody || '',
-    snippet: String(draft.textBody || draft.htmlBody || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim(),
-    sentAt: draft.updatedAt,
-    receivedAt: draft.updatedAt,
-    latestAt: draft.updatedAt,
-    createdAt: draft.createdAt,
-    updatedAt: draft.updatedAt,
-    isRead: true,
-    isStarred: false,
-    isArchived: false,
-    isTrashed: false,
-    isSpam: false,
-    isSent: false,
-    messageCount: 1,
-    unreadCount: 0,
-    labels: ['Draft'],
-    attachments: draft.attachments || [],
-  };
 }
 
 export function registerApi(app, { config, repos, mailService, remoteContent }) {
@@ -390,125 +209,16 @@ export function registerApi(app, { config, repos, mailService, remoteContent }) 
   });
 
   router.get('/messages', (request, response) => {
-    const accountId = request.query.accountId ? String(request.query.accountId) : null;
-    const folder = normalizeFolder(request.query.folder);
-    const category = normalizeCategory(request.query.category);
-    const personFlag = normalizePersonFlag(request.query.flag || request.query.personFlag);
-    const page = parseNumber(request.query.page, 1, 1, 100_000);
-    const pageSize = parseNumber(request.query.pageSize || request.query.limit, 50, 1, 200);
-    const query = String(request.query.q || '').trim().slice(0, 200);
-    const accounts = accountId ? [repos.accounts.get(accountId)].filter(Boolean) : repos.accounts.list();
-    if (accountId && !accounts.length) throw new NotFoundError('Mail account not found.');
-    if (folder === 'drafts') {
-      const drafts = accounts.flatMap((account) => repos.drafts.list(account.id)
-        .map((draft) => draftListItem(draft, account))
-        .filter((draft) => {
-          if (personFlag && !messageMatchesPersonFlag(draft, personFlag)) return false;
-          if (!query) return true;
-          return [draft.subject, draft.snippet, draft.from.name, draft.from.email, ...draft.to.map((recipient) => `${recipient.name || ''} ${recipient.email || ''}`)]
-            .join(' ').toLowerCase().includes(query.toLowerCase());
-        })
-      ).sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)));
-      const start = (page - 1) * pageSize;
-      return response.json({
-        messages: category ? [] : drafts.slice(start, start + pageSize),
-        total: category ? 0 : drafts.length,
-        page,
-        pageSize,
-        categoryCounts: emptyCategoryCounts(),
-        folderCounts: sumFolderCounts(accounts, repos),
-        personFlag: personFlag || null,
-        personFlagMeta: personFlag ? getPersonFlag(personFlag) : null,
-      });
-    }
-    const mailbox = String(request.query.mailbox || 'INBOX');
-    const normalizedQuery = query.toLocaleLowerCase();
-    const results = accounts.map((account) => repos.messages.list({
-      accountId: account.id,
-      folder,
-      mailbox,
-      // Search and smart filters are conversation-level operations. Load the
-      // scoped messages first so an older matching message can surface its
-      // conversation without borrowing that message's category or summary.
-      query: '',
-      category: '',
-      limit: 1000,
-      offset: 0,
+    response.json(listConversations(repos, {
+      accountId: request.query.accountId ? String(request.query.accountId) : null,
+      folder: request.query.folder,
+      category: request.query.category,
+      personFlag: request.query.flag || request.query.personFlag,
+      page: request.query.page,
+      pageSize: request.query.pageSize || request.query.limit,
+      query: request.query.q,
+      mailbox: request.query.mailbox,
     }));
-    const byThread = new Map();
-    for (const message of results.flatMap((result) => result.items)) {
-      const key = `${message.accountId}:${message.threadId}`;
-      const existing = byThread.get(key);
-      const messageTime = String(message.sentAt || message.receivedAt || message.createdAt);
-      const existingTime = String(existing?.latest?.sentAt || existing?.latest?.receivedAt || existing?.latest?.createdAt || '');
-      if (!existing) {
-        byThread.set(key, { latest: message, messages: [message] });
-      } else {
-        existing.messages.push(message);
-        if (messageTime > existingTime) existing.latest = message;
-      }
-    }
-    const conversations = [...byThread.values()]
-      .filter(({ messages }) => !personFlag || conversationTouchesPersonFlag(messages, personFlag))
-      .filter(({ messages, latest }) => {
-        // Explicit search can still find quiet digests. Unscoped browsing and
-        // smart-category chips hide routine ops noise even when unread.
-        if (normalizedQuery) {
-          return messages.some((message) => [
-            message.subject,
-            message.from?.name,
-            message.from?.email,
-            message.snippet,
-            ...(message.to || []).flatMap((recipient) => [recipient.name, recipient.email]),
-            ...(message.cc || []).flatMap((recipient) => [recipient.name, recipient.email]),
-          ].join(' ').toLocaleLowerCase().includes(normalizedQuery));
-        }
-        if (category) return true;
-        if (personFlag) return true;
-        return !isHiddenDefaultCategory(latest.category);
-      })
-      .map(({ latest: latestMessage, messages }) => {
-      const thread = repos.threads.get(latestMessage.threadId);
-      const latestAt = latestMessage.sentAt || latestMessage.receivedAt || latestMessage.createdAt;
-      return {
-        ...latestMessage,
-        // Gmail's list is made of conversations. The thread id is intentionally
-        // the row id so every toolbar action can target all messages in it.
-        id: latestMessage.threadId,
-        threadId: latestMessage.threadId,
-        latestMessageId: latestMessage.id,
-        messageCount: thread?.messageCount || 1,
-        unreadCount: thread?.unreadCount || 0,
-        participants: thread?.participants || [latestMessage.from],
-        latestAt,
-        snippet: latestMessage.snippet,
-        isRead: (thread?.unreadCount || 0) === 0,
-        isStarred: thread?.isStarred ?? latestMessage.isStarred,
-        _threadMessages: messages,
-        ...(folder === 'snoozed' ? { folder: 'snoozed' } : {}),
-      };
-    }).sort((left, right) =>
-      String(right.latestAt || right.sentAt || right.receivedAt || right.createdAt).localeCompare(String(left.latestAt || left.sentAt || left.receivedAt || left.createdAt)));
-    const categoryCounts = emptyCategoryCounts();
-    for (const conversation of conversations) {
-      if (isHiddenDefaultCategory(conversation.category)) continue;
-      if (Object.hasOwn(categoryCounts, conversation.category)) categoryCounts[conversation.category] += 1;
-    }
-    const all = category
-      ? conversations.filter((conversation) => conversation.category === category)
-      : conversations;
-    const start = (page - 1) * pageSize;
-    const pageItems = all.slice(start, start + pageSize).map(({ _threadMessages, ...conversation }) => conversation);
-    response.json({
-      messages: pageItems,
-      total: all.length,
-      page,
-      pageSize,
-      categoryCounts,
-      folderCounts: sumFolderCounts(accounts, repos),
-      personFlag: personFlag || null,
-      personFlagMeta: personFlag ? getPersonFlag(personFlag) : null,
-    });
   });
   router.get('/messages/:id', (request, response) => {
     const message = repos.messages.get(request.params.id);
