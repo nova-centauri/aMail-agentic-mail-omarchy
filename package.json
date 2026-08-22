@@ -41,5 +41,8 @@
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "vite": "^8.1.5"
+  },
+  "overrides": {
+    "html-to-text": "10.0.1"
   }
 }
