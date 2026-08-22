@@ -59,9 +59,27 @@ body { background: #0c0e12; }
   background: linear-gradient(180deg, #8ce7ff, #67e8f9);
   border-radius: 18px;
   font-weight: 650;
+  overflow: hidden;
 }
 .compose-button:hover {
   background: linear-gradient(180deg, #9aedff, #5eead4);
+}
+.sidebar.is-compact .compose-button {
+  width: 56px;
+  min-width: 56px;
+  max-width: 56px;
+  padding: 0;
+  margin-left: 8px;
+  gap: 0;
+  overflow: hidden;
+  border-radius: 17px;
+}
+.sidebar.is-compact .compose-button span {
+  display: none;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  opacity: 0;
 }
 .nav-item { border-radius: 0 18px 18px 0; }
 .nav-item.is-selected {
@@ -368,6 +386,22 @@ body { background: #0c0e12; }
 .conversation-stack { gap: 10px; }
 .thread-heading { padding-top: 20px; }
 .thread-heading h1 { letter-spacing: -.4px; }
+
+@media (max-width: 840px) {
+  .sidebar.is-compact .compose-button {
+    width: 142px;
+    min-width: 142px;
+    max-width: none;
+    padding: 0 22px 0 17px;
+    gap: 13px;
+  }
+  .sidebar.is-compact .compose-button span {
+    display: inline;
+    width: auto;
+    height: auto;
+    opacity: 1;
+  }
+}
 
 @media (max-width: 650px) {
   .settings-panel { width: 100vw; }

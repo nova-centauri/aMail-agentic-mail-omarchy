@@ -18,7 +18,7 @@ import {
   mailProviderCatalog,
 } from '../utils/mail.js';
 import { ConflictError, NotFoundError, ValidationError } from '../errors.js';
-import { accessGate, requestHasAccess, sessionCookieOptions } from '../middleware/auth.js';
+import { accessGate, requestHasAccess, sessionCookieClearOptions, sessionCookieOptions } from '../middleware/auth.js';
 
 function initials(value) {
   return String(value || '?').split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase() || '?';
@@ -85,7 +85,7 @@ export function registerApi(app, { config, repos, mailService, remoteContent }) 
   });
 
   app.delete('/api/session', (_request, response) => {
-    response.clearCookie('gigamail_session', { path: '/' });
+    response.clearCookie('gigamail_session', sessionCookieClearOptions(config));
     response.status(204).end();
   });
 

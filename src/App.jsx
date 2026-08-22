@@ -2688,13 +2688,20 @@ export default function App() {
     setSelectedThread((current) => current?.draftId === id || current?.id === `draft:${id}` ? null : current);
   };
 
-  const lockSession = () => {
+  const lockSession = async () => {
     persistAccessToken('');
-    setAccessToken('');
     setProfileOpen(false);
     setSettingsOpen(false);
     setComposeOpen(false);
     setAddAccountOpen(false);
+    try {
+      await api('/session', { method: 'DELETE' });
+    } catch {
+      // Still drop local state if the cookie-clear request fails.
+    }
+    setAccessToken('');
+    setAuthRequired(true);
+    setAccessOpen(true);
     setAccounts([]);
     setThreads([]);
     setSelectedThread(null);

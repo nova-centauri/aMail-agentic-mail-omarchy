@@ -32,3 +32,13 @@ export function sessionCookieOptions(config) {
     path: '/',
   };
 }
+
+export function sessionCookieClearOptions(config) {
+  const options = sessionCookieOptions(config);
+  return {
+    path: options.path,
+    httpOnly: options.httpOnly,
+    sameSite: options.sameSite,
+    secure: options.secure,
+  };
+}
