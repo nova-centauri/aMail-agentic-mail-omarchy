@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 
 const API_BASE = (import.meta.env.VITE_API_BASE || '/api').replace(/\/$/, '');
 const ACCESS_TOKEN_KEY = 'gigamail-access-token';
@@ -926,7 +926,8 @@ function Icon({ name, size = 20, className = '' }) {
     draft: <><path d="M5.5 4.5h9l4 4v11h-13z" /><path d="M14.5 4.5v4h4M8 13h8M8 16h5" /></>,
     tag: <><path d="M3.5 12V5.5h6.5l8.5 8.5-6 6z" /><circle cx="7.7" cy="8.2" r="1" /></>,
     plus: <><path d="M12 5v14M5 12h14" /></>,
-    settings: <><circle cx="12" cy="12" r="3" /><path d="M19 13.5v-3l-2.2-.7a6.6 6.6 0 0 0-.7-1.6l1.1-2-2.1-2.1-2 1.1a6.6 6.6 0 0 0-1.6-.7L10.8 2h-3l-.7 2.2a6.6 6.6 0 0 0-1.6.7l-2-1.1-2.1 2.1 1.1 2a6.6 6.6 0 0 0-.7 1.6l-2.2.7v3l2.2.7a6.6 6.6 0 0 0 .7 1.6l-1.1 2 2.1 2.1 2-1.1a6.6 6.6 0 0 0 1.6.7l.7 2.2h3l.7-2.2a6.6 6.6 0 0 0 1.6-.7l2 1.1 2.1-2.1-1.1-2a6.6 6.6 0 0 0 .7-1.6z" /></>,
+    settings: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></>,
+    logout: <><path d="M10 8V6.2A2.2 2.2 0 0 1 12.2 4h6.6A2.2 2.2 0 0 1 21 6.2v11.6a2.2 2.2 0 0 1-2.2 2.2h-6.6A2.2 2.2 0 0 1 10 17.8V16" /><path d="M4 12h11" /><path d="m8 8-4 4 4 4" /></>,
     help: <><circle cx="12" cy="12" r="8.5" /><path d="M9.5 9a2.6 2.6 0 1 1 4.6 1.7c-1.1 1.2-2.1 1.5-2.1 3.1M12 16.9v.1" /></>,
     apps: <><circle cx="6" cy="6" r="1.2" fill="currentColor" stroke="none" /><circle cx="12" cy="6" r="1.2" fill="currentColor" stroke="none" /><circle cx="18" cy="6" r="1.2" fill="currentColor" stroke="none" /><circle cx="6" cy="12" r="1.2" fill="currentColor" stroke="none" /><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none" /><circle cx="18" cy="12" r="1.2" fill="currentColor" stroke="none" /><circle cx="6" cy="18" r="1.2" fill="currentColor" stroke="none" /><circle cx="12" cy="18" r="1.2" fill="currentColor" stroke="none" /><circle cx="18" cy="18" r="1.2" fill="currentColor" stroke="none" /></>,
     refresh: <><path d="M20 11a8 8 0 0 0-14.8-4.2L3 9M3 4.5V9h4.5M4 13a8 8 0 0 0 14.8 4.2L21 15M21 19.5V15h-4.5" /></>,
@@ -964,6 +965,28 @@ function Icon({ name, size = 20, className = '' }) {
   return (
     <svg className={`icon ${className}`} width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       {paths[name] || paths.more}
+    </svg>
+  );
+}
+
+function BrandMark({ size = 32, className = '' }) {
+  const uid = useId().replace(/:/g, '');
+  return (
+    <svg className={`brand-mark ${className}`.trim()} width={size} height={size} viewBox="0 0 32 32" aria-hidden="true">
+      <defs>
+        <linearGradient id={`${uid}-bg`} x1="4" y1="2" x2="28" y2="30" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#1d4f86" />
+          <stop offset="1" stopColor="#0b1f3a" />
+        </linearGradient>
+        <linearGradient id={`${uid}-mail`} x1="8" y1="9" x2="24" y2="23" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#7dd3fc" />
+          <stop offset="1" stopColor="#2dd4bf" />
+        </linearGradient>
+      </defs>
+      <rect width="32" height="32" rx="8" fill={`url(#${uid}-bg)`} />
+      <rect x="6.4" y="9.3" width="19.2" height="13.4" rx="2.2" fill="none" stroke={`url(#${uid}-mail)`} strokeWidth="1.85" />
+      <path d="M7.6 10.7 16 16.6l8.4-5.9" fill="none" stroke={`url(#${uid}-mail)`} strokeWidth="1.85" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="24.1" cy="9.1" r="2.45" fill="#5eead4" />
     </svg>
   );
 }
@@ -1015,7 +1038,7 @@ function Tooltip({ children, text }) {
   return <span className="tooltip-wrap" data-tooltip={text}>{children}</span>;
 }
 
-function Topbar({ onToggleSidebar, onGoHome, query, setQuery, onOpenSettings, onOpenProfile, onFocusSmartFilters, account, isDemo }) {
+function Topbar({ onToggleSidebar, onGoHome, query, setQuery, onOpenSettings, onLogout, onOpenProfile, onFocusSmartFilters, account, isDemo }) {
   const searchRef = useRef(null);
   useEffect(() => {
     const focusSearch = (event) => {
@@ -1036,7 +1059,7 @@ function Topbar({ onToggleSidebar, onGoHome, query, setQuery, onOpenSettings, on
         </IconButton>
       </Tooltip>
       <button type="button" className="brand" aria-label="GigaMail home" onClick={onGoHome}>
-        <span className="brand-mark"><span>G</span></span>
+        <BrandMark />
         <span className="brand-name">GigaMail</span>
         {isDemo && <span className="preview-pill">Preview</span>}
       </button>
@@ -1064,6 +1087,9 @@ function Topbar({ onToggleSidebar, onGoHome, query, setQuery, onOpenSettings, on
       <div className="top-actions">
         <Tooltip text="Quick settings">
           <IconButton label="Quick settings" onClick={onOpenSettings}><Icon name="settings" /></IconButton>
+        </Tooltip>
+        <Tooltip text="Log out">
+          <IconButton label="Log out of this session" onClick={onLogout}><Icon name="logout" /></IconButton>
         </Tooltip>
         <button type="button" className="account-trigger" onClick={onOpenProfile} aria-label="Open account menu">
           <Avatar person={account} size="top" />
@@ -1303,7 +1329,7 @@ function ReaderPlaceholder({ isDemo, onAddAccount }) {
   if (!isDemo) {
     return (
       <section className="reader-placeholder" aria-label="No conversation selected">
-        <div className="reader-placeholder-mark"><span>G</span></div>
+        <div className="reader-placeholder-mark"><BrandMark size={72} /></div>
         <h2>Select a conversation</h2>
         <p>Choose a message to read it here.</p>
         <div className="privacy-summary"><Icon name="shield" size={18} /><span><strong>Privacy is on</strong> — known tracking pixels are blocked before they can report back.</span></div>
@@ -1313,7 +1339,7 @@ function ReaderPlaceholder({ isDemo, onAddAccount }) {
   return (
     <section className="reader-placeholder onboarding-placeholder" aria-label="Connect your first email account">
       <span className="onboarding-eyebrow"><Icon name="sparkles" size={14} /> Private unified inbox</span>
-      <div className="reader-placeholder-mark"><span>G</span></div>
+      <div className="reader-placeholder-mark"><BrandMark size={72} /></div>
       <h2>All your mail. Much less noise.</h2>
       <p>Bring Gmail, iCloud, and self-hosted mail into one calm inbox, with CI, logs, and status updates sorted automatically.</p>
       <button type="button" className="primary-button onboarding-cta" onClick={onAddAccount}><Icon name="plus" size={18} /> Connect an account</button>
@@ -1435,7 +1461,7 @@ function MessageCard({ message, expanded, onToggle, onLoadRemote, onReply, onRep
   const recipientList = formatRecipients(message.to);
   const canReplyAll = [...recipientArray(message.to), ...recipientArray(message.cc)].length > 1;
   return (
-    <article className={`message-card ${expanded ? 'is-expanded' : ''}`}>
+    <article className={`message-card email-light ${expanded ? 'is-expanded' : ''}`}>
       <button type="button" className="message-summary" onClick={onToggle} aria-expanded={expanded}>
         <Avatar person={from} size="md" />
         <span className="message-sender"><strong>{from.name || from.email || 'Unknown sender'}</strong><small>{expanded ? `to ${recipientList || 'me'}` : message.body?.replace(/\s+/g, ' ').slice(0, 88)}</small></span>
@@ -1673,7 +1699,7 @@ function ComposeModal({ account, accounts, isDemo, onClose, onSent, onDraftSaved
         </div>
       </div>
       {!isMinimized && (
-        <form className="compose-form" onSubmit={send}>
+        <form className="compose-form email-light" onSubmit={send}>
           <div className="recipient-line">
             <input autoFocus value={form.to} onChange={update('to')} placeholder="Recipients" aria-label="Recipients" />
             <button type="button" onClick={() => setExtraFields((value) => !value)}>{extraFields ? 'Hide' : 'Cc Bcc'}</button>
@@ -2087,7 +2113,7 @@ function AccessPanel({ open, required, currentToken, onSave, onClose }) {
     <div className="modal-layer access-layer" role="dialog" aria-modal="true" aria-label="Unlock GigaMail">
       {!required && <button type="button" className="modal-scrim" onClick={onClose} aria-label="Close unlock dialog" />}
       <form className="access-modal" onSubmit={submit}>
-        <div className="access-mark"><Icon name="shield" size={26} /></div>
+        <div className="access-mark"><BrandMark size={48} /></div>
         <h2>{required ? 'Unlock GigaMail' : 'Server access token'}</h2>
         <p>{required ? 'This GigaMail server is protected. Enter its access token to open your mail.' : 'If this server has GIGAMAIL_ACCESS_TOKEN set, paste the matching token here.'}</p>
         <label className="form-field"><span>Access token</span><input type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder="GigaMail access token" autoFocus autoComplete="off" /></label>
@@ -2099,7 +2125,7 @@ function AccessPanel({ open, required, currentToken, onSave, onClose }) {
   );
 }
 
-function ProfileMenu({ open, onClose, account, accounts, setActiveAccount, onSelectUnified, onOpenSettings, showUnified }) {
+function ProfileMenu({ open, onClose, account, accounts, setActiveAccount, onSelectUnified, onOpenSettings, onLogout, showUnified }) {
   if (!open) return null;
   return (
     <>
@@ -2114,6 +2140,10 @@ function ProfileMenu({ open, onClose, account, accounts, setActiveAccount, onSel
           {showUnified && <button type="button" onClick={() => { onSelectUnified(); onClose(); }}><Avatar person={UNIFIED_ACCOUNT} size="sm" /><span>All inboxes</span>{account?.isUnified && <Icon name="check" size={17} />}</button>}
           {accounts.map((item) => <button type="button" key={item.id} onClick={() => { setActiveAccount(item); onClose(); }}><Avatar person={item} size="sm" /><span>{item.email}</span>{item.id === account?.id && <Icon name="check" size={17} />}</button>)}
         </div>
+        <button type="button" className="logout-button" onClick={onLogout}>
+          <Icon name="logout" size={18} />
+          Log out
+        </button>
         <div className="profile-menu-footer">
           <span>Self-hosted · credentials stay on your server</span>
         </div>
@@ -2646,6 +2676,25 @@ export default function App() {
     setSelectedThread((current) => current?.draftId === id || current?.id === `draft:${id}` ? null : current);
   };
 
+  const lockSession = () => {
+    persistAccessToken('');
+    setAccessToken('');
+    setProfileOpen(false);
+    setSettingsOpen(false);
+    setComposeOpen(false);
+    setAddAccountOpen(false);
+    setAccounts([]);
+    setThreads([]);
+    setSelectedThread(null);
+    setSelectedIds([]);
+    setMailTotal(0);
+    setCategoryCounts(countSmartCategories([]));
+    setFolderCounts({ ...EMPTY_FOLDER_COUNTS });
+    setIsDemo(false);
+    setOffline(false);
+    setNotice('Signed out of this browser session.');
+  };
+
   const unlockServer = async (token) => {
     persistAccessToken(token);
     setAccessToken(token);
@@ -2717,6 +2766,7 @@ export default function App() {
         query={query}
         setQuery={setQuery}
         onOpenSettings={() => setSettingsOpen(true)}
+        onLogout={lockSession}
         onOpenProfile={() => setProfileOpen(true)}
         onFocusSmartFilters={() => {
           if (activeFolder !== 'inbox') setActiveFolder('inbox');
@@ -2784,7 +2834,7 @@ export default function App() {
       </main>
       {composeOpen && <ComposeModal account={composeAccount} accounts={identityAccounts} isDemo={isDemo} initialReply={composeContext} onClose={closeCompose} onSent={sendMessage} onDraftSaved={draftSaved} onDraftRemoved={draftRemoved} onNotice={setNotice} />}
       <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} accounts={identityAccounts} activeAccount={activeAccount} setActiveAccount={setActiveAccount} privacy={privacy} setPrivacy={setPrivacy} density={density} setDensity={updateDensity} onAddAccount={() => setAddAccountOpen(true)} onUnlock={() => setAccessOpen(true)} onSaveSignature={saveAccountSignature} showUnified={hasConnectedAccounts} />
-      <ProfileMenu open={profileOpen} onClose={() => setProfileOpen(false)} account={displayAccount} accounts={identityAccounts} setActiveAccount={setActiveAccount} onSelectUnified={() => setActiveAccount(null)} onOpenSettings={() => setSettingsOpen(true)} showUnified={hasConnectedAccounts} />
+      <ProfileMenu open={profileOpen} onClose={() => setProfileOpen(false)} account={displayAccount} accounts={identityAccounts} setActiveAccount={setActiveAccount} onSelectUnified={() => setActiveAccount(null)} onOpenSettings={() => setSettingsOpen(true)} onLogout={lockSession} showUnified={hasConnectedAccounts} />
       {addAccountOpen && <AddAccountModal onClose={() => setAddAccountOpen(false)} onAdded={accountAdded} />}
       <AccessPanel open={accessOpen} required={authRequired} currentToken={accessToken} onSave={unlockServer} onClose={() => setAccessOpen(false)} />
       <Toast notice={notice} onClose={() => setNotice('')} />
