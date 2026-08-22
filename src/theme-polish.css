@@ -178,6 +178,17 @@ body { background: #0c0e12; }
   background: #172433;
   box-shadow: inset 0 0 0 1px rgba(125, 211, 252, .12);
 }
+.settings-account .avatar,
+.profile-account-list .avatar,
+.profile-menu .avatar {
+  flex: 0 0 var(--avatar-size) !important;
+  width: var(--avatar-size) !important;
+  height: var(--avatar-size) !important;
+  min-width: var(--avatar-size) !important;
+  max-width: var(--avatar-size) !important;
+  border-radius: 50% !important;
+  overflow: hidden !important;
+}
 .settings-account .avatar {
   box-shadow: 0 0 0 2px #13161c, 0 0 0 3px rgba(255, 255, 255, .08);
 }

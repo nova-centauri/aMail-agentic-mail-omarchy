@@ -1013,7 +1013,7 @@ function Avatar({ person, size = 'md', className = '' }) {
   useEffect(() => { setImageFailed(false); }, [image]);
   const style = source.color ? { '--avatar-color': source.color } : undefined;
   return (
-    <span className={`avatar avatar-${size} ${className}`} style={style} aria-label={source.name || source.email || 'Profile'}>
+    <div className={`avatar avatar-${size} ${className}`} style={style} role="img" aria-label={source.name || source.email || 'Profile'}>
       {source.isUnified ? (
         <Icon name="inbox" size={size === 'hero' ? 32 : size === 'top' ? 17 : 18} />
       ) : image && !imageFailed ? (
@@ -1021,7 +1021,7 @@ function Avatar({ person, size = 'md', className = '' }) {
       ) : (
         initials(source.name || source.email)
       )}
-    </span>
+    </div>
   );
 }
 
