@@ -76,5 +76,11 @@ export function loadConfig(env = process.env) {
     allowDirectRemoteContent: (env.NODE_ENV || 'development') !== 'production'
       && boolean(env.GIGAMAIL_ALLOW_DIRECT_REMOTE_CONTENT),
     logLevel: env.LOG_LEVEL || 'info',
+    webauthnRpName: env.GIGAMAIL_RP_NAME || 'GigaMail',
+    webauthnRpId: String(env.GIGAMAIL_RP_ID || '').trim(),
+    webauthnOrigins: String(env.GIGAMAIL_ORIGIN || '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean),
   });
 }

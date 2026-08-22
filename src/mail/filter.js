@@ -1,0 +1,53 @@
+import { PERSON_FLAGS, SMART_CATEGORIES } from './constants.js';
+import { smartCategoryMetadata } from './classify.js';
+import { normalizePersonFlagEmail, recipientArray } from './people.js';
+
+export function conversationMatchesPersonFlag(thread, flagId) {
+  const flag = PERSON_FLAGS.find((item) => item.id === flagId);
+  if (!flag) return false;
+  const wanted = new Set(flag.emails.map(normalizePersonFlagEmail));
+  const people = [
+    thread.from,
+    ...(thread.participants || []),
+    ...recipientArray(thread.to),
+    ...recipientArray(thread.cc),
+    ...recipientArray(thread.replyTo),
+    ...(thread.messages || []).flatMap((message) => [
+      message.from,
+      ...recipientArray(message.to),
+      ...recipientArray(message.cc),
+      ...recipientArray(message.replyTo),
+    ]),
+  ];
+  return people.some((person) => {
+    const email = normalizePersonFlagEmail(person?.email || person?.address || person || '');
+    return email && wanted.has(email);
+  });
+}
+
+export function countSmartCategories(threads = []) {
+  const counts = Object.fromEntries(SMART_CATEGORIES.filter((item) => item.id !== 'all').map((item) => [item.id, 0]));
+  threads.forEach((thread) => {
+    const category = smartCategoryMetadata(thread).category;
+    if (Object.hasOwn(counts, category)) counts[category] += 1;
+  });
+  return counts;
+}
+
+export function filterVisibleThreads(threads, {
+  activeFolder = 'inbox',
+  activeCategory = 'all',
+  activePersonFlag = null,
+  query = '',
+} = {}) {
+  const search = String(query || '').trim().toLowerCase();
+  return threads.filter((thread) => {
+    const inFolder = activeFolder === 'all' || thread.folder === activeFolder || (activeFolder === 'starred' && thread.starred) || (activeFolder === 'drafts' && thread.folder === 'drafts');
+    if (!inFolder) return false;
+    if (activePersonFlag && !conversationMatchesPersonFlag(thread, activePersonFlag)) return false;
+    if (!activePersonFlag && activeFolder === 'inbox' && activeCategory !== 'all' && smartCategoryMetadata(thread).category !== activeCategory) return false;
+    if (!search && !activePersonFlag && (activeCategory === 'all' || activeCategory === 'primary') && smartCategoryMetadata(thread).category === 'ops_quiet') return false;
+    if (!search) return true;
+    return [thread.subject, thread.snippet, thread.from?.name, thread.from?.email, thread.categoryLabel, thread.categoryReason, ...(thread.labels || [])].join(' ').toLowerCase().includes(search);
+  });
+}

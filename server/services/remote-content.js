@@ -248,6 +248,11 @@ export function createRemoteContentService({ config, repos, logger }) {
     return createSignedToken({ v: 1, m: messageId, u: url, e: expiresAt }, config.remoteTokenKey);
   }
 
+  function issueAttachmentToken(messageId, index) {
+    const expiresAt = Math.floor(Date.now() / 1000) + config.remoteContentTokenTtlSeconds;
+    return createSignedToken({ v: 1, t: 'a', m: messageId, i: index, e: expiresAt }, config.remoteTokenKey);
+  }
+
   async function fetchToken(token) {
     const payload = readSignedToken(token, config.remoteTokenKey);
     if (payload?.v !== 1 || !payload.m || !payload.u || !Number.isInteger(payload.e)) {
@@ -285,6 +290,7 @@ export function createRemoteContentService({ config, repos, logger }) {
   return {
     canIssueTokens: Boolean(config.remoteTokenKey),
     issueToken,
+    issueAttachmentToken,
     fetchToken,
     close: async () => { await proxyAgent?.close?.(); },
   };

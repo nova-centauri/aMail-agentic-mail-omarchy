@@ -34,7 +34,7 @@ function requestSerializer(request) {
   };
 }
 
-export function createApp({ config, repos, mailService, remoteContent, logger }) {
+export function createApp({ config, repos, mailService, remoteContent, logger, passkeys }) {
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', config.trustProxy);
@@ -64,7 +64,7 @@ export function createApp({ config, repos, mailService, remoteContent, logger })
   }));
   app.use(express.json({ limit: '2mb', type: ['application/json', 'application/*+json'] }));
 
-  registerApi(app, { config, repos, mailService, remoteContent });
+  registerApi(app, { config, repos, mailService, remoteContent, passkeys });
   registerMcp(app, { config, repos, mailService, remoteContent });
   app.use('/api', notFound);
 

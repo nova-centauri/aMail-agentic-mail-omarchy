@@ -1,7 +1,7 @@
 import express from 'express';
 import rateLimit from 'express-rate-limit';
-import { timingSafeMatch } from '../services/crypto.js';
-import { hydrateRemoteContent } from '../services/message-html.js';
+import { readSignedToken, timingSafeMatch } from '../services/crypto.js';
+import { hydrateCidImages, hydrateRemoteContent } from '../services/message-html.js';
 import {
   accountTestInput,
   parseAvatar,
@@ -17,7 +17,7 @@ import {
   discoverAccountProvider,
   mailProviderCatalog,
 } from '../utils/mail.js';
-import { ConflictError, NotFoundError, ValidationError } from '../errors.js';
+import { AppError, ConflictError, NotFoundError, ServiceUnavailableError, ValidationError } from '../errors.js';
 import { accessGate, requestHasAccess, sessionCookieClearOptions, sessionCookieOptions } from '../middleware/auth.js';
 
 function initials(value) {
@@ -30,12 +30,47 @@ function initialAvatar(name, color = DEFAULT_ACCOUNT_COLOR) {
   return Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96" role="img" aria-label="${label}"><rect width="96" height="96" rx="48" fill="${safeColor}"/><text x="48" y="59" text-anchor="middle" font-family="Arial,sans-serif" font-size="36" font-weight="600" fill="#fff">${label}</text></svg>`);
 }
 
+const INLINE_IMAGE_TYPES = new Set([
+  'image/avif', 'image/gif', 'image/jpeg', 'image/png', 'image/webp',
+]);
+
+function safeAttachmentType(type) {
+  const normalized = String(type || 'application/octet-stream').split(';', 1)[0].trim().toLowerCase();
+  if (['text/html', 'image/svg+xml', 'application/javascript', 'text/javascript', 'application/xhtml+xml'].includes(normalized)) {
+    return 'application/octet-stream';
+  }
+  return normalized || 'application/octet-stream';
+}
+
+function asciiFilename(value) {
+  const cleaned = String(value || 'attachment').replace(/[\r\n"]/g, '').replace(/[/\\]/g, '_').slice(0, 180);
+  return cleaned || 'attachment';
+}
+
 function hydrateMessage(message, remoteContent) {
-  if (!message || !remoteContent.canIssueTokens) return message;
+  if (!message) return message;
+  const attachments = (message.attachments || []).map((attachment, index) => {
+    const resolvedIndex = Number.isInteger(attachment.index) ? attachment.index : index;
+    const token = remoteContent.canIssueTokens && remoteContent.issueAttachmentToken
+      ? remoteContent.issueAttachmentToken(message.id, resolvedIndex)
+      : null;
+    return {
+      ...attachment,
+      index: resolvedIndex,
+      url: token ? `/api/content/attachment?token=${encodeURIComponent(token)}` : null,
+    };
+  });
+  if (!remoteContent.canIssueTokens) return { ...message, attachments };
   const hydrated = hydrateRemoteContent(message.htmlBody, {
     issueToken: (url) => remoteContent.issueToken(message.id, url),
   });
-  return { ...message, htmlBody: hydrated.html, remoteImageCount: hydrated.remoteImageCount };
+  const withCid = hydrateCidImages(hydrated.html, attachments);
+  return {
+    ...message,
+    htmlBody: withCid.html,
+    remoteImageCount: hydrated.remoteImageCount,
+    attachments,
+  };
 }
 
 function serveAvatar(response, account) {
@@ -57,7 +92,7 @@ function updateTargets(repos, mailService, id, state) {
   return Promise.all(repos.messages.forThread(thread.id).map((item) => mailService.updateMessageState(item.id, state)));
 }
 
-export function registerApi(app, { config, repos, mailService, remoteContent }) {
+export function registerApi(app, { config, repos, mailService, remoteContent, passkeys }) {
   app.get('/api/health', (_request, response) => {
     response.json({
       status: 'ok',
@@ -72,7 +107,11 @@ export function registerApi(app, { config, repos, mailService, remoteContent }) 
   });
 
   app.get('/api/session', (request, response) => {
-    response.json({ protected: Boolean(config.accessToken), authenticated: requestHasAccess(request, config) });
+    response.json({
+      protected: Boolean(config.accessToken),
+      authenticated: requestHasAccess(request, config),
+      passkeys: passkeys?.count?.() || 0,
+    });
   });
 
   app.post('/api/session', rateLimit({ windowMs: 60_000, limit: 10, standardHeaders: 'draft-8', legacyHeaders: false }), (request, response) => {
@@ -87,6 +126,28 @@ export function registerApi(app, { config, repos, mailService, remoteContent }) 
   app.delete('/api/session', (_request, response) => {
     response.clearCookie('gigamail_session', sessionCookieClearOptions(config));
     response.status(204).end();
+  });
+
+  const passkeyLimiter = rateLimit({
+    windowMs: 60_000,
+    limit: 15,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+  });
+
+  app.post('/api/session/passkey/login/options', passkeyLimiter, async (request, response) => {
+    if (!config.accessToken || !passkeys) {
+      throw new ServiceUnavailableError('Passkeys are unavailable on this server.');
+    }
+    response.json(await passkeys.loginOptions(request));
+  });
+  app.post('/api/session/passkey/login', passkeyLimiter, async (request, response) => {
+    if (!config.accessToken || !passkeys) {
+      throw new ServiceUnavailableError('Passkeys are unavailable on this server.');
+    }
+    await passkeys.login(request, request.body || {});
+    response.cookie('gigamail_session', config.accessToken, sessionCookieOptions(config));
+    return response.status(204).end();
   });
 
   // Account ids are random UUIDs and avatar bytes contain no mailbox data. This
@@ -111,8 +172,54 @@ export function registerApi(app, { config, repos, mailService, remoteContent }) 
     response.send(result.body);
   });
 
+  app.get('/api/content/attachment', async (request, response) => {
+    const payload = readSignedToken(String(request.query.token || ''), config.remoteTokenKey);
+    if (payload?.v !== 1 || payload.t !== 'a' || !payload.m || !Number.isInteger(payload.i) || !Number.isInteger(payload.e)) {
+      throw new ValidationError('The attachment token is invalid.');
+    }
+    if (payload.e < Math.floor(Date.now() / 1000)) {
+      throw new AppError('The attachment token has expired. Reload the message to create a new one.', {
+        status: 410,
+        code: 'ATTACHMENT_TOKEN_EXPIRED',
+        expose: true,
+      });
+    }
+    if (!repos.messages.getRaw(payload.m)) throw new NotFoundError('Message for this attachment token no longer exists.');
+    const result = await mailService.fetchAttachment(payload.m, payload.i);
+    const contentType = safeAttachmentType(result.contentType);
+    const filename = asciiFilename(result.filename);
+    const inline = INLINE_IMAGE_TYPES.has(contentType);
+    response.set('Content-Type', contentType);
+    response.set('Content-Length', String(result.body.length));
+    response.set('Cache-Control', 'private, no-store');
+    response.set('X-Content-Type-Options', 'nosniff');
+    response.set('Cross-Origin-Resource-Policy', 'same-origin');
+    response.set(
+      'Content-Disposition',
+      `${inline ? 'inline' : 'attachment'}; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
+    );
+    response.send(result.body);
+  });
+
   const router = express.Router();
   router.use(accessGate(config));
+
+  router.post('/session/passkey/register/options', async (request, response) => {
+    if (!passkeys) throw new ServiceUnavailableError('Passkeys are unavailable on this server.');
+    response.json(await passkeys.registrationOptions(request));
+  });
+  router.post('/session/passkey/register', async (request, response) => {
+    if (!passkeys) throw new ServiceUnavailableError('Passkeys are unavailable on this server.');
+    response.status(201).json(await passkeys.register(request, request.body || {}));
+  });
+  router.get('/session/passkeys', (_request, response) => {
+    if (!passkeys) return response.json({ passkeys: [] });
+    response.json({ passkeys: passkeys.list() });
+  });
+  router.delete('/session/passkeys/:id', (request, response) => {
+    if (!passkeys?.remove(request.params.id)) throw new NotFoundError('Passkey not found.');
+    response.status(204).end();
+  });
 
   // Custom account probes can target operator-supplied hosts. Keep this behind
   // the access gate and tightly rate-limited so it cannot become a LAN scanner.

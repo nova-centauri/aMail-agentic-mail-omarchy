@@ -4,6 +4,7 @@ import { loadConfig } from './config.js';
 import { createDatabase, createRepositories } from './db.js';
 import { createMailService } from './services/mail-service.js';
 import { createRemoteContentService } from './services/remote-content.js';
+import { createPasskeyService } from './services/passkeys.js';
 import { createApp } from './app.js';
 
 const config = loadConfig();
@@ -12,7 +13,8 @@ const database = createDatabase(config);
 const repos = createRepositories(database);
 const remoteContent = createRemoteContentService({ config, repos, logger });
 const mailService = createMailService({ config, repos, logger });
-const app = createApp({ config, repos, mailService, remoteContent, logger });
+const passkeys = createPasskeyService({ config, repos });
+const app = createApp({ config, repos, mailService, remoteContent, logger, passkeys });
 
 const server = app.listen(config.port, config.host, () => {
   logger.info({ host: config.host, port: config.port, dataDir: config.dataDir }, 'GigaMail is ready');

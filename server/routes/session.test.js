@@ -46,7 +46,7 @@ test('session logout clears the cookie with matching attributes so later request
       headers: { Cookie: `gigamail_session=${encodeURIComponent(accessToken)}` },
     });
     assert.equal(cookieAuth.status, 200);
-    assert.deepEqual(await cookieAuth.json(), { protected: true, authenticated: true });
+    assert.deepEqual(await cookieAuth.json(), { protected: true, authenticated: true, passkeys: 0 });
 
     const logout = await fetch(`${origin}/api/session`, { method: 'DELETE' });
     assert.equal(logout.status, 204);
@@ -56,7 +56,7 @@ test('session logout clears the cookie with matching attributes so later request
 
     const afterLogout = await fetch(`${origin}/api/session`);
     assert.equal(afterLogout.status, 200);
-    assert.deepEqual(await afterLogout.json(), { protected: true, authenticated: false });
+    assert.deepEqual(await afterLogout.json(), { protected: true, authenticated: false, passkeys: 0 });
   } finally {
     server.close();
     fs.rmSync(dataDir, { recursive: true, force: true });

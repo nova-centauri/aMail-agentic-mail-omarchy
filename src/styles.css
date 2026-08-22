@@ -406,3 +406,27 @@ button:disabled { cursor: default; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+.attachment-chip { text-decoration: none; }
+a.attachment-chip { cursor: pointer; }
+.thread-row.is-cursor { box-shadow: inset 3px 0 var(--blue); }
+.passkey-button { width: 100%; margin: 0 0 12px; min-height: 42px; }
+.token-fallback { margin: 0 0 14px; }
+.passkey-list { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 8px; }
+.passkey-list li { min-height: 44px; padding: 6px 0; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--line); }
+.passkey-list span { min-width: 0; flex: 1; display: grid; gap: 2px; }
+.passkey-list strong { font-size: 12px; }
+.passkey-list small { color: var(--muted); font-size: 11px; }
+.shortcut-modal {
+  position: relative; z-index: 1; width: min(420px, 100%); max-height: min(640px, calc(100vh - 36px));
+  display: flex; flex-direction: column; overflow: hidden; border-radius: 14px; color: var(--ink);
+  background: var(--surface); box-shadow: 0 12px 32px rgba(0,0,0,.4);
+}
+.shortcut-header { min-height: 56px; padding: 0 12px 0 22px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); }
+.shortcut-header h2 { margin: 0; font-size: 18px; font-weight: 500; }
+.shortcut-list { margin: 0; padding: 10px 22px 18px; list-style: none; overflow-y: auto; }
+.shortcut-list li { min-height: 36px; display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--line); font-size: 13px; }
+.shortcut-list kbd {
+  min-width: 28px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--bg); color: var(--ink); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; text-align: center;
+}
