@@ -1748,24 +1748,36 @@ function SettingsPanel({ open, onClose, accounts, activeAccount, setActiveAccoun
     <>
       <button type="button" className="settings-scrim" onClick={onClose} aria-label="Close settings" />
       <aside className="settings-panel" aria-label="Quick settings">
-        <div className="settings-header"><h2>Quick settings</h2><IconButton label="Close settings" onClick={onClose}><Icon name="close" /></IconButton></div>
+        <div className="settings-header">
+          <div className="settings-header-copy">
+            <h2>Quick settings</h2>
+            <p>Switch accounts and tune this mailbox.</p>
+          </div>
+          <IconButton label="Close settings" onClick={onClose}><Icon name="close" /></IconButton>
+        </div>
         <div className="settings-scroll">
           <section className="settings-section">
             <h3>Accounts</h3>
-            <p className="settings-description">Switch identities or check connection status.</p>
+            <p className="settings-description">Choose which identity you are reading and sending as.</p>
             <div className="settings-accounts">
               {showUnified && (
                 <button type="button" className={`settings-account ${!activeAccount ? 'is-active' : ''}`} onClick={() => setActiveAccount(null)}>
                   <Avatar person={UNIFIED_ACCOUNT} size="md" />
-                  <span><strong>All inboxes</strong><small>Unified inbox</small></span>
-                  <Icon name={!activeAccount ? 'check' : 'chevronRight'} size={18} />
+                  <span className="settings-account-copy"><strong>All inboxes</strong><small>Unified inbox</small></span>
+                  <span className="settings-account-meta">
+                    <em className="status-pill">Unified</em>
+                    <Icon name={!activeAccount ? 'check' : 'chevronRight'} size={18} />
+                  </span>
                 </button>
               )}
               {accounts.map((account) => (
                 <button type="button" className={`settings-account ${activeAccount?.id === account.id ? 'is-active' : ''}`} key={account.id} onClick={() => setActiveAccount(account)}>
                   <Avatar person={account} size="md" />
-                  <span><strong>{account.name}</strong><small>{account.email}</small></span>
-                  <Icon name={activeAccount?.id === account.id ? 'check' : 'chevronRight'} size={18} />
+                  <span className="settings-account-copy"><strong>{account.name}</strong><small>{account.email}</small></span>
+                  <span className="settings-account-meta">
+                    <em className={`status-pill ${account.connected ? 'is-connected' : 'is-attention'}`}>{account.connected ? 'Connected' : 'Needs attention'}</em>
+                    <Icon name={activeAccount?.id === account.id ? 'check' : 'chevronRight'} size={18} />
+                  </span>
                 </button>
               ))}
             </div>
@@ -2133,12 +2145,12 @@ function ProfileMenu({ open, onClose, account, accounts, setActiveAccount, onSel
       <section className="profile-menu" aria-label="Account menu">
         <button type="button" className="profile-close" onClick={onClose}><Icon name="close" size={18} /></button>
         <Avatar person={account} size="hero" />
-        <strong>{account?.name}</strong>
-        <span>{account?.email}</span>
+        <strong className="profile-name">{account?.name}</strong>
+        <span className="profile-email">{account?.email}</span>
         <button type="button" className="manage-account-button" onClick={() => { onOpenSettings(); onClose(); }}>Manage your accounts</button>
         <div className="profile-account-list">
-          {showUnified && <button type="button" onClick={() => { onSelectUnified(); onClose(); }}><Avatar person={UNIFIED_ACCOUNT} size="sm" /><span>All inboxes</span>{account?.isUnified && <Icon name="check" size={17} />}</button>}
-          {accounts.map((item) => <button type="button" key={item.id} onClick={() => { setActiveAccount(item); onClose(); }}><Avatar person={item} size="sm" /><span>{item.email}</span>{item.id === account?.id && <Icon name="check" size={17} />}</button>)}
+          {showUnified && <button type="button" onClick={() => { onSelectUnified(); onClose(); }}><Avatar person={UNIFIED_ACCOUNT} size="sm" /><span className="profile-account-copy">All inboxes</span>{account?.isUnified && <Icon name="check" size={17} />}</button>}
+          {accounts.map((item) => <button type="button" key={item.id} onClick={() => { setActiveAccount(item); onClose(); }}><Avatar person={item} size="sm" /><span className="profile-account-copy">{item.email}</span>{item.id === account?.id && <Icon name="check" size={17} />}</button>)}
         </div>
         <button type="button" className="logout-button" onClick={onLogout}>
           <Icon name="logout" size={18} />

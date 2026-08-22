@@ -1,0 +1,364 @@
+/* High-effort visual polish on top of the default dark chrome. */
+
+html { background: #0c0e12; }
+body { background: #0c0e12; }
+:focus-visible { outline: 2px solid #7dd3fc; outline-offset: 2px; }
+
+.mail-app {
+  --bg: #0c0e12;
+  --surface: #15181e;
+  --surface-hover: #222833;
+  --line: #2a313c;
+  --ink: #eef1f4;
+  --muted: #9aa3ad;
+  letter-spacing: -.01em;
+}
+
+.mail-app,
+.sidebar-content,
+.thread-list,
+.settings-scroll,
+.thread-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #3c4450 transparent;
+}
+
+.icon-button { color: #c5ccd3; border-radius: 50%; }
+.icon-button:hover:not(:disabled),
+.icon-button.is-active { background: #252b34; color: #f3f6f8; }
+
+.topbar {
+  height: var(--topbar-height);
+  padding: 8px 16px 8px 10px;
+  background: #0c0e12;
+  border-bottom: 1px solid #1c2129;
+}
+.brand { border-radius: 22px; }
+.brand-name { color: #d7dde4; font-weight: 500; letter-spacing: -.5px; }
+.preview-pill {
+  background: rgba(125, 211, 252, .12);
+  color: #7dd3fc;
+  border: 1px solid rgba(125, 211, 252, .2);
+}
+.search-shell {
+  height: 46px;
+  background: #171b22;
+  border: 1px solid #262c36;
+  color: #c5ccd3;
+}
+.search-shell:focus-within {
+  background: #12151b;
+  border-color: #3d4c63;
+  box-shadow: 0 0 0 3px rgba(125, 211, 252, .12);
+}
+.top-actions { gap: 4px; }
+
+.sidebar { background: #0c0e12; }
+.compose-button {
+  color: #04293a;
+  background: linear-gradient(180deg, #8ce7ff, #67e8f9);
+  border-radius: 18px;
+  font-weight: 650;
+}
+.compose-button:hover {
+  background: linear-gradient(180deg, #9aedff, #5eead4);
+}
+.nav-item { border-radius: 0 18px 18px 0; }
+.nav-item.is-selected {
+  color: #e8f1ff;
+  background: #1a3358;
+}
+.account-row {
+  border-radius: 12px;
+  width: calc(100% - 10px);
+  margin-left: 6px;
+  padding-left: 12px;
+}
+.account-row .avatar { box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .08); }
+.connection-dot {
+  width: 8px;
+  height: 8px;
+  box-shadow: 0 0 0 3px rgba(30, 142, 62, 0);
+}
+.connection-dot.is-connected {
+  background: #34d399;
+  box-shadow: 0 0 0 3px rgba(52, 211, 153, .16);
+}
+.storage-card {
+  border-radius: 14px;
+  background: #15191f;
+  border: 1px solid #242a33;
+}
+
+.mail-workspace { background: #0c0e12; }
+.demo-banner,
+.flag-banner {
+  border-bottom: 1px solid #243044;
+  background: #132033;
+}
+.mail-list-panel,
+.thread-panel,
+.reader-placeholder {
+  background: #15181e;
+  border: 1px solid #222831;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .22);
+}
+.list-toolbar,
+.thread-toolbar,
+.smart-filter-bar { border-bottom-color: #242a33; }
+.smart-filter-bar { background: #15181e; }
+.smart-filter-chip {
+  border-radius: 999px;
+  background: #11141a;
+}
+.thread-row {
+  background: #12151b;
+  border-bottom-color: #1f252e;
+}
+.thread-row.is-unread { background: #171b22; }
+.thread-row.is-selected {
+  background: #1a2b45;
+  box-shadow: inset 3px 0 0 #7dd3fc;
+}
+.thread-row:hover { background: #1b2028; box-shadow: none; }
+.thread-row.is-selected:hover { background: #1d3352; }
+.empty-icon,
+.smart-filter-mark { border-radius: 12px; }
+
+.settings-panel {
+  width: min(428px, 96vw);
+  background:
+    linear-gradient(180deg, rgba(29, 79, 134, .16), transparent 140px),
+    #13161c;
+  border-left: 1px solid #262c36;
+  box-shadow: -18px 0 50px rgba(0, 0, 0, .45);
+}
+.settings-header {
+  min-height: 76px;
+  padding: 16px 14px 16px 22px;
+  align-items: flex-start;
+  border-bottom: 1px solid #262c36;
+}
+.settings-header-copy { min-width: 0; display: grid; gap: 3px; }
+.settings-header h2 {
+  font-size: 22px;
+  font-weight: 550;
+  letter-spacing: -.4px;
+}
+.settings-header-copy p {
+  margin: 0;
+  color: #9aa3ad;
+  font-size: 12px;
+}
+.settings-section {
+  padding: 22px 20px 24px;
+  border-bottom: 1px solid #232933;
+}
+.settings-section h3 {
+  font-size: 12px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: #c5ccd3;
+}
+.settings-description { color: #8b949e; }
+
+.settings-accounts { display: grid; gap: 8px; }
+.settings-account {
+  min-height: 68px;
+  padding: 10px 12px;
+  gap: 12px;
+  border: 1px solid #2a313c;
+  border-radius: 16px;
+  background: #171b22;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .02);
+}
+.settings-account:hover { background: #1d222b; border-color: #364051; }
+.settings-account.is-active {
+  border-color: rgba(125, 211, 252, .38);
+  background: #172433;
+  box-shadow: inset 0 0 0 1px rgba(125, 211, 252, .12);
+}
+.settings-account .avatar {
+  box-shadow: 0 0 0 2px #13161c, 0 0 0 3px rgba(255, 255, 255, .08);
+}
+.settings-account.is-active .avatar {
+  box-shadow: 0 0 0 2px #172433, 0 0 0 3px #7dd3fc;
+}
+.settings-account-copy strong {
+  font-size: 13px;
+  font-weight: 650;
+}
+.settings-account-copy small {
+  color: #9aa3ad;
+  font-size: 11px;
+}
+.settings-account-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.settings-account-meta .icon { color: #8ab4f8; }
+.status-pill {
+  min-height: 20px;
+  padding: 0 7px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  background: #232833;
+  color: #c5ccd3;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.status-pill.is-connected {
+  background: rgba(52, 211, 153, .14);
+  color: #6ee7b7;
+}
+.status-pill.is-attention {
+  background: rgba(251, 191, 36, .14);
+  color: #fbbf24;
+}
+.add-account-button {
+  margin-top: 12px;
+  min-height: 38px;
+  padding: 0 12px;
+  border-radius: 12px;
+  background: rgba(138, 180, 248, .06);
+}
+.add-account-button:hover { background: rgba(138, 180, 248, .12); }
+
+.density-options { gap: 8px; }
+.density-options button {
+  min-height: 92px;
+  border-radius: 14px;
+  background: #171b22;
+  border-color: #2a313c;
+}
+.density-options button.is-selected {
+  border: 1px solid #7dd3fc;
+  background: #172433;
+  color: #7dd3fc;
+  box-shadow: inset 0 0 0 1px rgba(125, 211, 252, .18);
+}
+.density-preview {
+  border-radius: 6px;
+  background: #11141a;
+  border-color: #3c4450;
+}
+
+.privacy-enforced {
+  padding: 12px 0;
+  border-color: #2a313c;
+}
+.privacy-enforced em {
+  border-radius: 999px;
+  padding: 5px 8px;
+}
+.settings-toggle {
+  padding: 4px 0;
+}
+.settings-toggle i {
+  width: 40px;
+  height: 22px;
+  border-radius: 999px;
+  background: #3c4450;
+}
+.settings-toggle i::after {
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .4);
+}
+.settings-toggle input:checked + i { background: #38bdf8; }
+.settings-toggle input:checked + i::after {
+  transform: translateX(18px);
+  background: #ecfeff;
+}
+
+.signature-section textarea {
+  border-radius: 12px;
+  padding: 12px;
+  background: #11141a;
+  border-color: #2a313c;
+  min-height: 92px;
+}
+.server-access-section .secondary-button {
+  min-height: 38px;
+  border-radius: 12px;
+}
+
+.profile-menu {
+  top: 58px;
+  padding: 22px 18px 16px;
+  border: 1px solid #2a313c;
+  border-radius: 22px;
+  background: #15181e;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, .5);
+}
+.profile-menu .avatar-hero {
+  box-shadow: 0 0 0 3px #15181e, 0 0 0 5px rgba(125, 211, 252, .35);
+}
+.profile-name { font-size: 16px; font-weight: 650; letter-spacing: -.2px; }
+.profile-email { color: #9aa3ad; font-size: 12px; }
+.manage-account-button {
+  border-radius: 999px;
+  background: #171b22;
+}
+.profile-account-list {
+  margin-top: 2px;
+  padding: 10px 0;
+}
+.profile-account-list button {
+  min-height: 42px;
+  padding: 6px 8px;
+  border-radius: 12px;
+  gap: 10px;
+}
+.profile-account-list .avatar {
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .08);
+}
+.logout-button {
+  min-height: 42px;
+  border-radius: 13px;
+  background: #171b22;
+  border-color: #2a313c;
+}
+
+.account-modal,
+.access-modal,
+.account-onboarding {
+  border: 1px solid #2a313c;
+  background: #15181e;
+}
+.access-modal { border-radius: 22px; padding: 30px 28px 24px; }
+.access-mark { width: 56px; height: 56px; }
+.provider-card { border-radius: 16px; }
+.form-field input,
+.form-field select,
+.form-field textarea {
+  border-radius: 10px;
+  background: #11141a;
+}
+
+.toast {
+  border-radius: 12px;
+  background: #1f232b;
+  border: 1px solid #323844;
+}
+
+.message-card {
+  border-radius: 12px;
+}
+.conversation-stack { gap: 10px; }
+.thread-heading { padding-top: 20px; }
+.thread-heading h1 { letter-spacing: -.4px; }
+
+@media (max-width: 650px) {
+  .settings-panel { width: 100vw; }
+  .settings-account-meta .status-pill { display: none; }
+}
