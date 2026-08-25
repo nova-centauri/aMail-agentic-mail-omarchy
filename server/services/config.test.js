@@ -24,7 +24,14 @@ test('release SHA is exposed only when it is a full commit identifier', () => {
 test('WebAuthn origin and RP ID are read from explicit configuration', () => {
   assert.equal(loadConfig({}).webauthnRpId, '');
   assert.deepEqual(loadConfig({}).webauthnOrigins, []);
+  assert.equal(loadConfig({ NODE_ENV: 'production' }).webauthnRpId, 'mail.xer0.io');
+  assert.deepEqual(loadConfig({ NODE_ENV: 'production' }).webauthnOrigins, ['https://mail.xer0.io']);
+  assert.equal(loadConfig({ NODE_ENV: 'production', GIGAMAIL_RP_ID: '', GIGAMAIL_ORIGIN: '' }).webauthnRpId, 'mail.xer0.io');
   assert.equal(loadConfig({ GIGAMAIL_RP_ID: 'mail.xer0.io', GIGAMAIL_ORIGIN: 'https://mail.xer0.io' }).webauthnRpId, 'mail.xer0.io');
+  assert.equal(
+    loadConfig({ NODE_ENV: 'production', GIGAMAIL_RP_ID: 'mail.example.test', GIGAMAIL_ORIGIN: 'https://mail.example.test' }).webauthnRpId,
+    'mail.example.test',
+  );
   assert.deepEqual(
     loadConfig({ GIGAMAIL_ORIGIN: 'https://mail.xer0.io,http://localhost:5173' }).webauthnOrigins,
     ['https://mail.xer0.io', 'http://localhost:5173'],

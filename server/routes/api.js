@@ -103,6 +103,8 @@ export function registerApi(app, { config, repos, mailService, remoteContent, pa
       credentialsConfigured: Boolean(config.credentialKey),
       remoteContentProxyConfigured: Boolean(config.remoteContentProxyUrl),
       remoteContentDirectDevelopmentOnly: Boolean(config.allowDirectRemoteContent),
+      webauthnRpId: config.webauthnRpId || null,
+      webauthnOrigins: config.webauthnOrigins || [],
     });
   });
 

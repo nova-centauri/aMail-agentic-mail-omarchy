@@ -6,6 +6,9 @@ const boolean = (value, fallback = false) => {
   return ['1', 'true', 'yes', 'on'].includes(String(value).toLowerCase());
 };
 
+const PRODUCTION_WEBAUTHN_RP_ID = 'mail.xer0.io';
+const PRODUCTION_WEBAUTHN_ORIGIN = 'https://mail.xer0.io';
+
 const integer = (value, fallback, { min = 0, max = Number.MAX_SAFE_INTEGER } = {}) => {
   const parsed = Number.parseInt(value, 10);
   return Number.isInteger(parsed) && parsed >= min && parsed <= max ? parsed : fallback;
@@ -77,10 +80,29 @@ export function loadConfig(env = process.env) {
       && boolean(env.GIGAMAIL_ALLOW_DIRECT_REMOTE_CONTENT),
     logLevel: env.LOG_LEVEL || 'info',
     webauthnRpName: env.GIGAMAIL_RP_NAME || 'GigaMail',
-    webauthnRpId: String(env.GIGAMAIL_RP_ID || '').trim(),
-    webauthnOrigins: String(env.GIGAMAIL_ORIGIN || '')
-      .split(',')
-      .map((value) => value.trim())
-      .filter(Boolean),
+    webauthnRpId: webauthnRpId(env),
+    webauthnOrigins: webauthnOrigins(env),
   });
+}
+
+function isProduction(env) {
+  return (env.NODE_ENV || 'development') === 'production';
+}
+
+function webauthnRpId(env) {
+  const explicit = String(env.GIGAMAIL_RP_ID || '').trim();
+  if (explicit) return explicit;
+  // Passkeys must match the public HTTPS origin. Behind Nginx the container
+  // often sees an internal Host and http, so production pins mail.xer0.io
+  // unless the operator overrides it.
+  return isProduction(env) ? PRODUCTION_WEBAUTHN_RP_ID : '';
+}
+
+function webauthnOrigins(env) {
+  const explicit = String(env.GIGAMAIL_ORIGIN || '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (explicit.length) return explicit;
+  return isProduction(env) ? [PRODUCTION_WEBAUTHN_ORIGIN] : [];
 }
