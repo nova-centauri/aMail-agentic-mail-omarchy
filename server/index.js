@@ -9,7 +9,13 @@ import { createApp } from './app.js';
 
 const config = loadConfig();
 const logger = pino({ level: config.logLevel, redact: ['req.headers.authorization', 'req.headers.cookie'] });
-const database = createDatabase(config);
+let database;
+try {
+  database = createDatabase(config);
+} catch (error) {
+  logger.fatal({ err: error }, 'Failed to initialize the GigaMail database');
+  process.exit(1);
+}
 const repos = createRepositories(database);
 const remoteContent = createRemoteContentService({ config, repos, logger });
 const mailService = createMailService({ config, repos, logger });
