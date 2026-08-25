@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
 import {
@@ -379,29 +380,68 @@ function initSchema(db) {
       INSERT INTO messages_fts(messages_fts, rowid) VALUES('delete', old.rowid);
     END;
   `);
+  backfillMessagesFts(db);
+}
+
+const FTS_BACKFILL_BATCH = 100;
+
+function prepareSqliteTempDir(dataDir) {
+  const sqliteTmpDir = path.join(dataDir, 'tmp');
+  fs.mkdirSync(sqliteTmpDir, { recursive: true, mode: 0o700 });
+  // The Compose service is read-only with a 64 MiB /tmp tmpfs. FTS rebuilds of a
+  // live mailbox can overflow that and crash the process before listen().
+  process.env.SQLITE_TMPDIR = sqliteTmpDir;
+  return sqliteTmpDir;
+}
+
+function backfillMessagesFts(db, { batchSize = FTS_BACKFILL_BATCH } = {}) {
   const ftsCount = db.prepare('SELECT COUNT(*) AS count FROM messages_fts').get()?.count || 0;
   const messageCount = db.prepare('SELECT COUNT(*) AS count FROM messages').get()?.count || 0;
   const ftsColumns = new Set(db.prepare('PRAGMA table_info(messages)').all().map((column) => column.name));
   const canIndexFts = ['to_json', 'cc_json', 'bcc_json', 'text_body', 'snippet', 'from_name', 'from_email', 'subject']
     .every((column) => ftsColumns.has(column));
-  if (canIndexFts && ftsCount !== messageCount) {
-    db.exec("INSERT INTO messages_fts(messages_fts) VALUES('delete-all')");
-    const rows = db.prepare('SELECT rowid, subject, snippet, from_name, from_email, to_json, cc_json, bcc_json, text_body FROM messages').all();
-    const insertFts = db.prepare(`INSERT INTO messages_fts(
-      rowid, subject, snippet, from_name, from_email, recipients, text_body
-    ) VALUES (@rowid, @subject, @snippet, @from_name, @from_email, @recipients, @text_body)`);
-    db.transaction((documents) => {
-      for (const row of documents) insertFts.run(ftsDocument(row, json));
-    })(rows);
+  if (!canIndexFts || ftsCount === messageCount) return;
+
+  // delete-all is only valid on contentless/external-content FTS5 tables.
+  // This standalone index must be cleared with a normal DELETE.
+  db.exec('DELETE FROM messages_fts');
+  const selectBatch = db.prepare(`
+    SELECT rowid, subject, snippet, from_name, from_email, to_json, cc_json, bcc_json, text_body
+    FROM messages
+    WHERE rowid > ?
+    ORDER BY rowid
+    LIMIT ?
+  `);
+  const insertFts = db.prepare(`INSERT INTO messages_fts(
+    rowid, subject, snippet, from_name, from_email, recipients, text_body
+  ) VALUES (@rowid, @subject, @snippet, @from_name, @from_email, @recipients, @text_body)`);
+  const insertBatch = db.transaction((rows) => {
+    for (const row of rows) {
+      try {
+        insertFts.run(ftsDocument(row, json));
+      } catch {
+        // One unindexable body must not keep the whole inbox from starting.
+      }
+    }
+  });
+
+  let lastRowid = 0;
+  for (;;) {
+    const rows = selectBatch.all(lastRowid, batchSize);
+    if (!rows.length) break;
+    insertBatch(rows);
+    lastRowid = rows[rows.length - 1].rowid;
   }
 }
 
 export function createDatabase(config) {
   fs.mkdirSync(config.dataDir, { recursive: true, mode: 0o700 });
+  const sqliteTmpDir = prepareSqliteTempDir(config.dataDir);
   const db = new Database(config.dbPath);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   db.pragma('busy_timeout = 5000');
+  db.pragma(`temp_store_directory = '${sqliteTmpDir.replace(/'/g, "''")}'`);
   initSchema(db);
   return db;
 }

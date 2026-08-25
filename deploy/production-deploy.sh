@@ -227,6 +227,8 @@ report_health_diagnostics() {
     docker inspect \
       --format 'gigamail: status={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} restarts={{.RestartCount}}' \
       "$app_id" >&2 || true
+    echo "Recent GigaMail logs:" >&2
+    compose logs --no-color --tail 200 gigamail >&2 || true
   else
     echo "gigamail: container not found" >&2
   fi
