@@ -41,12 +41,31 @@ function sender(value) {
 }
 
 function attachmentMetadata(attachments = []) {
-  return attachments.map((attachment) => ({
+  return attachments.map((attachment, index) => ({
+    index,
     filename: attachment.filename || 'attachment',
     contentType: attachment.contentType || 'application/octet-stream',
     size: Number(attachment.size || attachment.content?.length || 0),
-    contentId: attachment.cid || null,
+    contentId: attachment.cid || attachment.contentId || null,
   }));
+}
+
+function normalizeCid(value) {
+  return String(value || '').replace(/^<|>$/g, '').toLowerCase();
+}
+
+function pickParsedAttachment(parsedAttachments, index, meta) {
+  const list = Array.isArray(parsedAttachments) ? parsedAttachments : [];
+  const wantedCid = normalizeCid(meta?.contentId);
+  if (wantedCid) {
+    const byCid = list.find((item) => normalizeCid(item.cid || item.contentId) === wantedCid);
+    if (byCid) return byCid;
+  }
+  if (Number.isInteger(index) && list[index]) return list[index];
+  if (meta?.filename) {
+    return list.find((item) => item.filename === meta.filename) || null;
+  }
+  return null;
 }
 
 export function buildImapOptions(account, credentials, config) {
@@ -322,6 +341,25 @@ export function createMailService({
 }) {
   const newImapClient = (account, credentials) => new ImapClient(buildImapOptions(account, credentials, config));
   const newSmtpTransport = (account, credentials) => createSmtpTransport(buildSmtpOptions(account, credentials, config));
+  const attachmentCache = new Map();
+
+  function cachedAttachment(key) {
+    const entry = attachmentCache.get(key);
+    if (!entry) return null;
+    if (entry.expires < Date.now()) {
+      attachmentCache.delete(key);
+      return null;
+    }
+    return entry.value;
+  }
+
+  function rememberAttachment(key, value) {
+    if (attachmentCache.size >= 24) {
+      const oldest = attachmentCache.keys().next().value;
+      attachmentCache.delete(oldest);
+    }
+    attachmentCache.set(key, { value, expires: Date.now() + 60_000 });
+  }
 
   function accountAndCredentials(accountId) {
     const account = repos.accounts.getRaw(accountId);
@@ -624,6 +662,68 @@ export function createMailService({
       }
     }
     return results;
+  }
+
+  async function fetchAttachment(messageId, index) {
+    const resolvedIndex = Number(index);
+    if (!Number.isInteger(resolvedIndex) || resolvedIndex < 0) {
+      throw new ValidationError('Attachment index is invalid.');
+    }
+    const cacheKey = `${messageId}:${resolvedIndex}`;
+    const cached = cachedAttachment(cacheKey);
+    if (cached) return cached;
+
+    const message = repos.messages.get(messageId);
+    if (!message) throw new NotFoundError('Message not found.');
+    const meta = (message.attachments || []).find((item) => item.index === resolvedIndex)
+      || message.attachments?.[resolvedIndex];
+    if (!meta) throw new NotFoundError('Attachment not found.');
+    if (!Number.isInteger(message.uid) || message.uid < 1) {
+      throw new ServiceUnavailableError(
+        'This attachment is not available from IMAP. Sync the mailbox and try again.',
+        'ATTACHMENT_IMAP_UID_MISSING',
+      );
+    }
+
+    const { account, credentials } = accountAndCredentials(message.accountId);
+    const maxMessageBytes = Number.isSafeInteger(config.syncMaxMessageBytes)
+      ? config.syncMaxMessageBytes
+      : DEFAULT_SYNC_MAX_MESSAGE_BYTES;
+    const client = newImapClient(account, credentials);
+    let lock;
+    try {
+      await client.connect();
+      lock = await client.getMailboxLock(message.mailbox || 'INBOX');
+      const sourceMessage = await client.fetchOne(message.uid, {
+        uid: true,
+        source: { start: 0, maxLength: maxMessageBytes + 1 },
+      }, { uid: true });
+      const source = sourceMessage?.source;
+      if (!Buffer.isBuffer(source) || source.length > maxMessageBytes) {
+        throw new ServiceUnavailableError('The original message could not be downloaded for this attachment.', 'ATTACHMENT_SOURCE_UNAVAILABLE');
+      }
+      const parsed = await simpleParser(source);
+      const picked = pickParsedAttachment(parsed.attachments, resolvedIndex, meta);
+      const body = picked?.content;
+      if (!Buffer.isBuffer(body) && !(body instanceof Uint8Array)) {
+        throw new NotFoundError('Attachment not found in the original message.');
+      }
+      const value = {
+        filename: picked.filename || meta.filename || 'attachment',
+        contentType: picked.contentType || meta.contentType || 'application/octet-stream',
+        body: Buffer.from(body),
+        contentId: picked.cid || meta.contentId || null,
+      };
+      rememberAttachment(cacheKey, value);
+      return value;
+    } catch (error) {
+      if (error instanceof NotFoundError || error instanceof ServiceUnavailableError || error instanceof ValidationError) throw error;
+      logger.warn({ messageId, err: cleanupError(error) }, 'IMAP attachment download failed');
+      throw new ServiceUnavailableError('Could not download this attachment from the mail server.', 'ATTACHMENT_IMAP_FAILED');
+    } finally {
+      lock?.release();
+      await client.logout().catch(() => {});
+    }
   }
 
   async function verifyAccountConnections(account, credentials) {
@@ -933,5 +1033,5 @@ export function createMailService({
     }
   }
 
-  return { syncAccount, syncAll, testSettings, testAccount, sendMessage, updateMessageState };
+  return { syncAccount, syncAll, testSettings, testAccount, sendMessage, updateMessageState, fetchAttachment };
 }

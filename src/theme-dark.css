@@ -432,3 +432,23 @@
   .sidebar { box-shadow: 4px 0 14px rgba(0, 0, 0, .4); }
   .sidebar-scrim { background: rgba(0, 0, 0, .5); }
 }
+
+.thread-row.is-cursor { box-shadow: inset 3px 0 #8ab4f8; }
+.passkey-list li { border-bottom-color: #2c313a; }
+.passkey-list strong { color: #e8eaed; }
+.passkey-list small { color: #9aa0a6; }
+.passkey-button { gap: 8px; }
+.shortcut-modal {
+  color: #e8eaed;
+  background: #1a1d23;
+  border: 1px solid #2a313c;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, .5);
+}
+.shortcut-header { border-bottom-color: #2c313a; }
+.shortcut-header h2 { color: #e8eaed; }
+.shortcut-list li { border-bottom-color: #2c313a; color: #c4c7c5; }
+.shortcut-list kbd {
+  border-color: #3c4450;
+  background: #11141a;
+  color: #e8eaed;
+}

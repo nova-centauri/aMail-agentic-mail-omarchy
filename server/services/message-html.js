@@ -16,7 +16,7 @@ const sanitizerOptions = {
     '*': ['align', 'colspan', 'rowspan'],
   },
   allowedSchemes: ['http', 'https', 'mailto'],
-  allowedSchemesByTag: { img: ['http', 'https', 'data'] },
+  allowedSchemesByTag: { img: ['http', 'https', 'data', 'cid'] },
   // Deliberately no style attributes: even CSS can retrieve external resources
   // through url(), disguise click targets, or create a hostile mail layout.
   allowProtocolRelative: false,
@@ -90,6 +90,14 @@ export function sanitizeEmailHtml(value) {
       return;
     }
 
+    if (source.toLowerCase().startsWith('cid:')) {
+      const cid = source.slice(4).replace(/^<|>$/g, '');
+      element.removeAttr('src');
+      element.attr('data-cid', cid);
+      if (!element.attr('alt')) element.attr('alt', 'Inline image');
+      return;
+    }
+
     if (source.startsWith('data:')) {
       if (!ALLOWED_DATA_IMAGE.test(source) || source.length > MAX_EMBEDDED_IMAGE_LENGTH) {
         element.removeAttr('src');
@@ -98,8 +106,6 @@ export function sanitizeEmailHtml(value) {
       return;
     }
 
-    // cid: requires mapping to a stored attachment; do not accidentally cause a
-    // browser request for an untrusted scheme while that feature is unavailable.
     element.removeAttr('src');
     if (!element.attr('alt')) element.attr('alt', 'Inline image unavailable');
   });
@@ -129,4 +135,29 @@ export function hydrateRemoteContent(html, { issueToken }) {
     count += 1;
   });
   return { html: $.root().html() || '', remoteImageCount: count };
+}
+
+function normalizeCid(value) {
+  return String(value || '').replace(/^<|>$/g, '').toLowerCase();
+}
+
+/**
+ * Point cid: images at same-origin attachment URLs. These are IMAP parts, not
+ * remote fetches, so they can render as soon as a message is opened.
+ */
+export function hydrateCidImages(html, attachments = []) {
+  const $ = loadHtml(String(html || ''), null, false);
+  const byCid = new Map();
+  for (const attachment of attachments) {
+    const cid = normalizeCid(attachment?.contentId);
+    if (cid && attachment.url) byCid.set(cid, attachment);
+  }
+  $('img[data-cid]').each((_, image) => {
+    const element = $(image);
+    const attachment = byCid.get(normalizeCid(element.attr('data-cid')));
+    if (!attachment?.url) return;
+    element.attr('src', attachment.url);
+    element.attr('referrerpolicy', 'no-referrer');
+  });
+  return { html: $.root().html() || '' };
 }

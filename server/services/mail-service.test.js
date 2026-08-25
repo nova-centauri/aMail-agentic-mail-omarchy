@@ -551,3 +551,80 @@ test('Gmail skips IMAP APPEND because Gmail automatically files SMTP sends', asy
     reason: 'gmail-auto-copies-sent',
   });
 });
+
+test('attachment download re-fetches the original IMAP source and returns one part', async () => {
+  const pdf = Buffer.from('%PDF-1.4 attachment-bytes');
+  const source = Buffer.from([
+    'From: Billing <billing@example.test>',
+    'To: Owner <owner@example.test>',
+    'Subject: Invoice',
+    'Message-ID: <invoice@example.test>',
+    'Date: Thu, 13 Aug 2026 12:00:00 +0000',
+    'MIME-Version: 1.0',
+    'Content-Type: multipart/mixed; boundary="bound"',
+    '',
+    '--bound',
+    'Content-Type: text/plain; charset=utf-8',
+    '',
+    'Invoice attached.',
+    '--bound',
+    'Content-Type: application/pdf',
+    'Content-Disposition: attachment; filename="invoice.pdf"',
+    'Content-Transfer-Encoding: base64',
+    '',
+    pdf.toString('base64'),
+    '--bound--',
+    '',
+  ].join('\r\n'));
+  let fetchOneUid = null;
+  class FakeImapClient {
+    async connect() {}
+    async getMailboxLock(mailbox) {
+      assert.equal(mailbox, 'INBOX');
+      return { release() {} };
+    }
+    async fetchOne(uid, query) {
+      fetchOneUid = uid;
+      assert.equal(query.source.maxLength, config.syncMaxMessageBytes + 1);
+      return { uid, source };
+    }
+    async logout() {}
+  }
+  const account = {
+    id: 'account-1',
+    email: 'owner@example.test',
+    credential_ciphertext: encryptJson({ username: 'owner@example.test', password: 'app-password' }, config.credentialKey),
+    imap_host: 'imap.example.test',
+    imap_port: 993,
+    imap_secure: 1,
+    provider: 'custom',
+  };
+  const service = createMailService({
+    config,
+    repos: {
+      accounts: { getRaw: (id) => id === account.id ? account : null },
+      messages: {
+        get: (id) => id === 'msg-1' ? {
+          id: 'msg-1',
+          accountId: account.id,
+          mailbox: 'INBOX',
+          uid: 42,
+          attachments: [{ index: 0, filename: 'invoice.pdf', contentType: 'application/pdf', size: pdf.length }],
+        } : null,
+      },
+    },
+    logger: { info() {}, warn() {} },
+    ImapClient: FakeImapClient,
+  });
+
+  const first = await service.fetchAttachment('msg-1', 0);
+  assert.equal(fetchOneUid, 42);
+  assert.equal(first.filename, 'invoice.pdf');
+  assert.equal(first.contentType, 'application/pdf');
+  assert.equal(first.body.includes(pdf), true);
+
+  fetchOneUid = null;
+  const cached = await service.fetchAttachment('msg-1', 0);
+  assert.equal(fetchOneUid, null);
+  assert.equal(cached.body.equals(first.body), true);
+});

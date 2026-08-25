@@ -8,6 +8,7 @@ import {
   classifyMessage,
   isSmartCategory,
 } from './services/smart-filter.js';
+import { ftsDocument } from './services/fts.js';
 
 const json = (value, fallback = []) => {
   if (value === null || value === undefined || value === '') return fallback;
@@ -63,7 +64,13 @@ function publicMessage(row) {
     htmlBody: row.html_body || '',
     textBody: row.text_body || '',
     snippet: row.snippet || '',
-    attachments: json(row.attachments_json),
+    attachments: json(row.attachments_json).map((attachment, index) => ({
+      index: Number.isInteger(attachment?.index) ? attachment.index : index,
+      filename: attachment?.filename || attachment?.name || 'attachment',
+      contentType: attachment?.contentType || 'application/octet-stream',
+      size: Number(attachment?.size) || 0,
+      contentId: attachment?.contentId || attachment?.cid || null,
+    })),
     labels: json(row.labels_json),
     isRead: Boolean(row.is_read),
     isStarred: Boolean(row.is_starred),
@@ -221,6 +228,18 @@ function initSchema(db) {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS passkeys (
+      id TEXT PRIMARY KEY,
+      public_key BLOB NOT NULL,
+      counter INTEGER NOT NULL DEFAULT 0,
+      device_type TEXT,
+      backed_up INTEGER NOT NULL DEFAULT 0,
+      transports_json TEXT NOT NULL DEFAULT '[]',
+      name TEXT NOT NULL DEFAULT 'Passkey',
+      created_at TEXT NOT NULL,
+      last_used_at TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS sync_state (
       account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
       mailbox TEXT NOT NULL,
@@ -344,6 +363,36 @@ function initSchema(db) {
         });
       }
     })(staleMessages);
+  }
+
+  db.exec(`
+    CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+      subject,
+      snippet,
+      from_name,
+      from_email,
+      recipients,
+      text_body,
+      tokenize = 'unicode61 remove_diacritics 2'
+    );
+    CREATE TRIGGER IF NOT EXISTS messages_ad_fts AFTER DELETE ON messages BEGIN
+      INSERT INTO messages_fts(messages_fts, rowid) VALUES('delete', old.rowid);
+    END;
+  `);
+  const ftsCount = db.prepare('SELECT COUNT(*) AS count FROM messages_fts').get()?.count || 0;
+  const messageCount = db.prepare('SELECT COUNT(*) AS count FROM messages').get()?.count || 0;
+  const ftsColumns = new Set(db.prepare('PRAGMA table_info(messages)').all().map((column) => column.name));
+  const canIndexFts = ['to_json', 'cc_json', 'bcc_json', 'text_body', 'snippet', 'from_name', 'from_email', 'subject']
+    .every((column) => ftsColumns.has(column));
+  if (canIndexFts && ftsCount !== messageCount) {
+    db.exec("INSERT INTO messages_fts(messages_fts) VALUES('delete-all')");
+    const rows = db.prepare('SELECT rowid, subject, snippet, from_name, from_email, to_json, cc_json, bcc_json, text_body FROM messages').all();
+    const insertFts = db.prepare(`INSERT INTO messages_fts(
+      rowid, subject, snippet, from_name, from_email, recipients, text_body
+    ) VALUES (@rowid, @subject, @snippet, @from_name, @from_email, @recipients, @text_body)`);
+    db.transaction((documents) => {
+      for (const row of documents) insertFts.run(ftsDocument(row, json));
+    })(rows);
   }
 }
 
@@ -555,6 +604,52 @@ export function createRepositories(db) {
     settingByKey: db.prepare('SELECT * FROM settings WHERE key = ?'),
     settingUpsert: db.prepare(`INSERT INTO settings (key, value_json, updated_at) VALUES (?, ?, ?)
       ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`),
+    messageRow: db.prepare('SELECT rowid, * FROM messages WHERE id = ?'),
+    ftsInsert: db.prepare(`INSERT INTO messages_fts(
+      rowid, subject, snippet, from_name, from_email, recipients, text_body
+    ) VALUES (@rowid, @subject, @snippet, @from_name, @from_email, @recipients, @text_body)`),
+    ftsDelete: db.prepare("INSERT INTO messages_fts(messages_fts, rowid) VALUES('delete', ?)"),
+    searchThreadIds: db.prepare(`SELECT m.thread_id AS threadId
+      FROM messages m
+      JOIN messages_fts fts ON fts.rowid = m.rowid
+      WHERE m.account_id = @accountId AND
+        CASE @folder
+          WHEN 'inbox' THEN m.mailbox = 'INBOX' AND m.is_archived = 0 AND m.is_trashed = 0 AND m.is_spam = 0 AND (m.snoozed_until IS NULL OR m.snoozed_until <= @now)
+          WHEN 'starred' THEN m.is_starred = 1 AND m.is_trashed = 0
+          WHEN 'sent' THEN m.is_sent = 1 AND m.is_trashed = 0
+          WHEN 'drafts' THEN 0
+          WHEN 'snoozed' THEN m.snoozed_until > @now AND m.is_trashed = 0 AND m.is_spam = 0
+          WHEN 'all' THEN m.is_trashed = 0 AND m.is_spam = 0
+          WHEN 'trash' THEN m.is_trashed = 1
+          WHEN 'spam' THEN m.is_spam = 1 AND m.is_trashed = 0
+          WHEN 'archive' THEN m.is_archived = 1 AND m.is_trashed = 0 AND (m.snoozed_until IS NULL OR m.snoozed_until <= @now)
+          ELSE m.mailbox = @mailbox AND m.is_trashed = 0 AND m.is_spam = 0
+        END
+        AND messages_fts MATCH @ftsQuery
+      GROUP BY m.thread_id
+      ORDER BY MAX(COALESCE(m.sent_at, m.received_at, m.created_at)) DESC
+      LIMIT @limit`),
+    passkeyById: db.prepare('SELECT * FROM passkeys WHERE id = ?'),
+    passkeyList: db.prepare('SELECT * FROM passkeys ORDER BY created_at DESC'),
+    passkeyCount: db.prepare('SELECT COUNT(*) AS count FROM passkeys'),
+    passkeyInsert: db.prepare(`INSERT INTO passkeys (
+      id, public_key, counter, device_type, backed_up, transports_json, name, created_at, last_used_at
+    ) VALUES (
+      @id, @public_key, @counter, @device_type, @backed_up, @transports_json, @name, @created_at, @last_used_at
+    )`),
+    passkeyTouch: db.prepare('UPDATE passkeys SET counter = @counter, last_used_at = @last_used_at WHERE id = @id'),
+    passkeyDelete: db.prepare('DELETE FROM passkeys WHERE id = ?'),
+  };
+
+  const syncFts = (id) => {
+    const row = queries.messageRow.get(id);
+    if (!row) return;
+    try {
+      queries.ftsDelete.run(row.rowid);
+    } catch {
+      // First insert has no FTS row yet; FTS5 errors on deleting a missing rowid.
+    }
+    queries.ftsInsert.run(ftsDocument(row, json));
   };
 
   const recomputeThread = db.transaction((threadId) => {
@@ -677,12 +772,14 @@ export function createRepositories(db) {
           queries.messageUpdate.run(row);
           recomputeThread(existing.thread_id);
           if (existing.thread_id !== row.thread_id) recomputeThread(row.thread_id);
+          syncFts(existing.id);
           return publicMessage(queries.messageById.get(existing.id));
         }
         row.id ||= randomUUID();
         row.created_at ||= timestamp;
         queries.messageInsert.run(row);
         recomputeThread(row.thread_id);
+        syncFts(row.id);
         return publicMessage(queries.messageById.get(row.id));
       },
       setState(id, state) {
@@ -706,6 +803,41 @@ export function createRepositories(db) {
         if (!row) return null;
         queries.messageRelocate.run({ id, mailbox, uid, updated_at: now() });
         return publicMessage(queries.messageById.get(id));
+      },
+      searchThreadIds({ accountId, folder = 'inbox', mailbox = 'INBOX', ftsQuery, limit = 500 }) {
+        if (!ftsQuery) return [];
+        return queries.searchThreadIds.all({
+          accountId,
+          folder,
+          mailbox,
+          ftsQuery,
+          limit,
+          now: now(),
+        }).map((row) => row.threadId);
+      },
+      forThreads(threadIds = [], { folder = '', mailbox = 'INBOX' } = {}) {
+        const ids = [...new Set(threadIds.filter(Boolean))];
+        if (!ids.length) return [];
+        const sql = `SELECT * FROM messages WHERE thread_id IN (${ids.map(() => '?').join(',')})
+          ${folder ? `AND CASE ?
+            WHEN 'inbox' THEN mailbox = 'INBOX' AND is_archived = 0 AND is_trashed = 0 AND is_spam = 0 AND (snoozed_until IS NULL OR snoozed_until <= ?)
+            WHEN 'starred' THEN is_starred = 1 AND is_trashed = 0
+            WHEN 'sent' THEN is_sent = 1 AND is_trashed = 0
+            WHEN 'drafts' THEN 0
+            WHEN 'snoozed' THEN snoozed_until > ? AND is_trashed = 0 AND is_spam = 0
+            WHEN 'all' THEN is_trashed = 0 AND is_spam = 0
+            WHEN 'trash' THEN is_trashed = 1
+            WHEN 'spam' THEN is_spam = 1 AND is_trashed = 0
+            WHEN 'archive' THEN is_archived = 1 AND is_trashed = 0 AND (snoozed_until IS NULL OR snoozed_until <= ?)
+            ELSE mailbox = ? AND is_trashed = 0 AND is_spam = 0
+          END` : ''}
+          ORDER BY COALESCE(sent_at, received_at, created_at) ASC`;
+        const statement = db.prepare(sql);
+        const nowValue = now();
+        const params = folder
+          ? [...ids, folder, nowValue, nowValue, nowValue, mailbox]
+          : ids;
+        return statement.all(...params).map(publicMessage);
       },
     },
     threads: {
@@ -759,6 +891,25 @@ export function createRepositories(db) {
         return row ? json(row.value_json, null) : undefined;
       },
       set: (key, value) => queries.settingUpsert.run(key, JSON.stringify(value), now()),
+    },
+    passkeys: {
+      listRaw: () => queries.passkeyList.all(),
+      getRaw: (id) => queries.passkeyById.get(id) || null,
+      count: () => Number(queries.passkeyCount.get()?.count) || 0,
+      create(input) {
+        const timestamp = now();
+        queries.passkeyInsert.run({
+          ...input,
+          created_at: timestamp,
+          last_used_at: null,
+        });
+        return queries.passkeyById.get(input.id);
+      },
+      touch(id, counter) {
+        queries.passkeyTouch.run({ id, counter, last_used_at: now() });
+        return queries.passkeyById.get(id);
+      },
+      remove: (id) => queries.passkeyDelete.run(id).changes > 0,
     },
     close: () => db.close(),
   };

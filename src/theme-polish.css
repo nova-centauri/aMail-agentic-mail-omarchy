@@ -407,3 +407,7 @@ body { background: #0c0e12; }
   .settings-panel { width: 100vw; }
   .settings-account-meta .status-pill { display: none; }
 }
+
+.shortcut-modal { border-radius: 22px; }
+.shortcut-header h2 { letter-spacing: -.3px; }
+.passkey-list li { min-height: 48px; }

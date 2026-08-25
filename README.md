@@ -14,7 +14,8 @@ GigaMail is a self-hosted, Gmail-inspired inbox for multiple IMAP/SMTP accounts.
 - Server-side IMAP syncing and SMTP sending; no browser-to-mail-provider credentials
 - Remote images blocked by default. When enabled per message, they are fetched server-side through the privacy proxy, never by the browser.
 - Sanitized HTML mail, no scripts/forms/iframes, and SSRF protections for remote-content fetching
-- Encrypted stored account credentials (AES-256-GCM); an access token gate; non-root Docker runtime
+- Encrypted stored account credentials (AES-256-GCM); an access token gate; passkey (WebAuthn) unlock; non-root Docker runtime
+- Dark chrome UI, Gmail-style keyboard shortcuts, on-demand attachment download, and SQLite FTS5 search
 
 ## Quick start
 
@@ -38,7 +39,7 @@ GigaMail is a self-hosted, Gmail-inspired inbox for multiple IMAP/SMTP accounts.
    ssh -L 3080:127.0.0.1:3080 mitsubishi@your-server
    ```
 
-   Then visit `http://localhost:3080`, enter the access token, and use **Settings → Add account**. The UI is designed for a unified inbox of roughly 12 accounts.
+   Then visit `http://localhost:3080`. If a passkey is registered, use it to unlock; otherwise enter the access token, then add a passkey in **Settings**. Use **Settings → Add account** to connect mailboxes. The UI is designed for a unified inbox of roughly 12 accounts.
 
 See [`deploy/README.md`](deploy/README.md) for deployment and backup details.
 
@@ -54,9 +55,33 @@ Use **Settings → Add account**, select a provider, and enter the mailbox ident
 - **Gmail / Google Workspace:** use the full email address and a Google app password. App passwords require 2-Step Verification and may be unavailable for some managed or Advanced Protection accounts.
 - **iCloud Mail:** use an Apple app-specific password. GigaMail uses the mailbox name for IMAP and the full address for SMTP, matching Apple's client settings.
 - **Mail-in-a-Box:** use the public hostname from the box's TLS certificate and the full mailbox address. This checkout includes a preset for `box.xer5.com` (IMAPS 993 and SMTP submission 587 with required STARTTLS); do not substitute its raw LAN IP because TLS hostname verification would fail.
+- **Outlook / Microsoft 365:** use an app password. GigaMail does not use Microsoft OAuth.
 - **Custom:** enter separate IMAP/SMTP hosts, ports, and TLS modes. Non-implicit-TLS connections require STARTTLS before authentication.
 
 The setup API also exposes `GET /api/accounts/providers` for provider metadata and `POST /api/accounts/test` for a rate-limited, non-persisting connection check.
+
+## Passkeys and the access token
+
+`GIGAMAIL_ACCESS_TOKEN` still gates the API. After a successful token unlock, **Settings → Passkeys** can register a discoverable WebAuthn credential for this inbox. Later visits can unlock with that passkey; the server sets the same `gigamail_session` cookie used by token login.
+
+Production should pin:
+
+```sh
+GIGAMAIL_RP_ID=mail.xer0.io
+GIGAMAIL_ORIGIN=https://mail.xer0.io
+```
+
+Leave them empty in development to derive RP ID and origin from the request Host header.
+
+## Keyboard shortcuts
+
+Press `?` in the mailbox for the cheatsheet. The same Gmail-style keys work while a conversation is focused: `j` / `k` move, `Enter` opens, `u` returns to the list, `e` archives, `#` trashes, `r` replies, `s` stars, `x` selects, `/` focuses search, `c` composes.
+
+## Attachments and search
+
+Opening a message issues a short-lived signed URL for each attachment (`GET /api/content/attachment?token=`). The bytes are fetched from IMAP on demand and are not stored as blobs. Inline `cid:` images in HTML are rewritten to the same endpoint.
+
+Mailbox search uses SQLite FTS5 over subject, snippet, sender, recipients, and plain text. Routine ops digests stay out of the default inbox, but search can still find them.
 
 ## Smart inbox views
 

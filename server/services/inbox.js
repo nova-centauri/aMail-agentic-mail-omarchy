@@ -8,6 +8,7 @@ import {
   PERSON_FLAGS,
   SMART_CATEGORY_SLUGS,
 } from './smart-filter.js';
+import { toFtsMatchQuery } from './fts.js';
 import { NotFoundError, ValidationError } from '../errors.js';
 
 export const parseNumber = (value, fallback, min, max) => {
@@ -121,6 +122,7 @@ export function listConversations(repos, {
   const page = parseNumber(pageInput, 1, 1, 100_000);
   const pageSize = parseNumber(pageSizeInput, 50, 1, 200);
   const query = String(queryInput || '').trim().slice(0, 200);
+  const ftsQuery = query ? toFtsMatchQuery(query) : '';
   const accounts = accountId ? [repos.accounts.get(accountId)].filter(Boolean) : repos.accounts.list();
   if (accountId && !accounts.length) throw new NotFoundError('Mail account not found.');
 
@@ -148,18 +150,27 @@ export function listConversations(repos, {
   }
 
   const normalizedQuery = query.toLocaleLowerCase();
-  const results = accounts.map((account) => repos.messages.list({
-    accountId: account.id,
-    folder,
-    mailbox: String(mailbox || 'INBOX'),
-    // Search and smart filters are conversation-level operations. Load the
-    // scoped messages first so an older matching message can surface its
-    // conversation without borrowing that message's category or summary.
-    query: '',
-    category: '',
-    limit: 1000,
-    offset: 0,
-  }));
+  const results = accounts.map((account) => {
+    if (ftsQuery) {
+      const threadIds = repos.messages.searchThreadIds({
+        accountId: account.id,
+        folder,
+        mailbox: String(mailbox || 'INBOX'),
+        ftsQuery,
+        limit: Math.min(500, page * pageSize + pageSize),
+      });
+      return { items: repos.messages.forThreads(threadIds, { folder, mailbox: String(mailbox || 'INBOX') }) };
+    }
+    return repos.messages.list({
+      accountId: account.id,
+      folder,
+      mailbox: String(mailbox || 'INBOX'),
+      query: '',
+      category: '',
+      limit: 1000,
+      offset: 0,
+    });
+  });
   const byThread = new Map();
   for (const message of results.flatMap((result) => result.items)) {
     const key = `${message.accountId}:${message.threadId}`;
@@ -179,6 +190,7 @@ export function listConversations(repos, {
       // Explicit search can still find quiet digests. Unscoped browsing and
       // smart-category chips hide routine ops noise even when unread.
       if (normalizedQuery) {
+        if (ftsQuery) return true;
         return messages.some((message) => [
           message.subject,
           message.from?.name,

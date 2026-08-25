@@ -8,8 +8,14 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': 'http://localhost:3000',
-      '/health': 'http://localhost:3000'
-    }
+      '/mcp': 'http://localhost:3000',
+      '/health': 'http://localhost:3000',
+    },
+  },
+  test: {
+    environment: 'jsdom',
+    setupFiles: './src/test/setup.js',
+    include: ['src/**/*.test.{js,jsx}'],
   },
   build: {
     outDir: 'dist',
