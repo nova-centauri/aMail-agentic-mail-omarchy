@@ -64,14 +64,14 @@ The setup API also exposes `GET /api/accounts/providers` for provider metadata a
 
 `GIGAMAIL_ACCESS_TOKEN` still gates the API. After a successful token unlock, **Settings → Passkeys** can register a discoverable WebAuthn credential for this inbox. Later visits can unlock with that passkey; the server sets the same `gigamail_session` cookie used by token login.
 
-Production should pin:
+Production pins these to the public HTTPS site so passkeys work behind Nginx:
 
 ```sh
 GIGAMAIL_RP_ID=mail.xer0.io
 GIGAMAIL_ORIGIN=https://mail.xer0.io
 ```
 
-Leave them empty in development to derive RP ID and origin from the request Host header.
+Empty values still get that pin when `NODE_ENV=production`. Local development without those variables derives RP ID and origin from the request Host header.
 
 ## Keyboard shortcuts
 

@@ -27,6 +27,10 @@ services:
       # Keep SQLite/FTS temp files on the writable data volume. The container
       # root is read-only and /tmp is a small tmpfs.
       SQLITE_TMPDIR: /data/tmp
+      # Passkeys must use the public HTTPS origin, not the internal HTTP Host
+      # seen behind Nginx Proxy Manager. Empty .env values still get this pin.
+      GIGAMAIL_RP_ID: ${GIGAMAIL_RP_ID:-mail.xer0.io}
+      GIGAMAIL_ORIGIN: ${GIGAMAIL_ORIGIN:-https://mail.xer0.io}
     ports:
       # Deliberately local-only. Use an SSH tunnel or an authenticated reverse
       # proxy instead of publishing a mail client directly to the internet.

@@ -81,6 +81,8 @@ jobs:
           printf '%s\n' "$health" | grep -q '"authProtected":true'
           printf '%s\n' "$health" | grep -q '"credentialsConfigured":true'
           printf '%s\n' "$health" | grep -q '"remoteContentProxyConfigured":true'
+          printf '%s\n' "$health" | grep -q '"webauthnRpId":"mail.xer0.io"'
+          printf '%s\n' "$health" | grep -q 'https://mail.xer0.io'
           status=$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 10 http://127.0.0.1:3080/api/accounts)
           test "$status" = "401"
 
@@ -148,3 +150,5 @@ jobs:
             https://mail.xer0.io/api/health)
           printf '%s\n' "$health" | grep -q '"status":"ok"'
           printf '%s\n' "$health" | grep -q "\"releaseSha\":\"$GITHUB_SHA\""
+          printf '%s\n' "$health" | grep -q '"webauthnRpId":"mail.xer0.io"'
+          printf '%s\n' "$health" | grep -q 'https://mail.xer0.io'
