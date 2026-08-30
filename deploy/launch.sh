@@ -59,15 +59,11 @@ compose_privacy() {
 
 if [ "$mode" = privacy ]; then
   if [ "${GIGAMAIL_FORCE_RECREATE:-0}" = "1" ]; then
-    # Recreating Tor on every app release throws away a working circuit. A cold
-    # bootstrap often stalls at 5% ("Connecting to a relay") past the deploy
-    # health window. Keep the relay unless an explicit recreate is requested.
-    if [ "${GIGAMAIL_RECREATE_TOR:-0}" = "1" ]; then
-      compose_privacy up --detach --build --force-recreate
-    else
-      compose_privacy up --detach --build tor-proxy
-      compose_privacy up --detach --build --force-recreate --no-deps gigamail
-    fi
+    # Never force-recreate Tor for an app release. A cold bootstrap from this
+    # VM currently stalls at 5% ("Connecting to a relay") with timeouts, and
+    # taking down a working relay is how production deploys get stuck.
+    compose_privacy up --detach --build tor-proxy
+    compose_privacy up --detach --build --force-recreate --no-deps gigamail
   else
     compose_privacy up --detach --build
   fi
