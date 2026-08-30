@@ -209,7 +209,7 @@ services_healthy() {
 
 wait_for_health() {
   attempts=0
-  while [ "$attempts" -lt 60 ]; do
+  while [ "$attempts" -lt 120 ]; do
     if services_healthy; then
       return 0
     fi
@@ -320,15 +320,35 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+recreate_tor=0
+if [ "$mode" = "privacy" ]; then
+  tor_id=$(compose ps -q tor-proxy 2>/dev/null || true)
+  if [ -n "$tor_id" ]; then
+    tor_health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$tor_id" 2>/dev/null || true)
+    if [ "$tor_health" = "healthy" ]; then
+      echo "Tor/Privoxy is already healthy; recreating only GigaMail."
+    else
+      echo "Tor/Privoxy is ${tor_health:-unknown}; recreating it with GigaMail."
+      recreate_tor=1
+    fi
+  else
+    echo "No running Tor/Privoxy container; it will be created with GigaMail."
+    recreate_tor=1
+  fi
+fi
+
 backup_database
 git checkout --detach "$target_commit"
 deployment_started=1
 
 echo "Recreating GigaMail from $target_commit."
-GIGAMAIL_RELEASE_SHA="$target_commit" GIGAMAIL_FORCE_RECREATE=1 sh deploy/launch.sh "$mode"
+GIGAMAIL_RELEASE_SHA="$target_commit" \
+  GIGAMAIL_FORCE_RECREATE=1 \
+  GIGAMAIL_RECREATE_TOR="$recreate_tor" \
+  sh deploy/launch.sh "$mode"
 
 if ! wait_for_health; then
-  echo "The recreated services did not become healthy within five minutes." >&2
+  echo "The recreated services did not become healthy within ten minutes." >&2
   compose ps >&2 || true
   report_health_diagnostics
   exit 1

@@ -50,15 +50,26 @@ require_secret GIGAMAIL_ACCESS_TOKEN
 # remove, or restart containers, volumes, networks, or images.
 docker compose --env-file .env config --quiet
 
-if [ "$mode" = privacy ]; then
+compose_privacy() {
   # Shell-scoped so a normal direct launch cannot accidentally retain a proxy
   # setting for a stopped Tor container.
+  REMOTE_CONTENT_PROXY_URL=http://tor-proxy:8118 \
+    docker compose --env-file .env --profile privacy "$@"
+}
+
+if [ "$mode" = privacy ]; then
   if [ "${GIGAMAIL_FORCE_RECREATE:-0}" = "1" ]; then
-    REMOTE_CONTENT_PROXY_URL=http://tor-proxy:8118 \
-      docker compose --env-file .env --profile privacy up --detach --build --force-recreate
+    # Recreating Tor on every app release throws away a working circuit. A cold
+    # bootstrap often stalls at 5% ("Connecting to a relay") past the deploy
+    # health window. Keep the relay unless an explicit recreate is requested.
+    if [ "${GIGAMAIL_RECREATE_TOR:-0}" = "1" ]; then
+      compose_privacy up --detach --build --force-recreate
+    else
+      compose_privacy up --detach --build tor-proxy
+      compose_privacy up --detach --build --force-recreate --no-deps gigamail
+    fi
   else
-    REMOTE_CONTENT_PROXY_URL=http://tor-proxy:8118 \
-      docker compose --env-file .env --profile privacy up --detach --build
+    compose_privacy up --detach --build
   fi
 else
   # This intentionally runs no proxy. In production GigaMail keeps remote
