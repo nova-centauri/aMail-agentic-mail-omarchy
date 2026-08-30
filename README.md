@@ -103,6 +103,7 @@ This protects your browser IP and stops open-tracking pixels by default. It does
 
 - GigaMail only creates the `gigamail` Compose project, its own network, and named `gigamail-data` volume. It does not modify other Docker containers.
 - Back up the `gigamail-data` volume and your `.env` file together. Losing the encryption key makes saved account credentials unrecoverable by design.
+- While a mailbox tab is focused, GigaMail checks every connected inbox about every 15 seconds, and again immediately when the tab returns to the foreground. `SYNC_INTERVAL_MINUTES` (5 in `.env.example`) is the unattended fallback.
 - Keep the service bound to localhost unless you put it behind TLS and an authentication-aware reverse proxy.
 - Use `docker compose logs -f gigamail` to diagnose connections and `docker compose pull && docker compose up -d` to update images.
 

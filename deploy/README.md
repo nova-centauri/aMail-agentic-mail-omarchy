@@ -39,8 +39,10 @@ and starts only GigaMail plus its internal Tor/Privoxy proxy. Application data l
 repository or any host bind mount.
 
 The supplied `.env.example` polls enabled accounts every five minutes without
-keeping twelve long-lived IMAP IDLE sockets open. Set `SYNC_INTERVAL_MINUTES=0`
-only if you prefer manual refreshes.
+keeping twelve long-lived IMAP IDLE sockets open. That interval is the
+unattended fallback: a focused mailbox tab checks every inbox immediately when
+it becomes visible and then about every 15 seconds while it stays in use.
+Set `SYNC_INTERVAL_MINUTES=0` only if you want no server-side fallback.
 
 On its first pass, GigaMail imports the newest `GIGAMAIL_SYNC_BATCH_SIZE`
 messages from each supported folder (200 by default). This is a recent-mail

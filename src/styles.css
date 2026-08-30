@@ -200,6 +200,14 @@ button:disabled { cursor: default; }
 }
 @media (max-width: 390px) { .search-shell input { font-size: 14px; }.topbar { gap: 1px; }.brand { width: 35px; }.brand-mark { transform: scale(.9); }.top-menu { width: 35px; }.account-trigger { width: 35px; }.avatar-top { width: 29px; height: 29px; }.thread-row { grid-template-columns: 29px 27px 74px minmax(0, 1fr) 46px; }.row-sender { font-size: 12px; }.row-subject { font-size: 12px; } }
 
+/* Closed reader: the conversation list uses the full workspace, including tall skinny windows. */
+.mail-app:not(.thread-open) .mail-split { gap: 0; }
+.mail-app:not(.thread-open) .mail-list-panel {
+  width: auto;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
 /* Unified inbox smart views */
 .tooltip-wrap:focus-within::after { opacity: 1; transform: translateX(-50%) translateY(0); }
 .smart-filter-bar {

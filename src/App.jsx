@@ -4,7 +4,7 @@ import { AccessPanel } from './components/AccessPanel.jsx';
 import { AddAccountModal } from './components/AddAccountModal.jsx';
 import { ComposeModal } from './components/ComposeModal.jsx';
 import { Icon } from './components/Icon.jsx';
-import { MailList, ReaderPlaceholder } from './components/MailList.jsx';
+import { MailList } from './components/MailList.jsx';
 import { ProfileMenu } from './components/ProfileMenu.jsx';
 import { SettingsPanel } from './components/SettingsPanel.jsx';
 import { ShortcutCheatsheet } from './components/ShortcutCheatsheet.jsx';
@@ -15,6 +15,7 @@ import { Toast } from './components/ui.jsx';
 import { EMPTY_FOLDER_COUNTS, PERSON_FLAGS, SMART_CATEGORIES, UNIFIED_ACCOUNT } from './mail/constants.js';
 import { demoAccounts, demoMailboxThreads } from './mail/demo.js';
 import { countSmartCategories, filterVisibleThreads } from './mail/filter.js';
+import { useLiveMailboxSync } from './mail/live-sync.js';
 import { formatMessageDate, getArray, normalizeAccount, normalizePerson, normalizeThread, recipientArray, formatRecipients } from './mail/normalize.js';
 import { syncResultStatus, syncSkippedMessageCount } from './mail/sync.js';
 import { authenticateWithPasskey, passkeysSupported, registerPasskey } from './passkeys.js';
@@ -60,6 +61,7 @@ export default function App() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const searchRef = useRef(null);
   const loadRequestRef = useRef(0);
+  const syncInFlightRef = useRef(false);
   const demoDraftsRef = useRef([]);
   const canUsePasskeys = passkeysSupported();
 
@@ -147,9 +149,9 @@ export default function App() {
     setComposeOpen(true);
   };
 
-  const loadMailbox = useCallback(async ({ keepSelection = true } = {}) => {
+  const loadMailbox = useCallback(async ({ keepSelection = true, silent = false } = {}) => {
     const requestId = ++loadRequestRef.current;
-    setLoading(true);
+    if (!silent) setLoading(true);
     try {
       let session = null;
       try {
@@ -253,6 +255,28 @@ export default function App() {
     }
   }, [accessToken, activeAccount?.id, activeCategory, activePersonFlag, activeFolder, debouncedQuery, selectedThread]);
 
+  const liveSyncInboxes = useCallback(async () => {
+    if (isDemo || authRequired || !authenticated) return;
+    if (syncInFlightRef.current) return;
+    syncInFlightRef.current = true;
+    try {
+      await api('/sync', { method: 'POST', body: JSON.stringify({ mailbox: 'INBOX' }) });
+    } catch {
+      // Keep the current mailbox. A later tick or a manual refresh will retry.
+    } finally {
+      try {
+        await loadMailbox({ keepSelection: true, silent: true });
+      } finally {
+        syncInFlightRef.current = false;
+      }
+    }
+  }, [authRequired, authenticated, isDemo, loadMailbox]);
+
+  useLiveMailboxSync({
+    enabled: authenticated && !authRequired && !isDemo,
+    onSync: liveSyncInboxes,
+  });
+
   useEffect(() => { loadMailbox({ keepSelection: false }); }, [activeFolder, activeAccount?.id, activeCategory, activePersonFlag, debouncedQuery, accessToken, sessionStamp]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -287,10 +311,14 @@ export default function App() {
       await loadMailbox({ keepSelection: false });
       return;
     }
+    if (syncInFlightRef.current) {
+      setNotice('Sync is already running.');
+      return;
+    }
+    syncInFlightRef.current = true;
     setLoading(true);
     setNotice(activeAccount ? `Syncing ${activeAccount.email}…` : 'Syncing all connected accounts…');
     try {
-      // Sync is deliberately explicit: polling is off by default for an isolated self-hosted deployment.
       const syncPath = activeAccount?.id ? `/accounts/${encodeURIComponent(activeAccount.id)}/sync` : '/sync';
       const response = await api(syncPath, { method: 'POST', body: JSON.stringify({ mailbox: 'INBOX' }) });
       const status = syncResultStatus(response);
@@ -303,7 +331,11 @@ export default function App() {
     } catch {
       setNotice('Sync could not complete. Showing the latest stored mail.');
     } finally {
-      await loadMailbox({ keepSelection: true });
+      try {
+        await loadMailbox({ keepSelection: true });
+      } finally {
+        syncInFlightRef.current = false;
+      }
     }
   };
 
@@ -786,9 +818,7 @@ export default function App() {
             onClearSearch={() => setQuery('')}
             hideSmartFilters={Boolean(activePersonFlag)}
           />
-          {selectedThread ? <ThreadView key={selectedThread.id} thread={selectedThread} activeFolder={activeFolder} onBack={() => setSelectedThread(null)} onAction={applyAction} onLoadRemote={loadRemoteContent} onReply={openReplyComposer} onReplyAll={(thread, message) => openReplyComposer(thread, message, { replyAll: true })} onForward={openForwardComposer} allowPrivateImages={privacy.privateImages} /> : (
-            <ReaderPlaceholder isDemo={isDemo} onAddAccount={() => setAddAccountOpen(true)} />
-          )}
+          {selectedThread ? <ThreadView key={selectedThread.id} thread={selectedThread} activeFolder={activeFolder} onBack={() => setSelectedThread(null)} onAction={applyAction} onLoadRemote={loadRemoteContent} onReply={openReplyComposer} onReplyAll={(thread, message) => openReplyComposer(thread, message, { replyAll: true })} onForward={openForwardComposer} allowPrivateImages={privacy.privateImages} /> : null}
         </div>
       </main>
       {composeOpen && <ComposeModal account={composeAccount} accounts={identityAccounts} isDemo={isDemo} initialReply={composeContext} onClose={closeCompose} onSent={sendMessage} onDraftSaved={draftSaved} onDraftRemoved={draftRemoved} onNotice={setNotice} />}
