@@ -19,6 +19,12 @@ describe('filterVisibleThreads', () => {
     expect(visible.map((thread) => thread.id)).toEqual(['quiet']);
   });
 
+  it('shows saved drafts only in the drafts folder', () => {
+    const draft = { id: 'draft:1', draftId: '1', folder: 'drafts', subject: 'WIP', snippet: 'later', from: { name: 'Me', email: 'me@example.com' }, category: 'primary', labels: ['Draft'] };
+    const visible = filterVisibleThreads([...threads, draft], { activeFolder: 'drafts', activeCategory: 'all', query: '' });
+    expect(visible.map((thread) => thread.id)).toEqual(['draft:1']);
+  });
+
   it('honors from: and has:attachment operators', () => {
     const fromAlice = filterVisibleThreads(threads, { activeFolder: 'inbox', activeCategory: 'all', query: 'from:alice' });
     expect(fromAlice.map((thread) => thread.id)).toEqual(['note', 'note-file']);

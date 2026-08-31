@@ -182,7 +182,7 @@ export function ComposeModal({ account, accounts, isDemo, onClose, onSent, onDra
     setLinkOpen(true);
   };
   const insertLink = (event) => {
-    event.preventDefault();
+    event?.preventDefault?.();
     const href = String(linkForm.href || '').trim();
     if (!isSafeLinkHref(href)) {
       setError('Enter an http, https, mailto, or tel link.');
@@ -303,7 +303,7 @@ export function ComposeModal({ account, accounts, isDemo, onClose, onSent, onDra
             <div className="compose-link-wrap">
               <IconButton label="Insert link" active={linkOpen} onClick={openLinkPopover}><Icon name="link" /></IconButton>
               {linkOpen && (
-                <form className="compose-link-popover" onSubmit={insertLink}>
+                <div className="compose-link-popover">
                   <label>
                     <span>Text</span>
                     <input value={linkForm.label} onChange={(event) => setLinkForm((current) => ({ ...current, label: event.target.value }))} placeholder="Link text" aria-label="Link text" />
@@ -313,10 +313,10 @@ export function ComposeModal({ account, accounts, isDemo, onClose, onSent, onDra
                     <input autoFocus value={linkForm.href} onChange={(event) => setLinkForm((current) => ({ ...current, href: event.target.value }))} placeholder="https://" aria-label="Link URL" />
                   </label>
                   <div className="compose-link-actions">
-                    <button type="submit" className="send-button">Insert</button>
+                    <button type="button" className="send-button" onClick={insertLink}>Insert</button>
                     <button type="button" className="text-button" onClick={() => setLinkOpen(false)}>Cancel</button>
                   </div>
-                </form>
+                </div>
               )}
             </div>
             <span className="compose-spacer" />
