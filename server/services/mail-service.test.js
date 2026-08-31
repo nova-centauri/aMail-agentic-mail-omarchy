@@ -411,7 +411,7 @@ test('compose attachments are compiled into the SMTP raw message and stored loca
     attachments: [{ filename: 'invoice.txt', contentType: 'text/plain', content }],
   });
   assert.match(state.smtpPayload.raw.toString(), /invoice\.txt/);
-  assert.match(state.smtpPayload.raw.toString(), /invoice-bytes/);
+  assert.match(state.smtpPayload.raw.toString(), /aW52b2ljZS1ieXRlcw==/);
   const stored = JSON.parse(state.savedInput.attachments_json);
   assert.equal(stored[0].filename, 'invoice.txt');
   assert.equal(stored[0].content, content);

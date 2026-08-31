@@ -9,23 +9,20 @@ export const MAX_COMPOSE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 export const MAX_COMPOSE_ATTACHMENT_COUNT = 8;
 export const MAX_COMPOSE_ATTACHMENT_TOTAL_BYTES = 8 * 1024 * 1024;
 
-function readFileAsAttachment(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = String(reader.result || '');
-      const comma = result.indexOf(',');
-      const content = comma >= 0 ? result.slice(comma + 1) : result;
-      resolve({
-        filename: file.name || 'attachment',
-        contentType: file.type || 'application/octet-stream',
-        size: file.size,
-        content,
-      });
-    };
-    reader.onerror = () => reject(new Error('The file could not be read.'));
-    reader.readAsDataURL(file);
-  });
+async function readFileAsAttachment(file) {
+  const buffer = await file.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const chunk = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunk));
+  }
+  return {
+    filename: file.name || 'attachment',
+    contentType: file.type || 'application/octet-stream',
+    size: Number(file.size) || bytes.length,
+    content: btoa(binary),
+  };
 }
 
 export function ComposeModal({ account, accounts, isDemo, onClose, onSent, onDraftSaved, onDraftRemoved, initialReply }) {
@@ -296,6 +293,7 @@ export function ComposeModal({ account, accounts, isDemo, onClose, onSent, onDra
               type="file"
               multiple
               hidden
+              aria-label="Choose files to attach"
               onChange={(event) => {
                 void addFiles(event.target.files);
                 event.target.value = '';

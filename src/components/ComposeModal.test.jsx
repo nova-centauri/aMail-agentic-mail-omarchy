@@ -21,9 +21,8 @@ describe('ComposeModal', () => {
     );
 
     const file = new File(['hello'], 'notes.txt', { type: 'text/plain' });
-    const input = document.querySelector('input[type="file"]');
-    await user.upload(input, file);
-    expect(screen.getByText('notes.txt')).toBeInTheDocument();
+    await user.upload(screen.getByLabelText('Choose files to attach'), file);
+    expect(await screen.findByText('notes.txt')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Insert link' }));
     await user.type(screen.getByLabelText('Link text'), 'Docs');

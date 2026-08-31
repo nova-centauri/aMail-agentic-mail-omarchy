@@ -212,14 +212,14 @@ test('message API filters unified mail by smart category and account creation is
     }),
   });
   assert.equal(createdDraft.status, 201);
-  const created = await createdDraft.json();
-  assert.equal(created.draft.attachments[0].filename, 'notes.txt');
+  const createdDraftBody = await createdDraft.json();
+  assert.equal(createdDraftBody.draft.attachments[0].filename, 'notes.txt');
   const listedDrafts = await fetch(`${origin}/api/messages?folder=drafts`);
   const listed = await listedDrafts.json();
   assert.equal(listed.total, 1);
   assert.equal(listed.messages[0].hasAttachments, true);
   assert.equal(listed.messages[0].attachments[0].content, undefined);
-  const loadedDraft = await fetch(`${origin}/api/drafts/${created.draft.id}`);
+  const loadedDraft = await fetch(`${origin}/api/drafts/${createdDraftBody.draft.id}`);
   assert.equal((await loadedDraft.json()).draft.attachments[0].content, draftContent);
 
   const allResponse = await fetch(`${origin}/api/messages?folder=inbox`);
