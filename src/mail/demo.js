@@ -6,7 +6,7 @@ export const demoAccounts = [
     name: 'Nova Centauri',
     email: 'nova@centauri.dev',
     color: '#8e24aa',
-    signature: '—\nNova Centauri\nCentauri Labs',
+    signature: '<div><strong style="color:#202124">Nova Centauri</strong><br><span style="color:#5f6368">Centauri Labs</span><br><a href="https://centauri.dev">centauri.dev</a></div>',
     connected: true,
   },
   {

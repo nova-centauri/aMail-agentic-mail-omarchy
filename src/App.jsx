@@ -57,6 +57,7 @@ export default function App() {
   const [passkeyCount, setPasskeyCount] = useState(0);
   const [passkeys, setPasskeys] = useState([]);
   const [sessionStamp, setSessionStamp] = useState(0);
+  const [demoIdentities, setDemoIdentities] = useState(() => demoAccounts.map((item) => ({ ...item })));
   const [cursorIndex, setCursorIndex] = useState(0);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const searchRef = useRef(null);
@@ -108,7 +109,7 @@ export default function App() {
     const toCandidates = replyAll
       ? [...primaryRecipients, ...(!sentMessage ? recipientArray(message.to) : [])]
       : primaryRecipients.slice(0, 1);
-    const identityList = accounts.length ? accounts : isDemo ? demoAccounts : [];
+    const identityList = accounts.length ? accounts : isDemo ? demoIdentities : [];
     const ownAddresses = new Set(identityList.map((item) => String(item.email || '').toLowerCase()).filter(Boolean));
     const seen = new Set();
     const uniqueRecipients = (values) => values.filter(Boolean).map((value) => normalizePerson(value)).filter((person) => {
@@ -727,6 +728,15 @@ export default function App() {
   };
 
   const saveAccountSignature = async (accountId, signature) => {
+    if (isDemo) {
+      const previous = demoIdentities.find((item) => item.id === accountId);
+      if (!previous) return;
+      const next = { ...previous, signature };
+      setDemoIdentities((current) => current.map((item) => item.id === accountId ? next : item));
+      setActiveAccount((current) => current?.id === accountId ? next : current);
+      setNotice('Signature saved in this preview.');
+      return;
+    }
     const previous = accounts.find((item) => item.id === accountId);
     if (!previous) return;
     const optimistic = { ...previous, signature };
@@ -768,8 +778,8 @@ export default function App() {
   };
 
   const hasConnectedAccounts = accounts.length > 0;
-  const displayAccount = activeAccount || (hasConnectedAccounts ? UNIFIED_ACCOUNT : isDemo ? demoAccounts[0] : UNIFIED_ACCOUNT);
-  const identityAccounts = hasConnectedAccounts ? accounts : isDemo ? demoAccounts : [];
+  const displayAccount = activeAccount || (hasConnectedAccounts ? UNIFIED_ACCOUNT : isDemo ? demoIdentities[0] : UNIFIED_ACCOUNT);
+  const identityAccounts = hasConnectedAccounts ? accounts : isDemo ? demoIdentities : [];
   const composeAccount = activeAccount || identityAccounts[0] || null;
 
   const densityClass = density === 'Comfortable' ? 'density-comfortable-ui' : density === 'Compact' ? 'density-compact-ui' : '';

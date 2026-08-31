@@ -3,6 +3,7 @@ import { api } from '../api.js';
 import { PROVIDER_PRESETS } from '../mail/constants.js';
 import { normalizeAccount } from '../mail/normalize.js';
 import { Icon } from './Icon.jsx';
+import { SignatureEditor } from './SignatureEditor.jsx';
 import { Avatar, IconButton } from './ui.jsx';
 
 function readFileAsDataUrl(file) {
@@ -97,7 +98,7 @@ export function AddAccountModal({ onClose, onAdded }) {
         return;
       }
       if (event.key !== 'Tab' || !dialogRef.current) return;
-      const focusable = [...dialogRef.current.querySelectorAll('button:not(:disabled), a[href], input:not(:disabled), textarea:not(:disabled), select:not(:disabled), summary')];
+      const focusable = [...dialogRef.current.querySelectorAll('button:not(:disabled), a[href], input:not(:disabled), textarea:not(:disabled), select:not(:disabled), summary, [contenteditable="true"]')];
       if (!focusable.length) return;
       const first = focusable[0];
       const last = focusable.at(-1);
@@ -258,7 +259,14 @@ export function AddAccountModal({ onClose, onAdded }) {
             <details className="identity-details">
               <summary>Sending identity and appearance</summary>
               <div className="account-profile-row"><Avatar person={{ name: form.name || form.email || selectedProvider.label, color: form.color, avatarUrl: form.avatarUrl }} size="hero" /><label className="photo-upload"><input type="file" accept="image/png,image/jpeg,image/gif,image/webp" onChange={chooseAvatar} />{form.avatarUrl ? 'Replace profile photo' : 'Upload profile photo'}</label></div>
-              <label className="form-field"><span>Signature <em>optional</em></span><textarea value={form.signature} onChange={update('signature')} placeholder="Kind regards," /></label>
+              <div className="form-field signature-onboarding">
+                <span>Signature <em>optional</em></span>
+                <SignatureEditor
+                  compact
+                  value={form.signature}
+                  onChange={(next) => setForm((current) => ({ ...current, signature: next }))}
+                />
+              </div>
               <div className="color-picker"><span>Profile color</span><div>{['#0b57d0', '#8e24aa', '#e8710a', '#00897b', '#c2185b', '#455a64'].map((color) => <button type="button" key={color} onClick={() => setForm((current) => ({ ...current, color }))} className={form.color === color ? 'is-selected' : ''} style={{ '--swatch': color }} aria-label={`Choose ${color}`} />)}</div></div>
             </details>
 

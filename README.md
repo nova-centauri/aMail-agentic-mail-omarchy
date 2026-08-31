@@ -10,7 +10,7 @@ GigaMail is a self-hosted, Gmail-inspired inbox for multiple IMAP/SMTP accounts.
 - Guided Gmail, iCloud, Mail-in-a-Box, and custom IMAP/SMTP onboarding that checks both incoming and outgoing mail before saving
 - Explainable smart views for GitHub/CI notifications, logs and alerts, and service-status updates
 - Conversation threading from `Message-ID`, `In-Reply-To`, `References`, and a safe subject fallback
-- Per-account identities, signatures, profile photos/initials, compose, reply, archive, trash, read and star actions
+- Per-account identities, HTML or plain-text signatures, profile photos/initials, compose, reply, archive, trash, read and star actions
 - Server-side IMAP syncing and SMTP sending; no browser-to-mail-provider credentials
 - Remote images blocked by default. When enabled per message, they are fetched server-side through the privacy proxy, never by the browser.
 - Sanitized HTML mail, no scripts/forms/iframes, and SSRF protections for remote-content fetching
@@ -59,6 +59,8 @@ Use **Settings → Add account**, select a provider, and enter the mailbox ident
 - **Custom:** enter separate IMAP/SMTP hosts, ports, and TLS modes. Non-implicit-TLS connections require STARTTLS before authentication.
 
 The setup API also exposes `GET /api/accounts/providers` for provider metadata and `POST /api/accounts/test` for a rate-limited, non-persisting connection check.
+
+Per-account signatures accept **uploaded HTML**, **pasted HTML**, or **visual (WYSIWYG) editing** in Settings. Stored signatures are sanitized before save and send: scripts, event handlers, and CSS `url()` values are removed. Designed HTML signatures keep formatting, links, tables, and safe images; existing plain-text signatures still send as before.
 
 ## Passkeys and the access token
 

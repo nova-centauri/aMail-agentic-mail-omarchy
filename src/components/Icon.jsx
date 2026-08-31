@@ -48,6 +48,7 @@ export function Icon({ name, size = 20, className = '' }) {
     lock: <><rect x="5" y="10" width="14" height="10" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v2.5" /></>,
     eye: <><path d="M2.5 12c1.3-2.8 4.8-6 9.5-6s8.2 3.2 9.5 6c-1.3 2.8-4.8 6-9.5 6S3.8 14.8 2.5 12Z" /><circle cx="12" cy="12" r="3" /></>,
     key: <><circle cx="8" cy="14" r="4.2" /><path d="M12 14h8l-2 2.2 2 1.8M7.8 14.1h.2" /></>,
+    image: <><rect x="3.5" y="5.5" width="17" height="13" rx="1.6" /><circle cx="9" cy="10.2" r="1.5" /><path d="m6.8 16.2 3.3-3.5 2.2 2.3 2.4-3 2.8 4.2" /></>,
   };
   return (
     <svg className={`icon ${className}`} width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

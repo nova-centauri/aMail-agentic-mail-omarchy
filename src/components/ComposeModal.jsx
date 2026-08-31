@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { formatAttachmentSize } from '../mail/dates.js';
 import { insertMarkdownLink, isSafeLinkHref, plainTextToHtml } from '../mail/html.js';
+import { signaturePreviewHtml } from '../mail/signature.js';
 import { Icon } from './Icon.jsx';
 import { IconButton } from './ui.jsx';
 
@@ -272,7 +273,12 @@ export function ComposeModal({ account, accounts, isDemo, onClose, onSent, onDra
           {extraFields && <><div className="recipient-line"><input value={form.cc} onChange={update('cc')} placeholder="Cc" aria-label="Cc" /></div><div className="recipient-line"><input value={form.bcc} onChange={update('bcc')} placeholder="Bcc" aria-label="Bcc" /></div></>}
           <div className="recipient-line subject-line"><input value={form.subject} onChange={update('subject')} placeholder="Subject" aria-label="Subject" /></div>
           <textarea ref={bodyRef} value={form.body} onChange={update('body')} placeholder="Write your message" aria-label="Message body" />
-          {senderAccount?.signature && <div className="signature-preview">{senderAccount.signature}</div>}
+          {senderAccount?.signature && (
+            <div
+              className="signature-preview"
+              dangerouslySetInnerHTML={{ __html: signaturePreviewHtml(senderAccount.signature) }}
+            />
+          )}
           {attachments.length > 0 && (
             <div className="compose-attachments" aria-label="Attachments">
               {attachments.map((attachment, index) => (

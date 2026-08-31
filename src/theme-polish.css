@@ -144,7 +144,7 @@ body { background: #0c0e12; }
 .smart-filter-mark { border-radius: 12px; }
 
 .settings-panel {
-  width: min(428px, 96vw);
+  width: min(480px, 96vw);
   background:
     linear-gradient(180deg, rgba(29, 79, 134, .16), transparent 140px),
     #13161c;
@@ -309,12 +309,154 @@ body { background: #0c0e12; }
   background: #ecfeff;
 }
 
-.signature-section textarea {
+.signature-section textarea,
+.signature-editor-source,
+.signature-editor-visual {
   border-radius: 12px;
   padding: 12px;
   background: #11141a;
   border-color: #2a313c;
   min-height: 92px;
+}
+
+.signature-editor {
+  display: grid;
+  gap: 10px;
+}
+.signature-editor-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.signature-editor-modes {
+  display: inline-flex;
+  padding: 3px;
+  border: 1px solid #2a313c;
+  border-radius: 999px;
+  background: #10141a;
+}
+.signature-editor-modes button {
+  min-height: 28px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 999px;
+  color: #9aa3ad;
+  background: transparent;
+  font-size: 11px;
+  font-weight: 650;
+}
+.signature-editor-modes button.is-selected {
+  color: #04293a;
+  background: #7dd3fc;
+}
+.signature-editor-format {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.signature-editor-format > button,
+.signature-editor-color {
+  width: 28px;
+  height: 28px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid #2a313c;
+  border-radius: 8px;
+  color: #d7dde4;
+  background: #171b22;
+  font-size: 12px;
+}
+.signature-editor-format > button:hover:not(:disabled),
+.signature-editor-color:hover {
+  border-color: #3d4c63;
+  background: #1d2430;
+}
+.signature-editor-color {
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+}
+.signature-editor-color input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.signature-editor-visual,
+.signature-editor-source {
+  width: 100%;
+  min-height: 132px;
+  resize: vertical;
+  border: 1px solid #2a313c;
+  color: #e8eaed;
+  font-family: Arial, sans-serif;
+  font-size: 13px;
+  line-height: 1.45;
+  outline: 0;
+}
+.signature-editor-visual {
+  overflow: auto;
+  background: #f8fafc;
+  color: #202124;
+}
+.signature-editor-visual:empty:before {
+  color: #80868b;
+  content: attr(data-placeholder);
+}
+.signature-editor-visual img {
+  max-width: 100%;
+  height: auto;
+}
+.signature-editor-source {
+  min-height: 148px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+.signature-editor-link {
+  display: flex;
+  gap: 8px;
+}
+.signature-editor-link input {
+  min-width: 0;
+  flex: 1;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid #2a313c;
+  border-radius: 8px;
+  color: #e8eaed;
+  background: #11141a;
+}
+.signature-editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.signature-editor-actions .secondary-button {
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: 10px;
+  font-size: 11px;
+}
+.signature-editor-hint,
+.signature-editor-error {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.signature-editor-hint { color: #9aa3ad; }
+.signature-editor-error { color: #f8b4b4; }
+.signature-editor.is-disabled .signature-editor-visual,
+.signature-editor.is-disabled .signature-editor-source {
+  color: #6d7278;
+  background: #14171c;
+}
+.signature-onboarding .signature-editor-visual {
+  min-height: 110px;
+}
+.identity-details .signature-onboarding {
+  margin: 8px 12px 12px;
 }
 .server-access-section .secondary-button {
   min-height: 38px;

@@ -182,13 +182,18 @@
 .settings-toggle i::after { background: #e8eaed; }
 .settings-toggle input:checked + i { background: #8ab4f8; }
 .settings-toggle input:checked + i::after { background: #d2e3fc; }
-.signature-section textarea {
+.signature-section textarea,
+.signature-editor-source {
   border-color: #3c4450;
   color: #e8eaed;
   background: #161a20;
 }
-.signature-section textarea:focus { border-color: #8ab4f8; }
-.signature-section textarea:disabled { color: #6d7278; background: #14171c; }
+.signature-section textarea:focus,
+.signature-editor-source:focus,
+.signature-editor-visual:focus { border-color: #8ab4f8; }
+.signature-section textarea:disabled,
+.signature-editor.is-disabled .signature-editor-source,
+.signature-editor.is-disabled .signature-editor-visual { color: #6d7278; background: #14171c; }
 .full-settings-button { color: #8ab4f8; background: #1a1d23; }
 .full-settings-button:hover { background: #252a33; }
 .privacy-enforced { border-color: #2c313a; }
@@ -423,7 +428,9 @@
 .compose-form .recipient-line button { color: #5f6368; }
 .from-line { color: #5f6368; }
 .from-line select { color: #3c4043; }
-.signature-preview { color: #5f6368; }
+.signature-preview { color: #5f6368; white-space: normal; }
+.signature-preview img { max-width: 100%; height: auto; }
+.signature-preview a { color: #1a73e8; }
 .compose-error { color: #b3261e; }
 .compose-footer { background: #fff; }
 .send-button { color: #fff; background: #0b57d0; }

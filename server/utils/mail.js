@@ -1,6 +1,7 @@
 import { isIP } from 'node:net';
 import { domainToASCII } from 'node:url';
 import { ValidationError } from '../errors.js';
+import { renderSignatureForSend } from './signature.js';
 
 const PROVIDERS = {
   gmail: {
@@ -246,14 +247,12 @@ export function buildAuth(credentials, fallbackEmail, protocol = '') {
 }
 
 export function appendSignature({ html = '', text = '', signature = '', includeSignature = true }) {
-  if (!includeSignature || !signature.trim()) return { html, text };
-  const safeSignature = signature.trim();
-  const signatureHtml = safeSignature
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/\r?\n/g, '<br>');
+  if (!includeSignature || !String(signature || '').trim()) return { html, text };
+  const rendered = renderSignatureForSend(signature);
+  if (!rendered.html && !rendered.text) return { html, text };
   return {
-    html: `${html || ''}<br><br><div data-gigamail-signature="true">-- <br>${signatureHtml}</div>`,
-    text: `${text || ''}${text ? '\n\n' : ''}-- \n${safeSignature}`,
+    html: `${html || ''}<br><br><div data-gigamail-signature="true">${rendered.html}</div>`,
+    text: `${text || ''}${text ? '\n\n' : ''}-- \n${rendered.text}`,
   };
 }
 

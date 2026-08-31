@@ -471,3 +471,15 @@ a.attachment-chip { cursor: pointer; }
   min-width: 28px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 6px;
   background: var(--bg); color: var(--ink); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; text-align: center;
 }
+
+.signature-preview {
+  max-height: 160px;
+  overflow: auto;
+  white-space: normal;
+}
+.signature-preview img { max-width: 100%; height: auto; }
+.signature-preview a { color: #1a73e8; }
+.signature-preview table { border-collapse: collapse; }
+.signature-editor-visual[contenteditable="true"] { cursor: text; }
+.signature-editor-visual:focus,
+.signature-editor-source:focus { outline: none; box-shadow: 0 0 0 2px rgba(138, 180, 248, .35); }

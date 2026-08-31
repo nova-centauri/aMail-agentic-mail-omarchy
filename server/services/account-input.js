@@ -4,6 +4,7 @@ import {
   DEFAULT_ACCOUNT_COLOR,
   isEmail,
 } from '../utils/mail.js';
+import { normalizeStoredSignature } from '../utils/signature.js';
 import { ValidationError } from '../errors.js';
 
 export const booleanField = (value, fallback, fieldName) => {
@@ -68,7 +69,7 @@ export function serializeAccountInput(body, existing, config) {
     smtp_port: connection.smtp.port,
     smtp_secure: Number(connection.smtp.secure),
     credential_ciphertext: credentials,
-    signature: String(body.signature ?? existing?.signature ?? '').slice(0, 20_000),
+    signature: normalizeStoredSignature(body.signature ?? existing?.signature ?? ''),
     sync_enabled: Number(booleanField(body.syncEnabled, existing ? Boolean(existing.sync_enabled) : true, 'Sync enabled')),
   };
 }

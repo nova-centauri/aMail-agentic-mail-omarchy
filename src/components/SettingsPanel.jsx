@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { UNIFIED_ACCOUNT } from '../mail/constants.js';
 import { writeUiPrefs } from '../storage.js';
 import { Icon } from './Icon.jsx';
+import { SignatureEditor } from './SignatureEditor.jsx';
 import { Avatar, IconButton, Toggle } from './ui.jsx';
 
 export function SettingsPanel({
@@ -105,8 +106,16 @@ export function SettingsPanel({
           </section>
           <section className="settings-section signature-section">
             <h3>Signature</h3>
-            <p className="settings-description">{activeAccount ? `Sent from ${activeAccount.email}.` : 'Choose an account above to edit its sending signature.'}</p>
-            <textarea disabled={!activeAccount} value={signature} placeholder="Add a signature" onChange={(event) => setSignature(event.target.value)} onBlur={() => { if (activeAccount && signature !== (activeAccount.signature || '')) onSaveSignature(activeAccount.id, signature); }} />
+            <p className="settings-description">{activeAccount ? `Sent from ${activeAccount.email}. Upload HTML, paste HTML, or edit visually.` : 'Choose an account above to edit its sending signature.'}</p>
+            <SignatureEditor
+              value={signature}
+              savedValue={activeAccount?.signature || ''}
+              disabled={!activeAccount}
+              onChange={setSignature}
+              onSave={(next) => {
+                if (activeAccount && next !== (activeAccount.signature || '')) onSaveSignature(activeAccount.id, next);
+              }}
+            />
           </section>
           <section className="settings-section server-access-section">
             <div className="settings-section-title"><h3>Passkeys</h3><Icon name="key" size={20} /></div>
