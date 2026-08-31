@@ -9,6 +9,12 @@ import {
   SMART_CATEGORY_SLUGS,
 } from './smart-filter.js';
 import { toFtsMatchQuery } from './fts.js';
+import {
+  conversationMatchesMailboxQuery,
+  mailboxQueryIsActive,
+  parseMailboxQuery,
+} from '../../src/mail/search-query.js';
+import { publicAttachmentMeta } from './compose-attachments.js';
 import { NotFoundError, ValidationError } from '../errors.js';
 
 export const parseNumber = (value, fallback, min, max) => {
@@ -98,7 +104,8 @@ export function draftListItem(draft, account) {
     messageCount: 1,
     unreadCount: 0,
     labels: ['Draft'],
-    attachments: draft.attachments || [],
+    attachments: (draft.attachments || []).map((attachment, index) => publicAttachmentMeta(attachment, index)),
+    hasAttachments: Boolean((draft.attachments || []).length),
   };
 }
 
@@ -116,13 +123,15 @@ export function listConversations(repos, {
   query: queryInput = '',
   mailbox = 'INBOX',
 } = {}) {
-  const folder = normalizeFolder(folderInput);
+  const parsedQuery = parseMailboxQuery(String(queryInput || '').trim().slice(0, 800));
+  const folder = normalizeFolder(parsedQuery.folder || folderInput);
   const category = normalizeCategory(categoryInput);
   const personFlag = normalizePersonFlag(personFlagInput);
   const page = parseNumber(pageInput, 1, 1, 100_000);
   const pageSize = parseNumber(pageSizeInput, 50, 1, 200);
-  const query = String(queryInput || '').trim().slice(0, 200);
-  const ftsQuery = query ? toFtsMatchQuery(query) : '';
+  const query = parsedQuery.raw;
+  const searchActive = mailboxQueryIsActive(parsedQuery);
+  const ftsQuery = parsedQuery.text ? toFtsMatchQuery(parsedQuery.text) : '';
   const accounts = accountId ? [repos.accounts.get(accountId)].filter(Boolean) : repos.accounts.list();
   if (accountId && !accounts.length) throw new NotFoundError('Mail account not found.');
 
@@ -131,9 +140,8 @@ export function listConversations(repos, {
       .map((draft) => draftListItem(draft, account))
       .filter((draft) => {
         if (personFlag && !messageMatchesPersonFlag(draft, personFlag)) return false;
-        if (!query) return true;
-        return [draft.subject, draft.snippet, draft.from.name, draft.from.email, ...draft.to.map((recipient) => `${recipient.name || ''} ${recipient.email || ''}`)]
-          .join(' ').toLowerCase().includes(query.toLowerCase());
+        if (!searchActive) return true;
+        return conversationMatchesMailboxQuery(draft, parsedQuery);
       })
     ).sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)));
     const start = (page - 1) * pageSize;
@@ -149,7 +157,6 @@ export function listConversations(repos, {
     };
   }
 
-  const normalizedQuery = query.toLocaleLowerCase();
   const results = accounts.map((account) => {
     if (ftsQuery) {
       const threadIds = repos.messages.searchThreadIds({
@@ -189,16 +196,8 @@ export function listConversations(repos, {
     .filter(({ messages, latest }) => {
       // Explicit search can still find quiet digests. Unscoped browsing and
       // smart-category chips hide routine ops noise even when unread.
-      if (normalizedQuery) {
-        if (ftsQuery) return true;
-        return messages.some((message) => [
-          message.subject,
-          message.from?.name,
-          message.from?.email,
-          message.snippet,
-          ...(message.to || []).flatMap((recipient) => [recipient.name, recipient.email]),
-          ...(message.cc || []).flatMap((recipient) => [recipient.name, recipient.email]),
-        ].join(' ').toLocaleLowerCase().includes(normalizedQuery));
+      if (searchActive) {
+        return conversationMatchesMailboxQuery({ latest, messages }, parsedQuery, { skipText: Boolean(ftsQuery) });
       }
       if (category) return true;
       if (personFlag) return true;
@@ -219,6 +218,7 @@ export function listConversations(repos, {
         participants: thread?.participants || [latestMessage.from],
         latestAt,
         snippet: latestMessage.snippet,
+        hasAttachments: Boolean(latestMessage.attachments?.length) || messages.some((message) => message.attachments?.length),
         isRead: (thread?.unreadCount || 0) === 0,
         isStarred: thread?.isStarred ?? latestMessage.isStarred,
         _threadMessages: messages,

@@ -400,6 +400,23 @@ function sendHarness({ provider = 'custom', ImapClient, appendResult, appendErro
   return { service, state };
 }
 
+test('compose attachments are compiled into the SMTP raw message and stored locally', async () => {
+  const { service, state } = sendHarness();
+  const content = Buffer.from('invoice-bytes').toString('base64');
+  await service.sendMessage({
+    accountId: 'account-1',
+    to: ['visible@example.test'],
+    subject: 'Invoice attached',
+    textBody: 'See the PDF.',
+    attachments: [{ filename: 'invoice.txt', contentType: 'text/plain', content }],
+  });
+  assert.match(state.smtpPayload.raw.toString(), /invoice\.txt/);
+  assert.match(state.smtpPayload.raw.toString(), /invoice-bytes/);
+  const stored = JSON.parse(state.savedInput.attachments_json);
+  assert.equal(stored[0].filename, 'invoice.txt');
+  assert.equal(stored[0].content, content);
+});
+
 test('non-Gmail sends use identical RFC822 bytes for SMTP and Sent APPEND', async () => {
   const { service, state } = sendHarness();
   const result = await service.sendMessage({

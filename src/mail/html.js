@@ -1,11 +1,69 @@
-export function plainTextToHtml(text) {
-  const escaped = String(text || '')
+const SAFE_LINK_PROTOCOLS = new Set(['http:', 'https:', 'mailto:', 'tel:']);
+
+export function isSafeLinkHref(value) {
+  try {
+    const parsed = new URL(String(value || '').trim());
+    return SAFE_LINK_PROTOCOLS.has(parsed.protocol);
+  } catch {
+    return false;
+  }
+}
+
+function escapeHtml(value) {
+  return String(value || '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
-  return escaped.split(/\n\s*\n/).map((paragraph) => `<p>${paragraph.replace(/\n/g, '<br>')}</p>`).join('');
+}
+
+function formatLink(href, label) {
+  if (!isSafeLinkHref(href)) return escapeHtml(label || href);
+  return `<a href="${escapeHtml(href)}">${escapeHtml(label || href)}</a>`;
+}
+
+function linkifyParagraph(text) {
+  const pattern = /\[([^\]]+)\]\((https?:\/\/[^\s)]+|mailto:[^\s)]+|tel:[^\s)]+)\)|(https?:\/\/[^\s<]+|mailto:[^\s<]+|tel:[^\s<]+)/gi;
+  const value = String(text || '');
+  let html = '';
+  let lastIndex = 0;
+  let match = pattern.exec(value);
+  while (match) {
+    html += escapeHtml(value.slice(lastIndex, match.index));
+    if (match[1] && match[2]) {
+      html += formatLink(match[2], match[1]);
+    } else {
+      const href = match[3];
+      const cleaned = href.replace(/[),.;:]+$/, '');
+      const trailing = href.slice(cleaned.length);
+      html += `${formatLink(cleaned, cleaned)}${escapeHtml(trailing)}`;
+    }
+    lastIndex = match.index + match[0].length;
+    match = pattern.exec(value);
+  }
+  return html + escapeHtml(value.slice(lastIndex));
+}
+
+export function insertMarkdownLink(body, { start, end, href, label }) {
+  const text = String(body || '');
+  const from = Math.max(0, Number(start) || 0);
+  const to = Math.max(from, Number(end) || from);
+  const selected = text.slice(from, to);
+  const linkLabel = String(label || selected || href || '').trim() || href;
+  const snippet = `[${linkLabel}](${href})`;
+  return {
+    body: `${text.slice(0, from)}${snippet}${text.slice(to)}`,
+    selectionStart: from,
+    selectionEnd: from + snippet.length,
+  };
+}
+
+export function plainTextToHtml(text) {
+  return String(text || '')
+    .split(/\n\s*\n/)
+    .map((paragraph) => `<p>${linkifyParagraph(paragraph).replace(/\n/g, '<br>')}</p>`)
+    .join('');
 }
 
 export function sanitizeEmailHtml(html, allowRemoteContent = false) {

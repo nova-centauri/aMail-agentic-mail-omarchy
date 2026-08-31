@@ -17,6 +17,7 @@ import {
   discoverAccountProvider,
   mailProviderCatalog,
 } from '../utils/mail.js';
+import { normalizeComposeAttachments } from '../services/compose-attachments.js';
 import { AppError, ConflictError, NotFoundError, ServiceUnavailableError, ValidationError } from '../errors.js';
 import { accessGate, requestHasAccess, sessionCookieClearOptions, sessionCookieOptions } from '../middleware/auth.js';
 
@@ -407,9 +408,14 @@ export function registerApi(app, { config, repos, mailService, remoteContent, pa
       subject: String(body.subject || '').slice(0, 998),
       html_body: String(body.htmlBody || '').slice(0, 1_000_000),
       text_body: String(body.textBody || '').slice(0, 1_000_000),
-      attachments_json: JSON.stringify([]),
+      attachments_json: JSON.stringify(normalizeComposeAttachments(body.attachments || [])),
     });
     response.status(201).json({ draft });
+  });
+  router.get('/drafts/:id', (request, response) => {
+    const draft = repos.drafts.get(request.params.id);
+    if (!draft) throw new NotFoundError('Draft not found.');
+    response.json({ draft });
   });
   router.patch('/drafts/:id', (request, response) => {
     const existing = repos.drafts.get(request.params.id);
@@ -423,7 +429,7 @@ export function registerApi(app, { config, repos, mailService, remoteContent, pa
       subject: String(body.subject ?? existing.subject).slice(0, 998),
       html_body: String(body.htmlBody ?? existing.htmlBody).slice(0, 1_000_000),
       text_body: String(body.textBody ?? existing.textBody).slice(0, 1_000_000),
-      attachments_json: JSON.stringify([]),
+      ...(body.attachments !== undefined ? { attachments_json: JSON.stringify(normalizeComposeAttachments(body.attachments)) } : {}),
     });
     response.json({ draft });
   });

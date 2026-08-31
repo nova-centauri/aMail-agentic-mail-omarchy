@@ -1,5 +1,6 @@
 import { PERSON_FLAGS, SMART_CATEGORIES } from './constants.js';
 import { smartCategoryMetadata } from './classify.js';
+import { conversationMatchesMailboxQuery, mailboxQueryIsActive, parseMailboxQuery } from './search-query.js';
 import { normalizePersonFlagEmail, recipientArray } from './people.js';
 
 export function conversationMatchesPersonFlag(thread, flagId) {
@@ -40,14 +41,16 @@ export function filterVisibleThreads(threads, {
   activePersonFlag = null,
   query = '',
 } = {}) {
-  const search = String(query || '').trim().toLowerCase();
+  const parsed = parseMailboxQuery(query);
+  const searchActive = mailboxQueryIsActive(parsed);
+  const folder = parsed.folder || activeFolder;
   return threads.filter((thread) => {
-    const inFolder = activeFolder === 'all' || thread.folder === activeFolder || (activeFolder === 'starred' && thread.starred) || (activeFolder === 'drafts' && thread.folder === 'drafts');
+    const inFolder = folder === 'all' || thread.folder === folder || (folder === 'starred' && thread.starred) || (folder === 'drafts' && thread.folder === 'drafts');
     if (!inFolder) return false;
     if (activePersonFlag && !conversationMatchesPersonFlag(thread, activePersonFlag)) return false;
-    if (!activePersonFlag && activeFolder === 'inbox' && activeCategory !== 'all' && smartCategoryMetadata(thread).category !== activeCategory) return false;
-    if (!search && !activePersonFlag && (activeCategory === 'all' || activeCategory === 'primary') && smartCategoryMetadata(thread).category === 'ops_quiet') return false;
-    if (!search) return true;
-    return [thread.subject, thread.snippet, thread.from?.name, thread.from?.email, thread.categoryLabel, thread.categoryReason, ...(thread.labels || [])].join(' ').toLowerCase().includes(search);
+    if (!activePersonFlag && folder === 'inbox' && activeCategory !== 'all' && smartCategoryMetadata(thread).category !== activeCategory) return false;
+    if (!searchActive && !activePersonFlag && (activeCategory === 'all' || activeCategory === 'primary') && smartCategoryMetadata(thread).category === 'ops_quiet') return false;
+    if (!searchActive) return true;
+    return conversationMatchesMailboxQuery(thread, parsed);
   });
 }

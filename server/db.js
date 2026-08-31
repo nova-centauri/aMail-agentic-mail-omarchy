@@ -106,8 +106,18 @@ function publicThread(row) {
   };
 }
 
-function publicDraft(row) {
+function publicDraft(row, { includeContent = true } = {}) {
   if (!row) return null;
+  const attachments = json(row.attachments_json).map((attachment, index) => {
+    const meta = {
+      index: Number.isInteger(attachment?.index) ? attachment.index : index,
+      filename: attachment?.filename || attachment?.name || 'attachment',
+      contentType: attachment?.contentType || 'application/octet-stream',
+      size: Number(attachment?.size) || 0,
+    };
+    if (includeContent && attachment?.content) meta.content = attachment.content;
+    return meta;
+  });
   return {
     id: row.id,
     accountId: row.account_id,
@@ -118,7 +128,7 @@ function publicDraft(row) {
     subject: row.subject || '',
     htmlBody: row.html_body || '',
     textBody: row.text_body || '',
-    attachments: json(row.attachments_json),
+    attachments,
     updatedAt: row.updated_at,
     createdAt: row.created_at,
   };
@@ -908,8 +918,8 @@ export function createRepositories(db) {
       save: (state) => queries.syncStateUpsert.run(state),
     },
     drafts: {
-      get: (id) => publicDraft(queries.draftById.get(id)),
-      list: (accountId) => queries.draftList.all(accountId).map(publicDraft),
+      get: (id) => publicDraft(queries.draftById.get(id), { includeContent: true }),
+      list: (accountId) => queries.draftList.all(accountId).map((row) => publicDraft(row, { includeContent: false })),
       create(input) {
         const id = randomUUID();
         const timestamp = now();

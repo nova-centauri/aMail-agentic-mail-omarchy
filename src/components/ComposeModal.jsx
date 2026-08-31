@@ -1,10 +1,34 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
-import { plainTextToHtml } from '../mail/html.js';
+import { formatAttachmentSize } from '../mail/dates.js';
+import { insertMarkdownLink, isSafeLinkHref, plainTextToHtml } from '../mail/html.js';
 import { Icon } from './Icon.jsx';
 import { IconButton } from './ui.jsx';
 
-export function ComposeModal({ account, accounts, isDemo, onClose, onSent, onDraftSaved, onDraftRemoved, initialReply, onNotice }) {
+export const MAX_COMPOSE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+export const MAX_COMPOSE_ATTACHMENT_COUNT = 8;
+export const MAX_COMPOSE_ATTACHMENT_TOTAL_BYTES = 8 * 1024 * 1024;
+
+function readFileAsAttachment(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || '');
+      const comma = result.indexOf(',');
+      const content = comma >= 0 ? result.slice(comma + 1) : result;
+      resolve({
+        filename: file.name || 'attachment',
+        contentType: file.type || 'application/octet-stream',
+        size: file.size,
+        content,
+      });
+    };
+    reader.onerror = () => reject(new Error('The file could not be read.'));
+    reader.readAsDataURL(file);
+  });
+}
+
+export function ComposeModal({ account, accounts, isDemo, onClose, onSent, onDraftSaved, onDraftRemoved, initialReply }) {
   const [form, setForm] = useState({
     to: initialReply?.to || '',
     cc: initialReply?.cc || '',
@@ -12,6 +36,7 @@ export function ComposeModal({ account, accounts, isDemo, onClose, onSent, onDra
     subject: initialReply?.subject || '',
     body: initialReply?.body || '',
   });
+  const [attachments, setAttachments] = useState(initialReply?.attachments || []);
   const [extraFields, setExtraFields] = useState(Boolean(initialReply?.cc || initialReply?.bcc));
   const [isMinimized, setIsMinimized] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
@@ -20,9 +45,15 @@ export function ComposeModal({ account, accounts, isDemo, onClose, onSent, onDra
   const [draftId, setDraftId] = useState(initialReply?.draftId || '');
   const [error, setError] = useState('');
   const [senderId, setSenderId] = useState(initialReply?.accountId || account?.id || accounts[0]?.id || '');
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [linkForm, setLinkForm] = useState({ href: '', label: '' });
   const formRef = useRef(form);
+  const attachmentsRef = useRef(attachments);
   const draftIdRef = useRef(draftId);
+  const bodyRef = useRef(null);
+  const fileRef = useRef(null);
   formRef.current = form;
+  attachmentsRef.current = attachments;
   draftIdRef.current = draftId;
   const update = (key) => (event) => setForm((current) => ({ ...current, [key]: event.target.value }));
   useEffect(() => {
@@ -32,7 +63,7 @@ export function ComposeModal({ account, accounts, isDemo, onClose, onSent, onDra
   const addressValues = (value) => value.split(',').map((item) => item.trim()).filter(Boolean);
   const hasUnsavedContent = () => {
     const current = formRef.current;
-    return Boolean(current.to.trim() || current.cc.trim() || current.bcc.trim() || current.subject.trim() || current.body.trim() || draftIdRef.current);
+    return Boolean(current.to.trim() || current.cc.trim() || current.bcc.trim() || current.subject.trim() || current.body.trim() || attachmentsRef.current.length || draftIdRef.current);
   };
   const draftPayload = () => ({
     accountId: senderAccount?.id,
@@ -43,6 +74,7 @@ export function ComposeModal({ account, accounts, isDemo, onClose, onSent, onDra
     subject: form.subject,
     textBody: form.body,
     htmlBody: plainTextToHtml(form.body),
+    attachments,
   });
   const saveDraft = async ({ closeAfter = true } = {}) => {
     if (isSending || isSavingDraft) return false;
@@ -98,6 +130,10 @@ export function ComposeModal({ account, accounts, isDemo, onClose, onSent, onDra
       if (event.key !== 'Escape') return;
       event.preventDefault();
       event.stopPropagation();
+      if (linkOpen) {
+        setLinkOpen(false);
+        return;
+      }
       if (isExpanded) {
         setIsExpanded(false);
         return;
@@ -111,6 +147,63 @@ export function ComposeModal({ account, accounts, isDemo, onClose, onSent, onDra
     window.addEventListener('keydown', handleEscape, true);
     return () => window.removeEventListener('keydown', handleEscape, true);
   });
+  const addFiles = async (fileList) => {
+    const files = [...(fileList || [])];
+    if (!files.length) return;
+    const current = attachmentsRef.current;
+    if (current.length + files.length > MAX_COMPOSE_ATTACHMENT_COUNT) {
+      setError(`Attach at most ${MAX_COMPOSE_ATTACHMENT_COUNT} files.`);
+      return;
+    }
+    try {
+      const next = [...current];
+      for (const file of files) {
+        if (file.size > MAX_COMPOSE_ATTACHMENT_BYTES) {
+          setError(`${file.name || 'A file'} is larger than 8 MB.`);
+          return;
+        }
+        next.push(await readFileAsAttachment(file));
+      }
+      const total = next.reduce((sum, item) => sum + (Number(item.size) || 0), 0);
+      if (total > MAX_COMPOSE_ATTACHMENT_TOTAL_BYTES) {
+        setError('Attached files together must stay under 8 MB.');
+        return;
+      }
+      setAttachments(next);
+      setError('');
+    } catch (readError) {
+      setError(readError.message || 'The file could not be attached.');
+    }
+  };
+  const removeAttachment = (index) => {
+    setAttachments((current) => current.filter((_, itemIndex) => itemIndex !== index));
+  };
+  const openLinkPopover = () => {
+    const field = bodyRef.current;
+    const selected = field ? form.body.slice(field.selectionStart, field.selectionEnd) : '';
+    setLinkForm({ href: '', label: selected });
+    setLinkOpen(true);
+  };
+  const insertLink = (event) => {
+    event.preventDefault();
+    const href = String(linkForm.href || '').trim();
+    if (!isSafeLinkHref(href)) {
+      setError('Enter an http, https, mailto, or tel link.');
+      return;
+    }
+    const field = bodyRef.current;
+    const start = field?.selectionStart ?? form.body.length;
+    const end = field?.selectionEnd ?? start;
+    const next = insertMarkdownLink(form.body, { start, end, href, label: linkForm.label });
+    setForm((current) => ({ ...current, body: next.body }));
+    setLinkOpen(false);
+    setError('');
+    window.requestAnimationFrame(() => {
+      if (!field) return;
+      field.focus();
+      field.setSelectionRange(next.selectionEnd, next.selectionEnd);
+    });
+  };
   const send = async (event) => {
     event.preventDefault();
     if (!form.to.trim()) { setError('Add at least one recipient.'); return; }
@@ -127,6 +220,8 @@ export function ComposeModal({ account, accounts, isDemo, onClose, onSent, onDra
       textBody,
       htmlBody: plainTextToHtml(textBody),
       accountId: senderAccount?.id,
+      attachments,
+      ...(draftId ? { draftId } : {}),
       ...(initialReply?.threadId ? { threadId: initialReply.threadId } : {}),
       ...(initialReply?.replyToMessageId ? { replyToMessageId: initialReply.replyToMessageId } : {}),
     };
@@ -138,9 +233,7 @@ export function ComposeModal({ account, accounts, isDemo, onClose, onSent, onDra
         return;
       }
       const result = await api('/messages', { method: 'POST', body: JSON.stringify(payload) });
-      if (draftId) {
-        void api(`/drafts/${encodeURIComponent(draftId)}`, { method: 'DELETE' }).then(() => onDraftRemoved(draftId)).catch(() => undefined);
-      }
+      if (draftId) onDraftRemoved(draftId);
       onSent(payload, false, senderAccount, result);
       onClose();
     } catch (requestError) {
@@ -155,7 +248,6 @@ export function ComposeModal({ account, accounts, isDemo, onClose, onSent, onDra
       setIsSending(false);
     }
   };
-  const unavailable = (feature) => () => onNotice?.(`${feature} is not available yet in GigaMail.`);
   return (
     <div className={`compose-window ${isMinimized ? 'is-minimized' : ''} ${isExpanded ? 'is-expanded' : ''}`} role="dialog" aria-modal="true" aria-label="New message">
       <div className="compose-titlebar">
@@ -182,13 +274,53 @@ export function ComposeModal({ account, accounts, isDemo, onClose, onSent, onDra
           )}
           {extraFields && <><div className="recipient-line"><input value={form.cc} onChange={update('cc')} placeholder="Cc" aria-label="Cc" /></div><div className="recipient-line"><input value={form.bcc} onChange={update('bcc')} placeholder="Bcc" aria-label="Bcc" /></div></>}
           <div className="recipient-line subject-line"><input value={form.subject} onChange={update('subject')} placeholder="Subject" aria-label="Subject" /></div>
-          <textarea value={form.body} onChange={update('body')} placeholder="Write your message" aria-label="Message body" />
+          <textarea ref={bodyRef} value={form.body} onChange={update('body')} placeholder="Write your message" aria-label="Message body" />
           {senderAccount?.signature && <div className="signature-preview">{senderAccount.signature}</div>}
+          {attachments.length > 0 && (
+            <div className="compose-attachments" aria-label="Attachments">
+              {attachments.map((attachment, index) => (
+                <span className="attachment-chip" key={`${attachment.filename}-${index}`}>
+                  <Icon name="attachment" size={17} />
+                  <span>{attachment.filename || attachment.name || 'Attachment'}</span>
+                  <small>{formatAttachmentSize(attachment.size)}</small>
+                  <IconButton label={`Remove ${attachment.filename || 'attachment'}`} onClick={() => removeAttachment(index)}><Icon name="close" size={14} /></IconButton>
+                </span>
+              ))}
+            </div>
+          )}
           {error && <p className="compose-error" role="alert">{error}</p>}
           <div className="compose-footer">
             <button type="submit" className="send-button" disabled={isSending || isSavingDraft}>{isSending ? 'Sending…' : 'Send'}</button>
-            <IconButton label="Attach files" onClick={unavailable('Attachments')}><Icon name="attachment" /></IconButton>
-            <IconButton label="Insert link" onClick={unavailable('Link insertion')}><Icon name="link" /></IconButton>
+            <input
+              ref={fileRef}
+              type="file"
+              multiple
+              hidden
+              onChange={(event) => {
+                void addFiles(event.target.files);
+                event.target.value = '';
+              }}
+            />
+            <IconButton label="Attach files" onClick={() => fileRef.current?.click()}><Icon name="attachment" /></IconButton>
+            <div className="compose-link-wrap">
+              <IconButton label="Insert link" active={linkOpen} onClick={openLinkPopover}><Icon name="link" /></IconButton>
+              {linkOpen && (
+                <form className="compose-link-popover" onSubmit={insertLink}>
+                  <label>
+                    <span>Text</span>
+                    <input value={linkForm.label} onChange={(event) => setLinkForm((current) => ({ ...current, label: event.target.value }))} placeholder="Link text" aria-label="Link text" />
+                  </label>
+                  <label>
+                    <span>URL</span>
+                    <input autoFocus value={linkForm.href} onChange={(event) => setLinkForm((current) => ({ ...current, href: event.target.value }))} placeholder="https://" aria-label="Link URL" />
+                  </label>
+                  <div className="compose-link-actions">
+                    <button type="submit" className="send-button">Insert</button>
+                    <button type="button" className="text-button" onClick={() => setLinkOpen(false)}>Cancel</button>
+                  </div>
+                </form>
+              )}
+            </div>
             <span className="compose-spacer" />
             <IconButton label="Discard draft" onClick={discardDraft} disabled={isSending || isSavingDraft}><Icon name="trash" /></IconButton>
           </div>

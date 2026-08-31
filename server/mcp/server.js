@@ -139,7 +139,7 @@ export function createGigaMailMcpServer({ config, repos, mailService, assertProb
       folder: z.string().optional().describe('inbox, starred, snoozed, sent, drafts, all, trash, spam, or archive'),
       accountId: z.string().optional().describe('Limit to one account id'),
       category: z.string().optional().describe('Smart filter: primary, github_ci, logs, status, ops_error'),
-      q: z.string().optional().describe('Search query'),
+      q: z.string().optional().describe('Search query. Gmail-style operators work: from:, to:, subject:, has:attachment, after:, before:, is:unread, is:starred, in:'),
       page: z.number().int().optional().describe('Page number (1-based)'),
       pageSize: z.number().int().optional().describe('Results per page (1-200)'),
       flag: z.string().optional().describe('Person flag id'),
@@ -193,6 +193,11 @@ export function createGigaMailMcpServer({ config, repos, mailService, assertProb
       replyToMessageId: z.string().optional().describe('RFC Message-ID being replied to'),
       inReplyTo: z.string().optional(),
       includeSignature: z.boolean().optional(),
+      attachments: z.array(z.object({
+        filename: z.string(),
+        contentType: z.string().optional(),
+        content: z.string().describe('Base64 file bytes'),
+      })).optional().describe('Outbound attachments (base64). Combined size must stay under 8 MB.'),
     },
   }, async (input) => runTool(async () => {
     const message = await mailService.sendMessage(input);

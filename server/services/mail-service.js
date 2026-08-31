@@ -18,6 +18,13 @@ import {
 } from '../utils/mail.js';
 import { NotFoundError, ServiceUnavailableError, ValidationError } from '../errors.js';
 import { stringify } from '../db.js';
+import {
+  attachmentContentBuffer,
+  mailerAttachments,
+  normalizeComposeAttachments,
+  publicAttachmentMeta,
+  storedAttachmentRecords,
+} from './compose-attachments.js';
 
 const DEFAULT_SYNC_MAX_MESSAGE_BYTES = 10 * 1024 * 1024;
 
@@ -115,8 +122,8 @@ export async function compileRfc822Message(message) {
   });
   const result = await compiler.sendMail({
     ...message,
-    // Mail bodies are values, never instructions to load server-side paths or
-    // URLs. Keep that invariant if attachment support is added later.
+    // Mail bodies and attachment contents are values, never instructions to
+    // load server-side paths or URLs.
     disableFileAccess: true,
     disableUrlAccess: true,
   });
@@ -675,8 +682,28 @@ export function createMailService({
 
     const message = repos.messages.get(messageId);
     if (!message) throw new NotFoundError('Message not found.');
+    let rawAttachments = [];
+    try {
+      rawAttachments = JSON.parse(repos.messages.getRaw?.(messageId)?.attachments_json || '[]');
+    } catch {
+      rawAttachments = [];
+    }
+    const rawMeta = rawAttachments.find((item, index) => (Number.isInteger(item?.index) ? item.index : index) === resolvedIndex)
+      || rawAttachments[resolvedIndex];
+    const stored = attachmentContentBuffer(rawMeta);
+    if (stored) {
+      const value = {
+        filename: rawMeta.filename || 'attachment',
+        contentType: rawMeta.contentType || 'application/octet-stream',
+        body: stored,
+        contentId: rawMeta.contentId || null,
+      };
+      rememberAttachment(cacheKey, value);
+      return value;
+    }
     const meta = (message.attachments || []).find((item) => item.index === resolvedIndex)
-      || message.attachments?.[resolvedIndex];
+      || message.attachments?.[resolvedIndex]
+      || (rawMeta ? publicAttachmentMeta(rawMeta, resolvedIndex) : null);
     if (!meta) throw new NotFoundError('Attachment not found.');
     if (!Number.isInteger(message.uid) || message.uid < 1) {
       throw new ServiceUnavailableError(
@@ -840,6 +867,7 @@ export function createMailService({
     });
     const messageId = createMessageId(account);
     const sentAt = new Date();
+    const attachments = normalizeComposeAttachments(input.attachments);
     const envelope = {
       from: account.email,
       to: [...to, ...cc, ...bcc].map((recipient) => recipient.email),
@@ -859,6 +887,7 @@ export function createMailService({
       inReplyTo: parent?.messageId || input.inReplyTo || undefined,
       references: references.length ? references.join(' ') : undefined,
       headers: { 'X-Mailer': 'GigaMail' },
+      attachments: attachments.length ? mailerAttachments(attachments) : undefined,
     };
     let transport;
     let rawMessage;
@@ -922,7 +951,7 @@ export function createMailService({
       html_body: sanitized.html,
       text_body: signed.text,
       snippet: textSnippet(signed.text),
-      attachments_json: '[]',
+      attachments_json: stringify(storedAttachmentRecords(attachments)),
       labels_json: '[]',
       is_read: 1,
       is_starred: 0,

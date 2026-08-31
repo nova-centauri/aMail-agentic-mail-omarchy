@@ -62,7 +62,8 @@ export function createApp({ config, repos, mailService, remoteContent, logger, p
       },
     },
   }));
-  app.use(express.json({ limit: '2mb', type: ['application/json', 'application/*+json'] }));
+  // Compose attachments travel as base64 JSON. 8 MiB of files is ~11 MiB encoded.
+  app.use(express.json({ limit: '12mb', type: ['application/json', 'application/*+json'] }));
 
   registerApi(app, { config, repos, mailService, remoteContent, passkeys });
   registerMcp(app, { config, repos, mailService, remoteContent });

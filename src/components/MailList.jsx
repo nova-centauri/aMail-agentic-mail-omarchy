@@ -122,7 +122,7 @@ function EmptyMailbox({ folder, query, category = 'all', onCompose, onClearSearc
   const categoryDefinition = SMART_CATEGORIES.find((item) => item.id === category);
   const title = query ? 'No mail matched your search' : categoryDefinition && category !== 'all' ? `No ${categoryDefinition.label.toLowerCase()} here` : folder === 'inbox' ? 'Your inbox is clear' : `Nothing in ${folder}`;
   const copy = query
-    ? 'Try a sender, subject, or a different search term.'
+    ? 'Try from:, to:, subject:, has:attachment, or a different search term.'
     : categoryDefinition && category !== 'all'
       ? `${categoryDefinition.description}. New matches will appear here automatically.`
     : folder === 'inbox'

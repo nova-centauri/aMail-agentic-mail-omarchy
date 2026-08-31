@@ -1,6 +1,7 @@
 /**
- * Turn a mailbox search box value into a conservative FTS5 MATCH query.
- * User text is tokenized; FTS operators from the operator are not honored.
+ * Turn leftover mailbox search text into a conservative FTS5 MATCH query.
+ * Gmail-style operators are stripped before this runs; FTS operators from the
+ * leftover text are still not honored.
  */
 export function toFtsMatchQuery(raw) {
   const tokens = String(raw || '')

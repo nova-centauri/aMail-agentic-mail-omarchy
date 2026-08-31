@@ -171,6 +171,57 @@ test('message API filters unified mail by smart category and account creation is
   assert.equal(searched.messages[0].category, 'primary');
   assert.deepEqual(searched.categoryCounts, { primary: 1, github_ci: 0, logs: 0, status: 0, ops_error: 0 });
 
+  const fromResponse = await fetch(`${origin}/api/messages?folder=inbox&q=${encodeURIComponent('from:teammate@example.test')}`);
+  assert.equal(fromResponse.status, 200);
+  const fromSearch = await fromResponse.json();
+  assert.equal(fromSearch.total, 1);
+  assert.equal(fromSearch.messages[0].subject, 'Re: Workflow failure — I can help');
+
+  repos.messages.upsert({
+    ...messageInput({
+      accountId: account.id,
+      threadId: threadIds[0],
+      uid: 20,
+      subject: 'A human note',
+      fromEmail: 'friend@example.test',
+      timestamp: '2026-01-01T00:00:00.000Z',
+    }),
+    attachments_json: JSON.stringify([{ index: 0, filename: 'menu.pdf', contentType: 'application/pdf', size: 2048 }]),
+  });
+  const attachmentResponse = await fetch(`${origin}/api/messages?folder=inbox&q=${encodeURIComponent('from:friend has:attachment')}`);
+  assert.equal(attachmentResponse.status, 200);
+  const attachmentSearch = await attachmentResponse.json();
+  assert.equal(attachmentSearch.total, 1);
+  assert.equal(attachmentSearch.messages[0].hasAttachments, true);
+
+  const afterResponse = await fetch(`${origin}/api/messages?folder=inbox&q=${encodeURIComponent('after:2026-01-06')}`);
+  assert.equal(afterResponse.status, 200);
+  const afterSearch = await afterResponse.json();
+  assert.ok(afterSearch.messages.every((message) => message.subject !== 'A human note'));
+
+  const draftContent = Buffer.from('draft-notes').toString('base64');
+  const createdDraft = await fetch(`${origin}/api/drafts`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      accountId: account.id,
+      to: ['ada@example.com'],
+      subject: 'Draft with file',
+      textBody: 'Working copy',
+      attachments: [{ filename: 'notes.txt', contentType: 'text/plain', content: draftContent }],
+    }),
+  });
+  assert.equal(createdDraft.status, 201);
+  const created = await createdDraft.json();
+  assert.equal(created.draft.attachments[0].filename, 'notes.txt');
+  const listedDrafts = await fetch(`${origin}/api/messages?folder=drafts`);
+  const listed = await listedDrafts.json();
+  assert.equal(listed.total, 1);
+  assert.equal(listed.messages[0].hasAttachments, true);
+  assert.equal(listed.messages[0].attachments[0].content, undefined);
+  const loadedDraft = await fetch(`${origin}/api/drafts/${created.draft.id}`);
+  assert.equal((await loadedDraft.json()).draft.attachments[0].content, draftContent);
+
   const allResponse = await fetch(`${origin}/api/messages?folder=inbox`);
   const all = await allResponse.json();
   assert.equal(all.total, 5);
@@ -179,7 +230,7 @@ test('message API filters unified mail by smart category and account creation is
   // active folder view. All five seeded messages are unread inbox mail.
   assert.equal(all.folderCounts.inbox, 5);
   assert.equal(all.folderCounts.starred, 0);
-  assert.equal(all.folderCounts.drafts, 0);
+  assert.equal(all.folderCounts.drafts, 1);
 
   // Routine ops digests stay out of the default inbox even when unread. Errors
   // surface in the dedicated Ops errors smart view.

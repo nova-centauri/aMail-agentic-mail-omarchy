@@ -1,4 +1,6 @@
+import { useEffect, useRef, useState } from 'react';
 import { BrandMark, Icon } from './Icon.jsx';
+import { SearchOptions } from './SearchOptions.jsx';
 import { Avatar, IconButton, Tooltip } from './ui.jsx';
 
 export function Topbar({
@@ -9,12 +11,28 @@ export function Topbar({
   onOpenSettings,
   onLogout,
   onOpenProfile,
-  onFocusSmartFilters,
   onOpenShortcuts,
   searchRef,
   account,
   isDemo,
 }) {
+  const [optionsOpen, setOptionsOpen] = useState(false);
+  const searchWrapRef = useRef(null);
+  useEffect(() => {
+    if (!optionsOpen) return undefined;
+    const onPointer = (event) => {
+      if (!searchWrapRef.current?.contains(event.target)) setOptionsOpen(false);
+    };
+    const onKey = (event) => {
+      if (event.key === 'Escape') setOptionsOpen(false);
+    };
+    document.addEventListener('mousedown', onPointer);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onPointer);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [optionsOpen]);
   return (
     <header className="topbar">
       <Tooltip text="Toggle navigation">
@@ -27,26 +45,39 @@ export function Topbar({
         <span className="brand-name">GigaMail</span>
         {isDemo && <span className="preview-pill">Preview</span>}
       </button>
-      <div className="search-shell">
-        <Icon name="search" size={21} className="search-icon" />
-        <input
-          ref={searchRef}
-          type="search"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search mail"
-          aria-label="Search mail"
+      <div className="search-wrap" ref={searchWrapRef}>
+        <div className={`search-shell ${optionsOpen ? 'is-open' : ''}`}>
+          <Icon name="search" size={21} className="search-icon" />
+          <input
+            ref={searchRef}
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search mail"
+            aria-label="Search mail"
+          />
+          {query && (
+            <IconButton label="Clear search" onClick={() => setQuery('')} className="search-clear">
+              <Icon name="close" size={18} />
+            </IconButton>
+          )}
+          <Tooltip text="Search options">
+            <IconButton
+              label="Search options"
+              className="search-filter"
+              active={optionsOpen}
+              onClick={() => setOptionsOpen((current) => !current)}
+            >
+              <Icon name="tune" size={20} />
+            </IconButton>
+          </Tooltip>
+        </div>
+        <SearchOptions
+          open={optionsOpen}
+          query={query}
+          onApply={setQuery}
+          onClose={() => setOptionsOpen(false)}
         />
-        {query && (
-          <IconButton label="Clear search" onClick={() => setQuery('')} className="search-clear">
-            <Icon name="close" size={18} />
-          </IconButton>
-        )}
-        <Tooltip text="Smart mail filters">
-          <IconButton label="Focus smart mail filters" className="search-filter" onClick={onFocusSmartFilters}>
-            <Icon name="tune" size={20} />
-          </IconButton>
-        </Tooltip>
       </div>
       <div className="top-actions">
         {onOpenShortcuts && (

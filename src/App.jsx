@@ -390,16 +390,38 @@ export default function App() {
   const openThread = async (thread) => {
     if (thread.folder === 'drafts' || thread.draftId) {
       const draftMessage = thread.messages?.at(-1) || thread;
+      const draftId = thread.draftId || String(thread.id).replace(/^draft:/, '');
+      let attachments = thread.attachments || draftMessage.attachments || [];
+      let body = draftMessage.body || '';
+      let subject = thread.subject === '(no subject)' ? '' : thread.subject;
+      let to = formatRecipients(thread.to || draftMessage.to);
+      let cc = formatRecipients(thread.cc || draftMessage.cc);
+      let bcc = formatRecipients(thread.bcc || draftMessage.bcc);
+      if (!isDemo && draftId) {
+        try {
+          const data = await api(`/drafts/${encodeURIComponent(draftId)}`);
+          const draft = data?.draft || data;
+          attachments = draft?.attachments || attachments;
+          body = draft?.textBody || body;
+          subject = draft?.subject || subject;
+          to = formatRecipients(draft?.to || thread.to);
+          cc = formatRecipients(draft?.cc || thread.cc);
+          bcc = formatRecipients(draft?.bcc || thread.bcc);
+        } catch {
+          // The list payload is enough to keep editing if the full draft fetch fails.
+        }
+      }
       setComposeContext({
         mode: 'draft',
-        draftId: thread.draftId || String(thread.id).replace(/^draft:/, ''),
+        draftId,
         accountId: thread.accountId || draftMessage.accountId || null,
         threadId: thread.threadId && thread.threadId !== thread.id ? thread.threadId : null,
-        to: formatRecipients(thread.to || draftMessage.to),
-        cc: formatRecipients(thread.cc || draftMessage.cc),
-        bcc: formatRecipients(thread.bcc || draftMessage.bcc),
-        subject: thread.subject === '(no subject)' ? '' : thread.subject,
-        body: draftMessage.body || '',
+        to,
+        cc,
+        bcc,
+        subject,
+        body,
+        attachments,
       });
       setComposeOpen(true);
       return;
@@ -591,6 +613,7 @@ export default function App() {
       bcc: draft?.bcc || [],
       timestamp,
       updatedAt: timestamp,
+      attachments: draft?.attachments || [],
       messages: [{
         id: `draft-message:${id}`,
         accountId,
@@ -600,6 +623,7 @@ export default function App() {
         bcc: draft?.bcc || [],
         textBody: draft?.textBody || '',
         htmlBody: draft?.htmlBody || '',
+        attachments: draft?.attachments || [],
         timestamp,
       }],
     });
@@ -758,10 +782,6 @@ export default function App() {
         onOpenProfile={() => setProfileOpen(true)}
         onOpenShortcuts={() => setShortcutsOpen(true)}
         searchRef={searchRef}
-        onFocusSmartFilters={() => {
-          if (activeFolder !== 'inbox') setActiveFolder('inbox');
-          window.setTimeout(() => document.querySelector('#smart-mail-filters [aria-selected="true"]')?.focus(), 0);
-        }}
         account={displayAccount}
         isDemo={isDemo}
       />
@@ -821,7 +841,7 @@ export default function App() {
           {selectedThread ? <ThreadView key={selectedThread.id} thread={selectedThread} activeFolder={activeFolder} onBack={() => setSelectedThread(null)} onAction={applyAction} onLoadRemote={loadRemoteContent} onReply={openReplyComposer} onReplyAll={(thread, message) => openReplyComposer(thread, message, { replyAll: true })} onForward={openForwardComposer} allowPrivateImages={privacy.privateImages} /> : null}
         </div>
       </main>
-      {composeOpen && <ComposeModal account={composeAccount} accounts={identityAccounts} isDemo={isDemo} initialReply={composeContext} onClose={closeCompose} onSent={sendMessage} onDraftSaved={draftSaved} onDraftRemoved={draftRemoved} onNotice={setNotice} />}
+      {composeOpen && <ComposeModal key={composeContext?.draftId || composeContext?.mode || 'compose'} account={composeAccount} accounts={identityAccounts} isDemo={isDemo} initialReply={composeContext} onClose={closeCompose} onSent={sendMessage} onDraftSaved={draftSaved} onDraftRemoved={draftRemoved} />}
       <SettingsPanel
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
