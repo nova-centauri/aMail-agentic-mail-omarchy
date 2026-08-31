@@ -428,7 +428,7 @@
 .compose-form .recipient-line button { color: #5f6368; }
 .from-line { color: #5f6368; }
 .from-line select { color: #3c4043; }
-.signature-preview { color: #5f6368; white-space: normal; }
+.signature-preview { flex: 0 0 auto; color: #5f6368; white-space: normal; }
 .signature-preview img { max-width: 100%; height: auto; }
 .signature-preview a { color: #1a73e8; }
 .compose-error { color: #b3261e; }
