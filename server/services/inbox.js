@@ -13,7 +13,7 @@ import {
   conversationMatchesMailboxQuery,
   mailboxQueryIsActive,
   parseMailboxQuery,
-} from '../../src/mail/search-query.js';
+} from '../mail/search-query.js';
 import { publicAttachmentMeta } from './compose-attachments.js';
 import { NotFoundError, ValidationError } from '../errors.js';
 
