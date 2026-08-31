@@ -218,7 +218,7 @@ export default function App() {
           inbox: preview.filter((thread) => thread.folder === 'inbox' && thread.unread).length,
           starred: preview.filter((thread) => thread.starred).length,
           snoozed: preview.filter((thread) => thread.folder === 'snoozed').length,
-          drafts: preview.filter((thread) => thread.folder === 'drafts').length + demoDraftsRef.current.length,
+          drafts: preview.filter((thread) => thread.folder === 'drafts').length,
         });
       } else if (nextFolderCounts) {
         setFolderCounts(nextFolderCounts);
@@ -380,9 +380,13 @@ export default function App() {
   };
 
   const selectPersonFlag = (flagId) => {
-    setActiveFolder('inbox');
-    setActiveCategory('all');
-    setActivePersonFlag(flagId);
+    if (flagId) {
+      setActiveFolder('inbox');
+      setActiveCategory('all');
+      setActivePersonFlag(flagId);
+    } else {
+      setActivePersonFlag(null);
+    }
     setSelectedIds([]);
     setSelectedThread(null);
   };
