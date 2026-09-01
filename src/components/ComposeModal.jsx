@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { formatAttachmentSize } from '../mail/dates.js';
-import { insertMarkdownLink, isSafeLinkHref, plainTextToHtml } from '../mail/html.js';
-import { signaturePreviewHtml } from '../mail/signature.js';
+import { parseRecipientList } from '../mail/people.js';
+import { editorHtmlToStored, htmlToPlainText, signaturePreviewHtml, storedComposeToEditorHtml } from '../mail/signature.js';
 import { Icon } from './Icon.jsx';
 import { IconButton } from './ui.jsx';
+import { RecipientField } from './RecipientField.jsx';
+import { SignatureEditor } from './SignatureEditor.jsx';
 
 export const MAX_COMPOSE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 export const MAX_COMPOSE_ATTACHMENT_COUNT = 8;
@@ -26,14 +28,18 @@ async function readFileAsAttachment(file) {
   };
 }
 
-export function ComposeModal({ account, accounts, isDemo, onClose, onSent, onDraftSaved, onDraftRemoved, initialReply }) {
-  const [form, setForm] = useState({
-    to: initialReply?.to || '',
-    cc: initialReply?.cc || '',
-    bcc: initialReply?.bcc || '',
-    subject: initialReply?.subject || '',
-    body: initialReply?.body || '',
-  });
+function initialHtmlBody(initialReply) {
+  if (initialReply?.htmlBody) return storedComposeToEditorHtml(initialReply.htmlBody);
+  if (initialReply?.body) return storedComposeToEditorHtml(initialReply.body);
+  return '';
+}
+
+export function ComposeModal({ account, accounts, contacts = [], isDemo, onClose, onSent, onDraftSaved, onDraftRemoved, initialReply }) {
+  const [to, setTo] = useState(() => parseRecipientList(initialReply?.to || ''));
+  const [cc, setCc] = useState(() => parseRecipientList(initialReply?.cc || ''));
+  const [bcc, setBcc] = useState(() => parseRecipientList(initialReply?.bcc || ''));
+  const [subject, setSubject] = useState(initialReply?.subject || '');
+  const [htmlBody, setHtmlBody] = useState(() => initialHtmlBody(initialReply));
   const [attachments, setAttachments] = useState(initialReply?.attachments || []);
   const [extraFields, setExtraFields] = useState(Boolean(initialReply?.cc || initialReply?.bcc));
   const [isMinimized, setIsMinimized] = useState(false);
@@ -43,35 +49,53 @@ export function ComposeModal({ account, accounts, isDemo, onClose, onSent, onDra
   const [draftId, setDraftId] = useState(initialReply?.draftId || '');
   const [error, setError] = useState('');
   const [senderId, setSenderId] = useState(initialReply?.accountId || account?.id || accounts[0]?.id || '');
-  const [linkOpen, setLinkOpen] = useState(false);
-  const [linkForm, setLinkForm] = useState({ href: '', label: '' });
-  const formRef = useRef(form);
+  const toRef = useRef(to);
+  const ccRef = useRef(cc);
+  const bccRef = useRef(bcc);
+  const subjectRef = useRef(subject);
+  const htmlBodyRef = useRef(htmlBody);
   const attachmentsRef = useRef(attachments);
   const draftIdRef = useRef(draftId);
-  const bodyRef = useRef(null);
   const fileRef = useRef(null);
-  formRef.current = form;
+  toRef.current = to;
+  ccRef.current = cc;
+  bccRef.current = bcc;
+  subjectRef.current = subject;
+  htmlBodyRef.current = htmlBody;
   attachmentsRef.current = attachments;
   draftIdRef.current = draftId;
-  const update = (key) => (event) => setForm((current) => ({ ...current, [key]: event.target.value }));
   useEffect(() => {
     setSenderId((current) => accounts.some((item) => item.id === current) ? current : initialReply?.accountId || account?.id || accounts[0]?.id || '');
   }, [account?.id, accounts, initialReply?.accountId]);
   const senderAccount = accounts.find((item) => item.id === senderId) || account || accounts[0] || null;
-  const addressValues = (value) => value.split(',').map((item) => item.trim()).filter(Boolean);
-  const hasUnsavedContent = () => {
-    const current = formRef.current;
-    return Boolean(current.to.trim() || current.cc.trim() || current.bcc.trim() || current.subject.trim() || current.body.trim() || attachmentsRef.current.length || draftIdRef.current);
+  const recipientPayload = (list) => list.map((person) => ({
+    name: person.name || '',
+    email: person.email,
+  }));
+  const hasUnsavedContent = () => Boolean(
+    toRef.current.length
+    || ccRef.current.length
+    || bccRef.current.length
+    || subjectRef.current.trim()
+    || htmlToPlainText(htmlBodyRef.current)
+    || attachmentsRef.current.length
+    || draftIdRef.current,
+  );
+  const composeBodies = () => {
+    const storedHtml = editorHtmlToStored(htmlBody);
+    return {
+      htmlBody: storedHtml,
+      textBody: htmlToPlainText(storedHtml || htmlBody),
+    };
   };
   const draftPayload = () => ({
     accountId: senderAccount?.id,
     threadId: initialReply?.threadId || null,
-    to: addressValues(form.to),
-    cc: addressValues(form.cc),
-    bcc: addressValues(form.bcc),
-    subject: form.subject,
-    textBody: form.body,
-    htmlBody: plainTextToHtml(form.body),
+    to: recipientPayload(to),
+    cc: recipientPayload(cc),
+    bcc: recipientPayload(bcc),
+    subject,
+    ...composeBodies(),
     attachments,
   });
   const saveDraft = async ({ closeAfter = true } = {}) => {
@@ -128,10 +152,6 @@ export function ComposeModal({ account, accounts, isDemo, onClose, onSent, onDra
       if (event.key !== 'Escape') return;
       event.preventDefault();
       event.stopPropagation();
-      if (linkOpen) {
-        setLinkOpen(false);
-        return;
-      }
       if (isExpanded) {
         setIsExpanded(false);
         return;
@@ -176,47 +196,24 @@ export function ComposeModal({ account, accounts, isDemo, onClose, onSent, onDra
   const removeAttachment = (index) => {
     setAttachments((current) => current.filter((_, itemIndex) => itemIndex !== index));
   };
-  const openLinkPopover = () => {
-    const field = bodyRef.current;
-    const selected = field ? form.body.slice(field.selectionStart, field.selectionEnd) : '';
-    setLinkForm({ href: '', label: selected });
-    setLinkOpen(true);
-  };
-  const insertLink = (event) => {
-    event?.preventDefault?.();
-    const href = String(linkForm.href || '').trim();
-    if (!isSafeLinkHref(href)) {
-      setError('Enter an http, https, mailto, or tel link.');
-      return;
-    }
-    const field = bodyRef.current;
-    const start = field?.selectionStart ?? form.body.length;
-    const end = field?.selectionEnd ?? start;
-    const next = insertMarkdownLink(form.body, { start, end, href, label: linkForm.label });
-    setForm((current) => ({ ...current, body: next.body }));
-    setLinkOpen(false);
-    setError('');
-    window.requestAnimationFrame(() => {
-      if (!field) return;
-      field.focus();
-      field.setSelectionRange(next.selectionEnd, next.selectionEnd);
-    });
-  };
   const send = async (event) => {
     event.preventDefault();
-    if (!form.to.trim()) { setError('Add at least one recipient.'); return; }
+    if (!to.length && !cc.length && !bcc.length) { setError('Add at least one recipient.'); return; }
+    if ([...to, ...cc, ...bcc].some((person) => person.valid === false)) {
+      setError('Fix or remove the invalid recipient address.');
+      return;
+    }
     if (!senderAccount?.id && !isDemo) { setError('Connect an account before sending.'); return; }
     setError('');
     setIsSending(true);
-    // The server appends the selected identity's stored signature exactly once.
-    const textBody = form.body;
+    const { htmlBody: nextHtml, textBody } = composeBodies();
     const payload = {
-      to: form.to.split(',').map((value) => value.trim()).filter(Boolean),
-      cc: form.cc.split(',').map((value) => value.trim()).filter(Boolean),
-      bcc: form.bcc.split(',').map((value) => value.trim()).filter(Boolean),
-      subject: form.subject,
+      to: recipientPayload(to),
+      cc: recipientPayload(cc),
+      bcc: recipientPayload(bcc),
+      subject,
       textBody,
-      htmlBody: plainTextToHtml(textBody),
+      htmlBody: nextHtml,
       accountId: senderAccount?.id,
       attachments,
       ...(draftId ? { draftId } : {}),
@@ -259,8 +256,15 @@ export function ComposeModal({ account, accounts, isDemo, onClose, onSent, onDra
       {!isMinimized && (
         <form className="compose-form email-light" onSubmit={send}>
           <div className="recipient-line">
-            <input autoFocus value={form.to} onChange={update('to')} placeholder="Recipients" aria-label="Recipients" />
-            <button type="button" onClick={() => setExtraFields((value) => !value)}>{extraFields ? 'Hide' : 'Cc Bcc'}</button>
+            <RecipientField
+              label="Recipients"
+              values={to}
+              onChange={setTo}
+              contacts={contacts}
+              placeholder="Recipients"
+              autoFocus
+              extra={<button type="button" onClick={() => setExtraFields((value) => !value)}>{extraFields ? 'Hide' : 'Cc Bcc'}</button>}
+            />
           </div>
           {accounts.length > 1 && (
             <div className="recipient-line from-line">
@@ -270,9 +274,25 @@ export function ComposeModal({ account, accounts, isDemo, onClose, onSent, onDra
               </select>
             </div>
           )}
-          {extraFields && <><div className="recipient-line"><input value={form.cc} onChange={update('cc')} placeholder="Cc" aria-label="Cc" /></div><div className="recipient-line"><input value={form.bcc} onChange={update('bcc')} placeholder="Bcc" aria-label="Bcc" /></div></>}
-          <div className="recipient-line subject-line"><input value={form.subject} onChange={update('subject')} placeholder="Subject" aria-label="Subject" /></div>
-          <textarea ref={bodyRef} value={form.body} onChange={update('body')} placeholder="Write your message" aria-label="Message body" />
+          {extraFields && (
+            <>
+              <div className="recipient-line">
+                <RecipientField label="Cc" values={cc} onChange={setCc} contacts={contacts} placeholder="Cc" />
+              </div>
+              <div className="recipient-line">
+                <RecipientField label="Bcc" values={bcc} onChange={setBcc} contacts={contacts} placeholder="Bcc" />
+              </div>
+            </>
+          )}
+          <div className="recipient-line subject-line"><input value={subject} onChange={(event) => setSubject(event.target.value)} placeholder="Subject" aria-label="Subject" /></div>
+          <SignatureEditor
+            variant="compose"
+            compact
+            value={htmlBody}
+            onChange={setHtmlBody}
+            placeholder="Write your message"
+            ariaLabel="Message body"
+          />
           {senderAccount?.signature && (
             <div
               className="signature-preview"
@@ -306,25 +326,6 @@ export function ComposeModal({ account, accounts, isDemo, onClose, onSent, onDra
               }}
             />
             <IconButton label="Attach files" onClick={() => fileRef.current?.click()}><Icon name="attachment" /></IconButton>
-            <div className="compose-link-wrap">
-              <IconButton label="Insert link" active={linkOpen} onClick={openLinkPopover}><Icon name="link" /></IconButton>
-              {linkOpen && (
-                <div className="compose-link-popover">
-                  <label>
-                    <span>Text</span>
-                    <input value={linkForm.label} onChange={(event) => setLinkForm((current) => ({ ...current, label: event.target.value }))} placeholder="Link text" aria-label="Link text" />
-                  </label>
-                  <label>
-                    <span>URL</span>
-                    <input autoFocus value={linkForm.href} onChange={(event) => setLinkForm((current) => ({ ...current, href: event.target.value }))} placeholder="https://" aria-label="Link URL" />
-                  </label>
-                  <div className="compose-link-actions">
-                    <button type="button" className="send-button" onClick={insertLink}>Insert</button>
-                    <button type="button" className="text-button" onClick={() => setLinkOpen(false)}>Cancel</button>
-                  </div>
-                </div>
-              )}
-            </div>
             <span className="compose-spacer" />
             <IconButton label="Discard draft" onClick={discardDraft} disabled={isSending || isSavingDraft}><Icon name="trash" /></IconButton>
           </div>

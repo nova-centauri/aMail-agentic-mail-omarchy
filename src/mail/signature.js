@@ -1,4 +1,5 @@
 export const SIGNATURE_MAX_LENGTH = 200_000;
+export const COMPOSE_MAX_LENGTH = 1_000_000;
 export const SIGNATURE_HTML_UPLOAD_MAX_BYTES = 400_000;
 export const SIGNATURE_IMAGE_MAX_BYTES = 80_000;
 
@@ -196,10 +197,35 @@ export function readFileAsDataUrl(file) {
   });
 }
 
-export function validateSignatureLength(value) {
+export function validateSignatureLength(value, maxLength = SIGNATURE_MAX_LENGTH) {
   const length = String(value || '').length;
-  if (length > SIGNATURE_MAX_LENGTH) {
-    return `Signature is too long (${length.toLocaleString()} characters; max ${SIGNATURE_MAX_LENGTH.toLocaleString()}).`;
+  const cap = Number(maxLength) || SIGNATURE_MAX_LENGTH;
+  if (length > cap) {
+    return `Content is too long (${length.toLocaleString()} characters; max ${cap.toLocaleString()}).`;
   }
   return '';
+}
+
+export function htmlToPlainText(value) {
+  const raw = String(value || '');
+  if (!raw.trim()) return '';
+  if (!looksLikeHtml(raw) && typeof DOMParser === 'undefined') return raw.replace(/\r\n/g, '\n').trim();
+  if (typeof DOMParser === 'undefined') {
+    return raw.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+  const cleaned = looksLikeHtml(raw) ? sanitizeSignatureHtml(extractHtmlDocumentBody(raw)) : escapeSignatureText(raw);
+  const documentNode = new DOMParser().parseFromString(cleaned, 'text/html');
+  const body = documentNode.body;
+  if (!body) return raw.replace(/\s+/g, ' ').trim();
+  body.querySelectorAll('br').forEach((node) => node.replaceWith('\n'));
+  body.querySelectorAll('p, div, tr, h1, h2, h3, h4, h5, h6, li, blockquote').forEach((node) => node.append('\n'));
+  return (body.textContent || '')
+    .replace(/\u00a0/g, ' ')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+export function storedComposeToEditorHtml(value) {
+  return storedSignatureToEditorHtml(value);
 }

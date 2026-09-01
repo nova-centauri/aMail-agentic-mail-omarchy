@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
+  COMPOSE_MAX_LENGTH,
   editorHtmlToStored,
   extractHtmlDocumentBody,
   looksLikeHtml,
@@ -8,6 +9,7 @@ import {
   sanitizeSignatureHtml,
   SIGNATURE_HTML_UPLOAD_MAX_BYTES,
   SIGNATURE_IMAGE_MAX_BYTES,
+  SIGNATURE_MAX_LENGTH,
   storedSignatureToEditorHtml,
   validateSignatureLength,
 } from '../mail/signature.js';
@@ -28,7 +30,20 @@ export function SignatureEditor({
   onSave,
   disabled = false,
   compact = false,
+  variant = 'signature',
+  placeholder,
+  ariaLabel,
 }) {
+  const isCompose = variant === 'compose';
+  const visualLabel = ariaLabel || (isCompose ? 'Message body' : 'Signature');
+  const sourceLabel = isCompose ? 'Message HTML' : 'Signature HTML';
+  const placeholderText = placeholder || (isCompose ? 'Write your message' : 'Write or paste your signature');
+  const maxLength = isCompose ? COMPOSE_MAX_LENGTH : SIGNATURE_MAX_LENGTH;
+  const modeLabel = isCompose ? 'Message editor mode' : 'Signature editor mode';
+  const formatLabel = isCompose ? 'Message formatting' : 'Signature formatting';
+  const imageError = isCompose ? 'Choose an image smaller than 80 KB.' : 'Choose a signature image smaller than 80 KB.';
+  const imageInputLabel = isCompose ? 'Insert message image' : 'Insert signature image';
+  const htmlInputLabel = isCompose ? 'Upload message HTML' : 'Upload signature HTML';
   const [mode, setMode] = useState('visual');
   const [draft, setDraft] = useState(value);
   const [error, setError] = useState('');
@@ -71,7 +86,7 @@ export function SignatureEditor({
 
   const commit = (next, { save = false } = {}) => {
     const stored = save ? persistable(next) : next;
-    const lengthError = validateSignatureLength(stored);
+    const lengthError = validateSignatureLength(stored, maxLength);
     if (lengthError) {
       setError(lengthError);
       return false;
@@ -149,7 +164,7 @@ export function SignatureEditor({
       return;
     }
     if (file.size > SIGNATURE_IMAGE_MAX_BYTES) {
-      setError('Choose a signature image smaller than 80 KB.');
+      setError(imageError);
       return;
     }
     try {
@@ -202,19 +217,27 @@ export function SignatureEditor({
     if (onSave && draftRef.current !== (baseline || '')) persistDraft(draftRef.current);
   };
 
+  const handleKeyDown = (event) => {
+    if (event.key !== 'Escape' || !linkOpen) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setLinkOpen(false);
+  };
+
   return (
     <div
       ref={rootRef}
-      className={`signature-editor ${compact ? 'is-compact' : ''} ${disabled ? 'is-disabled' : ''}`}
+      className={`signature-editor ${compact ? 'is-compact' : ''} ${disabled ? 'is-disabled' : ''} ${isCompose ? 'is-compose' : ''}`}
       onBlur={handleBlur}
+      onKeyDown={handleKeyDown}
     >
       <div className="signature-editor-toolbar">
-        <div className="signature-editor-modes" role="tablist" aria-label="Signature editor mode">
+        <div className="signature-editor-modes" role="tablist" aria-label={modeLabel}>
           <button type="button" role="tab" aria-selected={mode === 'visual'} className={mode === 'visual' ? 'is-selected' : ''} disabled={disabled} onClick={() => { setMode('visual'); setLinkOpen(false); }}>Visual</button>
           <button type="button" role="tab" aria-selected={mode === 'html'} className={mode === 'html' ? 'is-selected' : ''} disabled={disabled} onClick={() => setMode('html')}>HTML</button>
         </div>
         {mode === 'visual' && (
-          <div className="signature-editor-format" role="toolbar" aria-label="Signature formatting">
+          <div className="signature-editor-format" role="toolbar" aria-label={formatLabel}>
             <button type="button" aria-label="Bold" disabled={disabled} onMouseDown={(event) => event.preventDefault()} onClick={() => format('bold')}><b>B</b></button>
             <button type="button" aria-label="Italic" disabled={disabled} onMouseDown={(event) => event.preventDefault()} onClick={() => format('italic')}><i>I</i></button>
             <button type="button" aria-label="Underline" disabled={disabled} onMouseDown={(event) => event.preventDefault()} onClick={() => format('underline')}><u>U</u></button>
@@ -243,9 +266,9 @@ export function SignatureEditor({
           suppressContentEditableWarning
           role="textbox"
           aria-multiline="true"
-          aria-label="Signature"
+          aria-label={visualLabel}
           aria-disabled={disabled}
-          data-placeholder="Write or paste your signature"
+          data-placeholder={placeholderText}
           onInput={handleVisualInput}
           onPaste={handleVisualPaste}
           onMouseUp={rememberSelection}
@@ -258,31 +281,33 @@ export function SignatureEditor({
           value={draft}
           disabled={disabled}
           spellCheck={false}
-          aria-label="Signature HTML"
+          aria-label={sourceLabel}
           placeholder="Paste or write HTML…"
           onChange={(event) => commit(event.target.value)}
         />
       )}
-      <div className="signature-editor-actions">
-        <button type="button" className="secondary-button" disabled={disabled} onClick={() => htmlFileRef.current?.click()}>
-          <Icon name="attachment" size={15} /> Upload HTML
-        </button>
-        <button type="button" className="secondary-button" disabled={disabled} onClick={() => void pasteHtml()}>
-          Paste HTML
-        </button>
-        {onSave && (
-          <button type="button" className="secondary-button" disabled={disabled || !dirty} onClick={() => persistDraft(draft)}>
-            Save
+      {!isCompose && (
+        <div className="signature-editor-actions">
+          <button type="button" className="secondary-button" disabled={disabled} onClick={() => htmlFileRef.current?.click()}>
+            <Icon name="attachment" size={15} /> Upload HTML
           </button>
-        )}
-        <button type="button" className="text-button" disabled={disabled || !draft} onClick={() => { persistDraft(''); setMode('visual'); }}>
-          Clear
-        </button>
-      </div>
-      <input ref={htmlFileRef} type="file" accept=".html,.htm,text/html,application/xhtml+xml" hidden aria-label="Upload signature HTML" onChange={(event) => void chooseHtmlFile(event)} />
-      <input ref={imageFileRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden aria-label="Insert signature image" onChange={(event) => void chooseImage(event)} />
+          <button type="button" className="secondary-button" disabled={disabled} onClick={() => void pasteHtml()}>
+            Paste HTML
+          </button>
+          {onSave && (
+            <button type="button" className="secondary-button" disabled={disabled || !dirty} onClick={() => persistDraft(draft)}>
+              Save
+            </button>
+          )}
+          <button type="button" className="text-button" disabled={disabled || !draft} onClick={() => { persistDraft(''); setMode('visual'); }}>
+            Clear
+          </button>
+        </div>
+      )}
+      <input ref={htmlFileRef} type="file" accept=".html,.htm,text/html,application/xhtml+xml" hidden aria-label={htmlInputLabel} onChange={(event) => void chooseHtmlFile(event)} />
+      <input ref={imageFileRef} type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden aria-label={imageInputLabel} onChange={(event) => void chooseImage(event)} />
       {error && <p className="signature-editor-error" role="alert">{error}</p>}
-      <p className="signature-editor-hint">Upload an HTML file, paste HTML, or edit visually. Scripts and tracking markup are removed before the signature is saved or sent.</p>
+      {!isCompose && <p className="signature-editor-hint">Upload an HTML file, paste HTML, or edit visually. Scripts and tracking markup are removed before the signature is saved or sent.</p>}
     </div>
   );
 }

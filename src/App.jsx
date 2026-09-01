@@ -16,7 +16,10 @@ import { EMPTY_FOLDER_COUNTS, PERSON_FLAGS, SMART_CATEGORIES, UNIFIED_ACCOUNT } 
 import { demoAccounts, demoMailboxThreads } from './mail/demo.js';
 import { countSmartCategories, filterVisibleThreads } from './mail/filter.js';
 import { useLiveMailboxSync } from './mail/live-sync.js';
+import { quotedComposeHtml } from './mail/html.js';
 import { formatMessageDate, getArray, normalizeAccount, normalizePerson, normalizeThread, recipientArray, formatRecipients } from './mail/normalize.js';
+import { collectKnownPeople } from './mail/people.js';
+import { sanitizeSignatureHtml } from './mail/signature.js';
 import { syncResultStatus, syncSkippedMessageCount } from './mail/sync.js';
 import { authenticateWithPasskey, passkeysSupported, registerPasskey } from './passkeys.js';
 import { clampIndex, shortcutAction } from './shortcuts.js';
@@ -130,6 +133,14 @@ export default function App() {
       cc: formatRecipients(ccRecipients),
       subject,
       body: original ? `\n\nOn ${formatMessageDate(message.timestamp)}, ${sender} wrote:\n${original}` : '',
+      htmlBody: (original || message.bodyHtml)
+        ? quotedComposeHtml({
+          date: formatMessageDate(message.timestamp),
+          sender,
+          html: message.bodyHtml ? sanitizeSignatureHtml(message.bodyHtml) : '',
+          text: original,
+        })
+        : '',
       threadId: thread.threadId || thread.id,
       replyToMessageId: message.rfcMessageId || undefined,
     });
@@ -146,6 +157,14 @@ export default function App() {
       to: '',
       subject,
       body: `\n\n---------- Forwarded message ----------\nFrom: ${sender}\nDate: ${formatMessageDate(message.timestamp)}\nSubject: ${thread.subject || '(no subject)'}\n\n${original}`,
+      htmlBody: quotedComposeHtml({
+        date: formatMessageDate(message.timestamp),
+        sender,
+        subject: thread.subject,
+        html: message.bodyHtml ? sanitizeSignatureHtml(message.bodyHtml) : '',
+        text: original,
+        mode: 'forward',
+      }),
     });
     setComposeOpen(true);
   };
@@ -398,6 +417,7 @@ export default function App() {
       const draftId = thread.draftId || String(thread.id).replace(/^draft:/, '');
       let attachments = thread.attachments || draftMessage.attachments || [];
       let body = draftMessage.body || '';
+      let htmlBody = draftMessage.bodyHtml || '';
       let subject = thread.subject === '(no subject)' ? '' : thread.subject;
       let to = formatRecipients(thread.to || draftMessage.to);
       let cc = formatRecipients(thread.cc || draftMessage.cc);
@@ -408,6 +428,7 @@ export default function App() {
           const draft = data?.draft || data;
           attachments = draft?.attachments || attachments;
           body = draft?.textBody || body;
+          htmlBody = draft?.htmlBody || htmlBody;
           subject = draft?.subject || subject;
           to = formatRecipients(draft?.to || thread.to);
           cc = formatRecipients(draft?.cc || thread.cc);
@@ -426,6 +447,7 @@ export default function App() {
         bcc,
         subject,
         body,
+        htmlBody: htmlBody || body,
         attachments,
       });
       setComposeOpen(true);
@@ -781,6 +803,10 @@ export default function App() {
   const displayAccount = activeAccount || (hasConnectedAccounts ? UNIFIED_ACCOUNT : isDemo ? demoIdentities[0] : UNIFIED_ACCOUNT);
   const identityAccounts = hasConnectedAccounts ? accounts : isDemo ? demoIdentities : [];
   const composeAccount = activeAccount || identityAccounts[0] || null;
+  const composeContacts = useMemo(
+    () => collectKnownPeople(identityAccounts, threads, isDemo ? demoMailboxThreads : []),
+    [identityAccounts, threads, isDemo],
+  );
 
   const densityClass = density === 'Comfortable' ? 'density-comfortable-ui' : density === 'Compact' ? 'density-compact-ui' : '';
 
@@ -855,7 +881,7 @@ export default function App() {
           {selectedThread ? <ThreadView key={selectedThread.id} thread={selectedThread} activeFolder={activeFolder} onBack={() => setSelectedThread(null)} onAction={applyAction} onLoadRemote={loadRemoteContent} onReply={openReplyComposer} onReplyAll={(thread, message) => openReplyComposer(thread, message, { replyAll: true })} onForward={openForwardComposer} allowPrivateImages={privacy.privateImages} /> : null}
         </div>
       </main>
-      {composeOpen && <ComposeModal key={composeContext?.draftId || composeContext?.mode || 'compose'} account={composeAccount} accounts={identityAccounts} isDemo={isDemo} initialReply={composeContext} onClose={closeCompose} onSent={sendMessage} onDraftSaved={draftSaved} onDraftRemoved={draftRemoved} />}
+      {composeOpen && <ComposeModal key={composeContext?.draftId || composeContext?.mode || 'compose'} account={composeAccount} accounts={identityAccounts} contacts={composeContacts} isDemo={isDemo} initialReply={composeContext} onClose={closeCompose} onSent={sendMessage} onDraftSaved={draftSaved} onDraftRemoved={draftRemoved} />}
       <SettingsPanel
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}

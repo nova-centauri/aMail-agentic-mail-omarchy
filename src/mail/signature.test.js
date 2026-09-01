@@ -5,6 +5,7 @@ import {
   looksLikeHtml,
   sanitizeSignatureHtml,
   storedSignatureToEditorHtml,
+  htmlToPlainText,
   validateSignatureLength,
 } from './signature.js';
 
@@ -50,5 +51,10 @@ describe('signature helpers', () => {
   it('rejects signatures over the stored length cap', () => {
     expect(validateSignatureLength('short')).toBe('');
     expect(validateSignatureLength('x'.repeat(200_001))).toMatch(/too long/i);
+  });
+
+  it('turns stored HTML into plain text for the SMTP text part', () => {
+    expect(htmlToPlainText('<p>Hello <strong>Maya</strong></p><p>See you tomorrow.</p>')).toMatch(/Hello Maya/);
+    expect(htmlToPlainText('<p>Hello <strong>Maya</strong></p><p>See you tomorrow.</p>')).toMatch(/See you tomorrow/);
   });
 });

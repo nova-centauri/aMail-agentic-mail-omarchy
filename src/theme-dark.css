@@ -423,6 +423,9 @@
 .compose-form .recipient-line input,
 .compose-form textarea,
 .compose-form select { color: #202124; background: transparent; }
+.compose-form .recipient-chip { color: #174ea6; background: #e8f0fe; }
+.compose-form .recipient-chip.is-invalid { color: #c5221f; background: #fce8e6; }
+.compose-form .recipient-suggestions { border-color: #dadce0; background: #fff; color: #202124; }
 .compose-form .recipient-line input::placeholder,
 .compose-form textarea::placeholder { color: #5f6368; }
 .compose-form .recipient-line button { color: #5f6368; }

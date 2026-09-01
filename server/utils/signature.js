@@ -102,6 +102,12 @@ export function sanitizeSignatureHtml(value) {
   return sanitizeHtml(String(value || ''), sanitizerOptions).trim();
 }
 
+export function sanitizeComposeHtml(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  return sanitizeSignatureHtml(extractHtmlDocumentBody(raw));
+}
+
 export function signatureToPlainText(value) {
   const raw = String(value || '');
   if (!raw.trim()) return '';

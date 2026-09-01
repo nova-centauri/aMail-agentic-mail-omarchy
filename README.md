@@ -15,7 +15,7 @@ GigaMail is a self-hosted, Gmail-inspired inbox for multiple IMAP/SMTP accounts.
 - Remote images blocked by default. When enabled per message, they are fetched server-side through the privacy proxy, never by the browser.
 - Sanitized HTML mail, no scripts/forms/iframes, and SSRF protections for remote-content fetching
 - Encrypted stored account credentials (AES-256-GCM); an access token gate; passkey (WebAuthn) unlock; non-root Docker runtime
-- Dark chrome UI, Gmail-style keyboard shortcuts, compose attachments and links, on-demand attachment download, and Gmail-style search (FTS5 plus operators)
+- Dark chrome UI, Gmail-style keyboard shortcuts, rich compose, recipient chips, compose attachments, on-demand attachment download, and Gmail-style search (FTS5 plus operators)
 
 ## Quick start
 
@@ -83,7 +83,7 @@ Press `?` in the mailbox for the cheatsheet. The same Gmail-style keys work whil
 
 Opening a message issues a short-lived signed URL for each attachment (`GET /api/content/attachment?token=`). Inbound bytes are fetched from IMAP on demand and are not stored as blobs. Inline `cid:` images in HTML are rewritten to the same endpoint. Compose can attach files (up to eight, 8 MiB combined); those bytes ride with the SMTP message and a local sent copy so they can be downloaded before the next IMAP sync.
 
-The compose paperclip and link buttons are live. A link is inserted as `[text](https://…)` and rendered as an `http(s)` / `mailto` / `tel` anchor in the HTML part.
+Compose uses the same visual HTML editor as signatures (bold, lists, color, links, and images). Recipients are chips with autocomplete from people already in the mailbox. The paperclip still attaches files (up to eight, 8 MiB combined).
 
 Mailbox search uses SQLite FTS5 over leftover free text (subject, snippet, sender, recipients, and plain text). Gmail-style operators are honored: `from:`, `to:`, `subject:`, `has:attachment`, `after:YYYY-MM-DD`, `before:YYYY-MM-DD`, `newer_than:7d`, `older_than:2w`, `is:unread`, `is:starred`, and `in:sent`. The tune control next to search writes those operators. Routine ops digests stay out of the default inbox, but search can still find them.
 

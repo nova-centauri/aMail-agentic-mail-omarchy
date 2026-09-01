@@ -6,6 +6,7 @@ import {
   looksLikeHtml,
   normalizeStoredSignature,
   renderSignatureForSend,
+  sanitizeComposeHtml,
   sanitizeSignatureHtml,
   signatureToPlainText,
 } from './signature.js';
@@ -72,4 +73,11 @@ test('sanitizeSignatureHtml keeps tables used by exported email signatures', () 
   const html = sanitizeSignatureHtml('<table width="420"><tr><td align="left"><font color="#202124">Nova</font></td></tr></table>');
   assert.match(html, /<table/i);
   assert.match(html, /Nova/);
+});
+
+test('sanitizeComposeHtml strips scripts from outbound message bodies', () => {
+  const html = sanitizeComposeHtml('<p>Hello<script>alert(1)</script></p><a href="javascript:alert(1)">x</a>');
+  assert.match(html, /Hello/);
+  assert.doesNotMatch(html, /<script/i);
+  assert.doesNotMatch(html, /javascript:/i);
 });

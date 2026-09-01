@@ -17,6 +17,7 @@ import {
   recipientsToHeader,
 } from '../utils/mail.js';
 import { NotFoundError, ServiceUnavailableError, ValidationError } from '../errors.js';
+import { sanitizeComposeHtml } from '../utils/signature.js';
 import { stringify } from '../db.js';
 import {
   attachmentContentBuffer,
@@ -859,9 +860,10 @@ export function createMailService({
     const parent = input.replyToMessageId ? repos.messages.findByRfcId(account.id, input.replyToMessageId) : null;
     const subject = String(input.subject || parent?.subject || '').trim() || '(no subject)';
     const references = [...new Set([...(parent?.references || []), parent?.messageId].filter(Boolean))];
+    const htmlBody = sanitizeComposeHtml(input.htmlBody);
     const signed = appendSignature({
-      html: String(input.htmlBody || ''),
-      text: String(input.textBody || textSnippet(input.htmlBody || '')),
+      html: htmlBody,
+      text: String(input.textBody || textSnippet(htmlBody || input.htmlBody || '')),
       signature: account.signature,
       includeSignature: input.includeSignature !== false,
     });

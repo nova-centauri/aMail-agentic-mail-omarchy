@@ -66,6 +66,16 @@ export function plainTextToHtml(text) {
     .join('');
 }
 
+export function quotedComposeHtml({ date, sender, subject, html, text, mode = 'reply' } = {}) {
+  const inner = html ? String(html) : plainTextToHtml(text || '');
+  const when = escapeHtml(date || '');
+  const who = escapeHtml(sender || 'the sender');
+  if (mode === 'forward') {
+    return `<div><br></div><div>---------- Forwarded message ----------</div><div>From: ${who}</div><div>Date: ${when}</div><div>Subject: ${escapeHtml(subject || '(no subject)')}</div><div><br></div>${inner}`;
+  }
+  return `<div><br></div><div>On ${when}, ${who} wrote:</div><blockquote>${inner}</blockquote>`;
+}
+
 export function sanitizeEmailHtml(html, allowRemoteContent = false) {
   if (!html || typeof window === 'undefined' || typeof DOMParser === 'undefined') return '';
   const parser = new DOMParser();

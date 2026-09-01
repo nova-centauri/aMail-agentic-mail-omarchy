@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { insertMarkdownLink, isSafeLinkHref, plainTextToHtml } from './html.js';
+import { insertMarkdownLink, isSafeLinkHref, plainTextToHtml, quotedComposeHtml } from './html.js';
 
 describe('plainTextToHtml', () => {
   it('turns markdown and bare URLs into safe anchors', () => {
@@ -14,6 +14,25 @@ describe('plainTextToHtml', () => {
     expect(isSafeLinkHref('https://mail.xer0.io')).toBe(true);
     expect(plainTextToHtml('[x](javascript:alert(1))')).toContain('javascript:alert(1)');
     expect(plainTextToHtml('[x](javascript:alert(1))')).not.toContain('<a ');
+  });
+});
+
+describe('quotedComposeHtml', () => {
+  it('wraps a reply in a blockquote and a forward in a header', () => {
+    const reply = quotedComposeHtml({ date: 'Tue, Sep 1', sender: 'Maya Chen', text: 'See you tomorrow.' });
+    expect(reply).toContain('On Tue, Sep 1, Maya Chen wrote:');
+    expect(reply).toContain('<blockquote>');
+    expect(reply).toContain('See you tomorrow.');
+    const forward = quotedComposeHtml({
+      date: 'Tue, Sep 1',
+      sender: 'Maya Chen',
+      subject: 'Design sync',
+      html: '<p>Ready</p>',
+      mode: 'forward',
+    });
+    expect(forward).toContain('Forwarded message');
+    expect(forward).toContain('Design sync');
+    expect(forward).toContain('<p>Ready</p>');
   });
 });
 

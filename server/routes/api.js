@@ -18,6 +18,7 @@ import {
   mailProviderCatalog,
 } from '../utils/mail.js';
 import { normalizeComposeAttachments } from '../services/compose-attachments.js';
+import { sanitizeComposeHtml } from '../utils/signature.js';
 import { AppError, ConflictError, NotFoundError, ServiceUnavailableError, ValidationError } from '../errors.js';
 import { accessGate, requestHasAccess, sessionCookieClearOptions, sessionCookieOptions } from '../middleware/auth.js';
 
@@ -406,7 +407,7 @@ export function registerApi(app, { config, repos, mailService, remoteContent, pa
       cc_json: JSON.stringify(body.cc || []),
       bcc_json: JSON.stringify(body.bcc || []),
       subject: String(body.subject || '').slice(0, 998),
-      html_body: String(body.htmlBody || '').slice(0, 1_000_000),
+      html_body: sanitizeComposeHtml(body.htmlBody).slice(0, 1_000_000),
       text_body: String(body.textBody || '').slice(0, 1_000_000),
       attachments_json: JSON.stringify(normalizeComposeAttachments(body.attachments || [])),
     });
@@ -427,7 +428,7 @@ export function registerApi(app, { config, repos, mailService, remoteContent, pa
       cc_json: JSON.stringify(body.cc ?? existing.cc),
       bcc_json: JSON.stringify(body.bcc ?? existing.bcc),
       subject: String(body.subject ?? existing.subject).slice(0, 998),
-      html_body: String(body.htmlBody ?? existing.htmlBody).slice(0, 1_000_000),
+      html_body: sanitizeComposeHtml(body.htmlBody ?? existing.htmlBody).slice(0, 1_000_000),
       text_body: String(body.textBody ?? existing.textBody).slice(0, 1_000_000),
       ...(body.attachments !== undefined ? { attachments_json: JSON.stringify(normalizeComposeAttachments(body.attachments)) } : {}),
     });
