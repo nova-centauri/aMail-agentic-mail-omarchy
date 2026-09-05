@@ -15,11 +15,13 @@ export function Sidebar({ compact, mobileOpen, onCloseMobile, activeFolder, setA
     <>
       {mobileOpen && <button type="button" className="sidebar-scrim" aria-label="Close navigation" onClick={onCloseMobile} />}
       <aside className={`sidebar ${compact ? 'is-compact' : ''} ${mobileOpen ? 'is-mobile-open' : ''}`}>
-        <div className="sidebar-content">
-          <button type="button" className="compose-button" onClick={onCompose} title="Compose">
-            <Icon name="compose" size={22} />
+        <div className="sidebar-top">
+          <button type="button" className="compose-button" onClick={onCompose} title="Compose" aria-label="Compose">
+            <Icon name="compose" size={20} />
             <span>Compose</span>
           </button>
+        </div>
+        <div className="sidebar-scroll">
           <nav className="folder-nav" aria-label="Mail folders">
             {items.map((item) => (
               <button
@@ -82,6 +84,7 @@ export function Sidebar({ compact, mobileOpen, onCloseMobile, activeFolder, setA
             )}
           </div>
         </div>
+        <div className="sidebar-foot">
         <button type="button" className="storage-card" onClick={onOpenSettings} title={compact ? 'Settings' : undefined}>
           <span className="storage-privacy-mark" aria-hidden="true"><Icon name="shield" size={16} /></span>
           <span className="storage-copy">
@@ -89,6 +92,7 @@ export function Sidebar({ compact, mobileOpen, onCloseMobile, activeFolder, setA
             <small>Trackers blocked · private images optional</small>
           </span>
         </button>
+        </div>
       </aside>
     </>
   );

@@ -1,7 +1,7 @@
-import { PROVIDER_PRESETS, SMART_CATEGORIES } from '../mail/constants.js';
+import { SMART_CATEGORIES } from '../mail/constants.js';
 import { smartCategoryMetadata } from '../mail/classify.js';
 import { formatListDate } from '../mail/dates.js';
-import { BrandMark, Icon } from './Icon.jsx';
+import { Icon } from './Icon.jsx';
 import { Checkbox, IconButton } from './ui.jsx';
 
 export function ListToolbar({ visibleCount, totalCount, selectedCount, onRefresh, onBulkAction, allSelected, onToggleAll, loading }) {
@@ -138,35 +138,6 @@ function EmptyMailbox({ folder, query, category = 'all', onCompose, onClearSearc
         <button type="button" className="text-button" onClick={onRefresh}>Refresh</button>
       </div>
     </div>
-  );
-}
-
-export function ReaderPlaceholder({ isDemo, onAddAccount }) {
-  if (!isDemo) {
-    return (
-      <section className="reader-placeholder" aria-label="No conversation selected">
-        <div className="reader-placeholder-mark"><BrandMark size={72} /></div>
-        <h2>Select a conversation</h2>
-        <p>Choose a message to read it here.</p>
-        <div className="privacy-summary"><Icon name="shield" size={18} /><span><strong>Privacy is on</strong> — known tracking pixels are blocked before they can report back.</span></div>
-      </section>
-    );
-  }
-  return (
-    <section className="reader-placeholder onboarding-placeholder" aria-label="Connect your first email account">
-      <span className="onboarding-eyebrow"><Icon name="sparkles" size={14} /> Private unified inbox</span>
-      <div className="reader-placeholder-mark"><BrandMark size={72} /></div>
-      <h2>All your mail. Much less noise.</h2>
-      <p>Bring Gmail, iCloud, and self-hosted mail into one calm inbox, with CI, logs, and status updates sorted automatically.</p>
-      <button type="button" className="primary-button onboarding-cta" onClick={onAddAccount}><Icon name="plus" size={18} /> Connect an account</button>
-      <div className="onboarding-provider-list" aria-label="Supported providers">
-        {['gmail', 'icloud', 'mailinabox'].map((id) => {
-          const provider = PROVIDER_PRESETS[id];
-          return <span key={id}><i style={{ '--provider-color': provider.color }}>{provider.mark}</i>{provider.label}</span>;
-        })}
-      </div>
-      <div className="privacy-summary"><Icon name="lock" size={18} /><span><strong>Credentials stay server-side.</strong> GigaMail requires encrypted-at-rest storage and never saves mailbox passwords in browser storage.</span></div>
-    </section>
   );
 }
 

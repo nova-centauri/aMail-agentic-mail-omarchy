@@ -13,7 +13,7 @@ let database;
 try {
   database = createDatabase(config);
 } catch (error) {
-  logger.fatal({ err: error }, 'Failed to initialize the GigaMail database');
+  logger.fatal({ err: error }, 'Failed to initialize the aMail database');
   process.exit(1);
 }
 const repos = createRepositories(database);
@@ -23,7 +23,7 @@ const passkeys = createPasskeyService({ config, repos });
 const app = createApp({ config, repos, mailService, remoteContent, logger, passkeys });
 
 const server = app.listen(config.port, config.host, () => {
-  logger.info({ host: config.host, port: config.port, dataDir: config.dataDir }, 'GigaMail is ready');
+  logger.info({ host: config.host, port: config.port, dataDir: config.dataDir }, 'aMail is ready');
 });
 
 let pollTimer;
@@ -35,7 +35,7 @@ if (config.syncIntervalMinutes > 0) {
 }
 
 async function shutdown(signal) {
-  logger.info({ signal }, 'Shutting down GigaMail');
+  logger.info({ signal }, 'Shutting down aMail');
   if (pollTimer) clearInterval(pollTimer);
   server.close(async () => {
     await remoteContent.close().catch(() => {});

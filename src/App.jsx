@@ -89,7 +89,7 @@ export default function App() {
 
   useEffect(() => {
     const unread = Number(folderCounts.inbox) || 0;
-    document.title = unread > 0 ? `(${unread}) GigaMail` : 'GigaMail';
+    document.title = unread > 0 ? `(${unread}) aMail` : 'aMail';
   }, [folderCounts.inbox]);
 
   const openNewCompose = () => {
@@ -268,7 +268,7 @@ export default function App() {
         // Keep the last confirmed mailbox intact. Preview data is only enabled
         // after a successful zero-account response, never as an outage fallback.
         setOffline(true);
-        setNotice('GigaMail is offline. Showing the last mailbox loaded from this server.');
+        setNotice('aMail is offline. Showing the last mailbox loaded from this server.');
       }
     } finally {
       if (requestId === loadRequestRef.current) setLoading(false);
@@ -717,7 +717,7 @@ export default function App() {
     setAuthenticated(true);
     setAccessOpen(false);
     setSessionStamp((value) => value + 1);
-    setNotice(passkeyCount ? 'GigaMail unlocked for this browser session.' : 'Unlocked. Add a passkey in Settings for one-tap sign-in.');
+    setNotice(passkeyCount ? 'aMail unlocked for this browser session.' : 'Unlocked. Add a passkey in Settings for one-tap sign-in.');
   };
 
   const loginWithPasskey = async () => {

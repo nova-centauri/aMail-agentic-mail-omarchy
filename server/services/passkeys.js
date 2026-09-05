@@ -80,7 +80,7 @@ export function createPasskeyService({
       rpName,
       rpID,
       userName: 'gigamail',
-      userDisplayName: 'GigaMail',
+      userDisplayName: 'aMail',
       userID: userHandle(repos),
       attestationType: 'none',
       excludeCredentials: existing.map((passkey) => ({
@@ -144,7 +144,7 @@ export function createPasskeyService({
     const { rpID, origins } = webauthnContext(request, config);
     const credentialId = String(response?.id || '');
     const stored = repos.passkeys.getRaw(credentialId);
-    if (!stored) throw new ValidationError('That passkey is not registered on this GigaMail server.');
+    if (!stored) throw new ValidationError('That passkey is not registered on this aMail server.');
     let verification;
     try {
       verification = await verifyAuthentication({

@@ -68,7 +68,7 @@ const demoThreads = [
   {
     id: 'infrastructure',
     threadId: 'infrastructure',
-    subject: 'GigaMail infrastructure proposal',
+    subject: 'aMail infrastructure proposal',
     snippet: 'The isolated Docker deployment is ready for review, with no host port collisions.',
     from: { name: 'Avery Thompson', email: 'avery@ops.example', color: '#00897b' },
     timestamp: new Date(Date.now() - 1000 * 60 * 60 * 2).toISOString(),
@@ -90,7 +90,7 @@ const demoThreads = [
   {
     id: 'github-ci',
     threadId: 'github-ci',
-    subject: '[GigaMail] CI failed on main (#842)',
+    subject: '[aMail] CI failed on main (#842)',
     snippet: 'The test job failed after 2m 18s in message-html.test.js. View the workflow run for annotations.',
     from: { name: 'GitHub Actions', email: 'notifications@github.com', color: '#24292f' },
     timestamp: new Date(Date.now() - 1000 * 60 * 60 * 2.6).toISOString(),
@@ -293,7 +293,7 @@ const demoThreads = [
     threadId: 'security',
     subject: 'New sign-in from Detroit, MI',
     snippet: 'A new device signed in to your account. If this was you, no action is needed.',
-    from: { name: 'GigaMail Security', email: 'security@gigamail.local', color: '#455a64' },
+    from: { name: 'aMail Security', email: 'security@amail.local', color: '#455a64' },
     timestamp: new Date(Date.now() - 1000 * 60 * 60 * 28).toISOString(),
     unread: false,
     starred: false,
@@ -303,7 +303,7 @@ const demoThreads = [
     messages: [
       {
         id: 'security-1',
-        from: { name: 'GigaMail Security', email: 'security@gigamail.local', color: '#455a64' },
+        from: { name: 'aMail Security', email: 'security@amail.local', color: '#455a64' },
         to: ['Nova Centauri'],
         timestamp: new Date(Date.now() - 1000 * 60 * 60 * 28).toISOString(),
         body: 'A new device signed in to your account. If this was you, no action is needed.\n\nDevice: Firefox on macOS\nLocation: Detroit, MI',

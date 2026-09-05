@@ -107,7 +107,7 @@ export const PROVIDER_PRESETS = {
     smtpPort: '587',
     title: 'Connect Mail-in-a-Box',
     passwordTitle: 'Use the mailbox password',
-    passwordHint: 'Use the full mailbox address and its Mail-in-a-Box mailbox password. GigaMail connects to box.xer5.com with IMAP TLS and SMTP STARTTLS.',
+    passwordHint: 'Use the full mailbox address and its Mail-in-a-Box mailbox password. aMail connects to box.xer5.com with IMAP TLS and SMTP STARTTLS.',
   },
   outlook: {
     id: 'outlook',

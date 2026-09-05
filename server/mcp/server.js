@@ -96,7 +96,7 @@ const recipientSchema = z.union([
 ]);
 
 /**
- * Build a fresh MCP server instance wired to GigaMail services.
+ * Build a fresh MCP server instance wired to aMail services.
  * Stateless Streamable HTTP creates one of these per request.
  */
 export function createGigaMailMcpServer({ config, repos, mailService, assertProbeAllowed = defaultProbeLimiter }) {
@@ -104,7 +104,7 @@ export function createGigaMailMcpServer({ config, repos, mailService, assertProb
     name: 'gigamail',
     version: '0.1.0',
   }, {
-    instructions: 'GigaMail multi-account inbox tools. Never request or echo IMAP/SMTP passwords; account tools refuse to return stored credentials.',
+    instructions: 'aMail multi-account inbox tools. Never request or echo IMAP/SMTP passwords; account tools refuse to return stored credentials.',
   });
 
   server.registerTool('list_accounts', {
@@ -156,7 +156,7 @@ export function createGigaMailMcpServer({ config, repos, mailService, assertProb
 
   server.registerTool('get_message', {
     title: 'Get message',
-    description: 'Fetch one message by id (sanitized body/snippet as stored by GigaMail).',
+    description: 'Fetch one message by id (sanitized body/snippet as stored by aMail).',
     inputSchema: {
       id: z.string().describe('Message id'),
     },

@@ -101,7 +101,7 @@ export function SettingsPanel({
                 return next;
               })}
               label="Offer private image loading"
-              hint="Show a per-message option to load non-tracking images through the GigaMail relay."
+              hint="Show a per-message option to load non-tracking images through the aMail relay."
             />
           </section>
           <section className="settings-section signature-section">
@@ -149,7 +149,7 @@ export function SettingsPanel({
           </section>
           <section className="settings-section server-access-section">
             <div className="settings-section-title"><h3>Server access</h3><Icon name="shield" size={20} /></div>
-            <p className="settings-description">Set a session-only access token if this GigaMail server is protected.</p>
+            <p className="settings-description">Set a session-only access token if this aMail server is protected.</p>
             <button type="button" className="secondary-button" onClick={onUnlock}>Unlock server</button>
           </section>
         </div>

@@ -126,7 +126,7 @@ export function ComposeModal({ account, accounts, contacts = [], isDemo, onClose
       if (closeAfter) onClose();
       return true;
     } catch (requestError) {
-      setError(requestError.status === 401 || requestError.status === 403 ? 'Unlock GigaMail before saving this draft.' : `Draft could not be saved. ${requestError.message || 'Check the server connection and try again.'}`);
+      setError(requestError.status === 401 || requestError.status === 403 ? 'Unlock aMail before saving this draft.' : `Draft could not be saved. ${requestError.message || 'Check the server connection and try again.'}`);
       return false;
     } finally {
       setIsSavingDraft(false);
@@ -235,7 +235,7 @@ export function ComposeModal({ account, accounts, contacts = [], isDemo, onClose
       const rejectedDelivery = requestError.details?.delivery;
       const rejectedCount = Number(rejectedDelivery?.recipientCount) || 0;
       setError(requestError.status === 401 || requestError.status === 403
-        ? 'Unlock GigaMail before sending. Your message is still open.'
+        ? 'Unlock aMail before sending. Your message is still open.'
         : rejectedDelivery?.status === 'rejected'
           ? `The provider rejected ${rejectedCount ? `all ${rejectedCount} recipients` : 'all recipients'}. Check the addresses and try again; your message is still open.`
           : 'Could not send this message. Check the connection and try again, or save it as a draft.');

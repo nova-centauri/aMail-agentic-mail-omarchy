@@ -1,0 +1,146 @@
+/* aMail design tokens.
+   Single source of truth for color, type, spacing, radii, elevation and layout.
+   Every component stylesheet reads these; nothing hard-codes a hex value except
+   the light "email surface" scope at the bottom, which re-maps the same tokens. */
+
+:root {
+  color-scheme: dark;
+
+  /* Surfaces, darkest to lightest */
+  --bg-0: #0a0c10;
+  --bg-1: #10131a;
+  --bg-2: #161a22;
+  --bg-3: #1c212b;
+  --bg-4: #232a36;
+
+  /* Lines */
+  --line: #222835;
+  --line-strong: #2f3846;
+
+  /* Text */
+  --ink: #e7eaf0;
+  --ink-2: #aab2bf;
+  --ink-3: #737d8c;
+  --ink-inverse: #0b1116;
+
+  /* Accent (teal / cyan, matches the brand mark) */
+  --accent: #5ee0ef;
+  --accent-strong: #22c6da;
+  --accent-ink: #06232a;
+  --accent-soft: rgba(94, 224, 239, .12);
+  --accent-line: rgba(94, 224, 239, .32);
+
+  /* Secondary hues */
+  --violet: #b7a4ff;
+  --violet-soft: rgba(183, 164, 255, .14);
+  --green: #6ee7b7;
+  --green-soft: rgba(110, 231, 183, .14);
+  --amber: #fbbf24;
+  --amber-soft: rgba(251, 191, 36, .14);
+  --red: #fb8b85;
+  --red-soft: rgba(251, 139, 133, .14);
+  --blue: #8ab4f8;
+  --blue-soft: rgba(138, 180, 248, .14);
+
+  /* Category colors (smart views) */
+  --cat-primary: #8ab4f8;
+  --cat-github: #b7a4ff;
+  --cat-logs: #d4a373;
+  --cat-status: #6ee7b7;
+  --cat-ops: #fb8b85;
+  --cat-quiet: #8b95a5;
+
+  /* Typography */
+  --font-ui: "Inter", "SF Pro Text", system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  --font-mail: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --fs-2xs: 10.5px;
+  --fs-xs: 11.5px;
+  --fs-sm: 12.5px;
+  --fs-md: 13.5px;
+  --fs-lg: 15px;
+  --fs-xl: 18px;
+  --fs-2xl: 22px;
+  --lh-tight: 1.2;
+  --lh-body: 1.5;
+
+  /* Spacing */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+
+  /* Radii */
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-xl: 20px;
+  --r-pill: 999px;
+
+  /* Elevation */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, .35);
+  --shadow-2: 0 8px 24px rgba(0, 0, 0, .38), 0 1px 3px rgba(0, 0, 0, .3);
+  --shadow-3: 0 20px 56px rgba(0, 0, 0, .5), 0 3px 10px rgba(0, 0, 0, .35);
+
+  /* Controls */
+  --control-h: 36px;
+  --control-h-sm: 30px;
+  --icon-btn: 36px;
+  --focus-ring: 0 0 0 2px var(--bg-1), 0 0 0 4px var(--accent-line);
+
+  /* Layout */
+  --topbar-h: 60px;
+  --sidebar-w: 248px;
+  --sidebar-w-compact: 68px;
+  --reader-min: 420px;
+  --list-w: clamp(360px, 40%, 560px);
+  --gutter: 10px;
+
+  /* Motion */
+  --ease: cubic-bezier(.2, .7, .2, 1);
+  --t-fast: .14s;
+  --t-med: .22s;
+
+  /* Layers */
+  --z-topbar: 20;
+  --z-sidebar: 15;
+  --z-drawer: 30;
+  --z-popover: 32;
+  --z-compose: 42;
+  --z-toast: 50;
+  --z-modal: 60;
+}
+
+/* Light "email surface": message bodies and the compose editor stay light so
+   HTML mail renders as its author intended. Components inside inherit the
+   same token names, re-mapped to a light palette. */
+.email-light {
+  color-scheme: light;
+  --bg-0: #f3f4f6;
+  --bg-1: #ffffff;
+  --bg-2: #ffffff;
+  --bg-3: #f3f5f8;
+  --bg-4: #e9edf2;
+  --line: #e3e6eb;
+  --line-strong: #cfd5dd;
+  --ink: #1b1f27;
+  --ink-2: #5b6474;
+  --ink-3: #8a93a2;
+  --accent: #0e7c8a;
+  --accent-strong: #0e7c8a;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(14, 124, 138, .1);
+  --accent-line: rgba(14, 124, 138, .35);
+  --blue: #1a5fd0;
+  --blue-soft: #e8f0fe;
+  --red: #b3261e;
+  --red-soft: #fce8e6;
+  --green: #137333;
+  --green-soft: #e6f4ea;
+  --focus-ring: 0 0 0 2px #fff, 0 0 0 4px var(--accent-line);
+  color: var(--ink);
+  background: var(--bg-1);
+}

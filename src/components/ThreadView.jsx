@@ -82,7 +82,7 @@ function MessageCard({ message, expanded, onToggle, onLoadRemote, onReply, onRep
     <article className={`message-card email-light ${expanded ? 'is-expanded' : ''}`}>
       <button type="button" className="message-summary" onClick={onToggle} aria-expanded={expanded}>
         <Avatar person={from} size="md" />
-        <span className="message-sender"><strong>{from.name || from.email || 'Unknown sender'}</strong><small>{expanded ? `to ${recipientList || 'me'}` : message.body?.replace(/\s+/g, ' ').slice(0, 88)}</small></span>
+        <span className="message-sender"><strong>{from.name || from.email || 'Unknown sender'}</strong><small>{expanded ? (from.email || '') : message.body?.replace(/\s+/g, ' ').slice(0, 88)}</small></span>
         <time>{expanded ? formatMessageDate(message.timestamp) : formatListDate(message.timestamp)}</time>
         <Icon name="chevronDown" size={18} className={expanded ? 'is-rotated' : ''} />
       </button>

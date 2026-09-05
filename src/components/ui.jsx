@@ -45,8 +45,8 @@ export function Checkbox({ checked, onChange, label = 'Select' }) {
   );
 }
 
-export function Tooltip({ children, text }) {
-  return <span className="tooltip-wrap" data-tooltip={text}>{children}</span>;
+export function Tooltip({ children, text, placement }) {
+  return <span className={`tooltip-wrap ${placement ? `tooltip-${placement}` : ''}`.trim()} data-tooltip={text}>{children}</span>;
 }
 
 export function Toggle({ checked, onChange, label, hint }) {

@@ -16,10 +16,10 @@ function readFileAsDataUrl(file) {
 }
 
 function accountConnectionError(error) {
-  if (error?.status === 401 || error?.status === 403) return 'Unlock GigaMail before adding an account.';
+  if (error?.status === 401 || error?.status === 403) return 'Unlock aMail before adding an account.';
   if (error?.status === 409) return error.message || 'An account with this email is already connected.';
   if (error?.code === 'CREDENTIAL_ENCRYPTION_UNAVAILABLE') {
-    return error.message || 'Credential encryption is not configured on this GigaMail server.';
+    return error.message || 'Credential encryption is not configured on this aMail server.';
   }
   const safeMessage = String(error?.message || '').trim();
   if (safeMessage && !safeMessage.startsWith('<') && safeMessage.length <= 360 && error?.status >= 400 && error?.status < 600) return safeMessage;
@@ -204,7 +204,7 @@ export function AddAccountModal({ onClose, onAdded }) {
                 </button>
               ))}
             </div>
-            <div className="provider-picker-security"><Icon name="shield" size={19} /><span><strong>Private by design</strong><small>Mailbox credentials are sent only to your GigaMail server. The server refuses to save them unless encrypted-at-rest storage is configured.</small></span></div>
+            <div className="provider-picker-security"><Icon name="shield" size={19} /><span><strong>Private by design</strong><small>Mailbox credentials are sent only to your aMail server. The server refuses to save them unless encrypted-at-rest storage is configured.</small></span></div>
           </div>
         ) : (
           <div className="account-modal-scroll account-details-step">
@@ -270,7 +270,7 @@ export function AddAccountModal({ onClose, onAdded }) {
               <div className="color-picker"><span>Profile color</span><div>{['#0b57d0', '#8e24aa', '#e8710a', '#00897b', '#c2185b', '#455a64'].map((color) => <button type="button" key={color} onClick={() => setForm((current) => ({ ...current, color }))} className={form.color === color ? 'is-selected' : ''} style={{ '--swatch': color }} aria-label={`Choose ${color}`} />)}</div></div>
             </details>
 
-            <div className="credential-security-note"><Icon name="shield" size={19} /><span><strong>Encrypted, never browser-stored</strong><small>This form keeps the password only in memory. GigaMail verifies both connections before persisting anything, then encrypts the credential on the server.</small></span></div>
+            <div className="credential-security-note"><Icon name="shield" size={19} /><span><strong>Encrypted, never browser-stored</strong><small>This form keeps the password only in memory. aMail verifies both connections before persisting anything, then encrypts the credential on the server.</small></span></div>
             {Object.values(protocolStatus).some((status) => status !== 'idle') && (
               <div className="protocol-status-row" aria-live="polite">
                 {['imap', 'smtp'].map((protocol) => <span key={protocol} className={`protocol-status is-${protocolStatus[protocol]}`}><i>{protocolStatus[protocol] === 'passed' ? '✓' : protocolStatus[protocol] === 'failed' ? '!' : ''}</i><strong>{protocol.toUpperCase()}</strong><small>{protocolStatus[protocol] === 'passed' ? 'Verified' : protocolStatus[protocol] === 'failed' ? 'Failed' : protocolStatus[protocol] === 'checking' ? 'Checking…' : 'Waiting'}</small></span>)}

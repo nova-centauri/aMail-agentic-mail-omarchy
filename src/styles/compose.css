@@ -1,0 +1,110 @@
+/* Compose window, recipient chips, and the shared rich-text editor
+   (used by compose, account signatures, and onboarding). */
+
+.compose-window {
+  position: fixed; z-index: var(--z-compose); right: 24px; bottom: 0;
+  width: min(600px, calc(100vw - 32px)); height: min(600px, calc(100dvh - var(--topbar-h) - 12px));
+  display: flex; flex-direction: column; overflow: hidden;
+  border: 1px solid var(--line-strong); border-bottom: 0; border-radius: var(--r-lg) var(--r-lg) 0 0;
+  background: var(--bg-1); box-shadow: var(--shadow-3);
+  transition: width var(--t-med) var(--ease), height var(--t-med) var(--ease), inset var(--t-med) var(--ease);
+}
+.compose-window.is-minimized { height: 44px; }
+.compose-window.is-expanded { top: calc(var(--topbar-h) + 12px); right: 24px; left: 24px; width: auto; height: auto; }
+.compose-titlebar {
+  height: 44px; flex: 0 0 auto; padding: 0 6px 0 14px; display: flex; align-items: center; justify-content: space-between;
+  border-bottom: 1px solid var(--line); color: var(--ink); background: var(--bg-2); font-size: var(--fs-sm); font-weight: 600;
+}
+.compose-titlebar > div { display: flex; gap: 2px; }
+.compose-titlebar .icon-button { width: 30px; height: 30px; }
+
+.compose-form { min-height: 0; flex: 1; display: flex; flex-direction: column; }
+.recipient-line { min-height: 42px; display: flex; align-items: center; gap: 8px; padding: 0 14px; border-bottom: 1px solid var(--line); }
+.recipient-line input { width: 100%; min-width: 0; border: 0; outline: 0; color: var(--ink); background: transparent; font-size: var(--fs-md); }
+.recipient-line input::placeholder { color: var(--ink-3); }
+.recipient-line > .recipient-field + button, .recipient-line button.recipient-toggle { color: var(--ink-3); }
+.recipient-line button { flex: 0 0 auto; padding: 4px 6px; border-radius: var(--r-sm); color: var(--ink-2); font-size: var(--fs-xs); font-weight: 600; white-space: nowrap; }
+.recipient-line button:hover { background: var(--bg-3); }
+.subject-line { min-height: 40px; }
+.from-line { color: var(--ink-2); font-size: var(--fs-sm); }
+.from-line span { flex: 0 0 auto; }
+.from-line select { min-width: 0; flex: 1; border: 0; outline: 0; color: var(--ink); background: transparent; font-size: var(--fs-sm); }
+
+.recipient-field { position: relative; min-width: 0; flex: 1; display: flex; align-items: flex-start; gap: 8px; }
+.recipient-chip-row { min-width: 0; flex: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 7px 0; cursor: text; }
+.recipient-chip { max-width: 100%; height: 26px; padding: 0 3px 0 10px; display: inline-flex; align-items: center; gap: 2px; border-radius: var(--r-pill); color: var(--blue); background: var(--blue-soft); font-size: var(--fs-xs); font-weight: 600; line-height: 1; }
+.recipient-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recipient-chip.is-invalid { color: var(--red); background: var(--red-soft); }
+.recipient-chip-remove { width: 20px; height: 20px; display: grid; place-items: center; border-radius: 50%; color: inherit; }
+.recipient-chip-remove:hover { background: rgba(0, 0, 0, .1); }
+.recipient-suggestions {
+  position: absolute; z-index: 6; left: 0; right: 0; top: calc(100% - 2px); margin: 0; padding: 6px; list-style: none;
+  border: 1px solid var(--line); border-radius: var(--r-md); background: var(--bg-1); box-shadow: var(--shadow-2);
+}
+.recipient-suggestions button { width: 100%; min-height: 38px; padding: 5px 8px; display: grid; justify-items: start; gap: 1px; border-radius: var(--r-sm); color: var(--ink); text-align: left; }
+.recipient-suggestions button.is-active, .recipient-suggestions button:hover { background: var(--accent-soft); }
+.recipient-suggestions strong { font-size: var(--fs-sm); font-weight: 600; }
+.recipient-suggestions small { color: var(--ink-2); font-size: var(--fs-xs); }
+
+.signature-preview { flex: 0 0 auto; max-height: 160px; padding: 0 14px 12px; overflow: auto; color: var(--ink-2); font-family: var(--font-mail); font-size: 12px; line-height: 1.4; }
+.signature-preview img { max-width: 100%; height: auto; }
+.signature-preview a { color: var(--blue); }
+.signature-preview table { border-collapse: collapse; }
+.compose-attachments { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 14px 0; }
+.compose-attachments .icon-button { width: 24px; height: 24px; }
+.compose-error { margin: 8px 14px 0; color: var(--red); font-size: var(--fs-xs); }
+.compose-footer { min-height: 56px; flex: 0 0 auto; padding: 8px 10px 8px 14px; display: flex; align-items: center; gap: 4px; border-top: 1px solid var(--line); }
+.send-button { height: 36px; padding: 0 20px; border-radius: var(--r-pill); color: var(--accent-ink); background: var(--accent-strong); font-size: var(--fs-sm); font-weight: 700; margin-right: 6px; }
+.send-button:hover:not(:disabled) { filter: brightness(1.08); }
+.send-button:disabled { opacity: .6; }
+.compose-spacer { flex: 1; }
+
+/* ---- Rich text editor ---- */
+.signature-editor { display: grid; gap: 10px; }
+.signature-editor-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.signature-editor-modes { display: inline-flex; padding: 3px; border: 1px solid var(--line); border-radius: var(--r-pill); background: var(--bg-2); }
+.signature-editor-modes button { min-height: 26px; padding: 0 11px; border-radius: var(--r-pill); color: var(--ink-2); font-size: var(--fs-xs); font-weight: 650; }
+.signature-editor-modes button.is-selected { color: var(--accent-ink); background: var(--accent); }
+.signature-editor-modes button:disabled { opacity: .5; }
+.signature-editor-format { display: flex; flex-wrap: wrap; gap: 4px; }
+.signature-editor-format > button, .signature-editor-color {
+  width: 28px; height: 28px; display: inline-grid; place-items: center;
+  border: 1px solid var(--line); border-radius: var(--r-sm); color: var(--ink); background: var(--bg-2); font-size: 12px;
+}
+.signature-editor-format > button:hover:not(:disabled), .signature-editor-color:hover { border-color: var(--line-strong); background: var(--bg-3); }
+.signature-editor-format > button:disabled { opacity: .4; }
+.signature-editor-color { position: relative; overflow: hidden; cursor: pointer; }
+.signature-editor-color input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.signature-editor-visual, .signature-editor-source {
+  width: 100%; min-height: 132px; padding: 12px; resize: vertical; outline: 0;
+  border: 1px solid var(--line-strong); border-radius: var(--r-md); font-family: var(--font-mail); font-size: 13px; line-height: 1.45;
+}
+.signature-editor-visual { overflow: auto; color-scheme: light; color: #1b1f27; background: #fff; }
+.signature-editor-visual[contenteditable="true"] { cursor: text; }
+.signature-editor-visual:empty::before { content: attr(data-placeholder); color: #8a93a2; }
+.signature-editor-visual img { max-width: 100%; height: auto; }
+.signature-editor-source { min-height: 148px; color: var(--ink); background: var(--bg-1); font-family: var(--font-mono); font-size: 12px; }
+.signature-editor-visual:focus, .signature-editor-source:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.signature-editor-link { display: flex; gap: 8px; }
+.signature-editor-link input { min-width: 0; flex: 1; height: 34px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: var(--r-sm); color: var(--ink); background: var(--bg-1); outline: 0; }
+.signature-editor-link input:focus { border-color: var(--accent); }
+.signature-editor-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.signature-editor-actions .secondary-button, .signature-editor-actions .text-button { min-height: 32px; padding: 0 12px; font-size: var(--fs-xs); }
+.signature-editor-hint, .signature-editor-error { font-size: var(--fs-xs); line-height: 1.4; }
+.signature-editor-hint { color: var(--ink-3); }
+.signature-editor-error { color: var(--red); }
+.signature-editor.is-disabled .signature-editor-visual { color: #8a93a2; background: #f3f4f6; }
+.signature-editor.is-disabled .signature-editor-source { color: var(--ink-3); background: var(--bg-0); }
+.signature-onboarding .signature-editor-visual { min-height: 110px; }
+
+/* Editor inside the compose window: fills the remaining height, no frame. */
+.compose-form .signature-editor.is-compose { min-height: 0; flex: 1; display: flex; flex-direction: column; gap: 6px; padding: 8px 10px 0; }
+.compose-form .signature-editor.is-compose .signature-editor-toolbar { flex: 0 0 auto; }
+.compose-form .signature-editor.is-compose .signature-editor-visual,
+.compose-form .signature-editor.is-compose .signature-editor-source { min-height: 0; flex: 1; resize: none; padding: 8px 4px 4px; border: 0; border-radius: 0; box-shadow: none; }
+.compose-form .signature-editor.is-compose .signature-editor-source { font-family: var(--font-mono); font-size: 12px; }
+
+@media (max-width: 650px) {
+  .compose-window { right: 0; width: 100vw; height: min(620px, calc(100dvh - 12px)); border-radius: var(--r-lg) var(--r-lg) 0 0; }
+  .compose-window.is-expanded { top: 0; right: 0; left: 0; border-radius: 0; }
+}

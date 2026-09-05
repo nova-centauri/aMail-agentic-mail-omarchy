@@ -35,14 +35,14 @@ export function Topbar({
   }, [optionsOpen]);
   return (
     <header className="topbar">
-      <Tooltip text="Toggle navigation">
+      <Tooltip text="Toggle navigation" placement="start">
         <IconButton label="Toggle navigation" onClick={onToggleSidebar} className="top-menu">
           <Icon name="menu" />
         </IconButton>
       </Tooltip>
-      <button type="button" className="brand" aria-label="GigaMail home" onClick={onGoHome}>
+      <button type="button" className="brand" aria-label="aMail home" onClick={onGoHome}>
         <BrandMark />
-        <span className="brand-name">GigaMail</span>
+        <span className="brand-name"><em>a</em>Mail</span>
         {isDemo && <span className="preview-pill">Preview</span>}
       </button>
       <div className="search-wrap" ref={searchWrapRef}>

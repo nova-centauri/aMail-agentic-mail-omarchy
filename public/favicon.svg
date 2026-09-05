@@ -1,16 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="GigaMail">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="aMail">
   <defs>
-    <linearGradient id="gm-bg" x1="8" y1="4" x2="56" y2="60" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#1d4f86"/>
-      <stop offset="1" stop-color="#0b1f3a"/>
+    <linearGradient id="am-bg" x1="6" y1="4" x2="58" y2="60" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#17324f"/>
+      <stop offset="1" stop-color="#0a1524"/>
     </linearGradient>
-    <linearGradient id="gm-mail" x1="16" y1="18" x2="48" y2="46" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#7dd3fc"/>
-      <stop offset="1" stop-color="#2dd4bf"/>
+    <linearGradient id="am-mail" x1="14" y1="20" x2="50" y2="48" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7de3f4"/>
+      <stop offset="1" stop-color="#2fd4c0"/>
     </linearGradient>
   </defs>
-  <rect width="64" height="64" rx="16" fill="url(#gm-bg)"/>
-  <rect x="12.5" y="18.5" width="39" height="27" rx="4.5" fill="none" stroke="url(#gm-mail)" stroke-width="3.4"/>
-  <path d="M15.2 21.4 32 33.4 48.8 21.4" fill="none" stroke="url(#gm-mail)" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
-  <circle cx="48.4" cy="18.2" r="5" fill="#5eead4"/>
+  <rect width="64" height="64" rx="17" fill="url(#am-bg)"/>
+  <rect x="12.4" y="20.8" width="35.2" height="25.2" rx="4.8" fill="none" stroke="url(#am-mail)" stroke-width="3.8"/>
+  <path d="M14.8 23.8 30 34.8l15.2-11" fill="none" stroke="url(#am-mail)" stroke-width="3.8" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M50 9.2l2.1 5.1 5.1 2.1-5.1 2.1L50 23.6l-2.1-5.1-5.1-2.1 5.1-2.1z" fill="#5eead4"/>
 </svg>

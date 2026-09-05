@@ -1,0 +1,9 @@
+/* aMail stylesheet entry point. Order matters: tokens first, then the reset
+   and shared primitives, then the shell, then feature areas. */
+@import './tokens.css';
+@import './base.css';
+@import './shell.css';
+@import './list.css';
+@import './reader.css';
+@import './compose.css';
+@import './panels.css';

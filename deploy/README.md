@@ -1,4 +1,4 @@
-# GigaMail Docker deployment
+# aMail Docker deployment
 
 This Compose bundle is isolated from other Docker workloads: it uses its own
 project-scoped containers, networks, and named volumes, never mounts the
@@ -34,7 +34,7 @@ docker compose ps
 ```
 
 The first command validates the resolved Compose configuration and then builds
-and starts only GigaMail plus its internal Tor/Privoxy proxy. Application data lives in the named
+and starts only aMail plus its internal Tor/Privoxy proxy. Application data lives in the named
 `gigamail-data` volume (prefixed by `COMPOSE_PROJECT_NAME`) rather than in the
 repository or any host bind mount.
 
@@ -44,14 +44,14 @@ unattended fallback: a focused mailbox tab checks every inbox immediately when
 it becomes visible and then about every 15 seconds while it stays in use.
 Set `SYNC_INTERVAL_MINUTES=0` only if you want no server-side fallback.
 
-On its first pass, GigaMail imports the newest `GIGAMAIL_SYNC_BATCH_SIZE`
+On its first pass, aMail imports the newest `GIGAMAIL_SYNC_BATCH_SIZE`
 messages from each supported folder (200 by default). This is a recent-mail
 client rather than a full historical migration tool; increase the value (up to
 1000) before connecting an account if you need a larger initial window.
 
 ## Access without opening a VM port
 
-By default GigaMail binds to `127.0.0.1:3080` on the VM, not the LAN or
+By default aMail binds to `127.0.0.1:3080` on the VM, not the LAN or
 internet. From the workstation, create a tunnel:
 
 ```sh
@@ -64,16 +64,16 @@ to stored mail-provider credentials. The UI keeps the token only for the
 current browser session and sends it as a Bearer token, so the secure cookie
 setting can remain enabled even when the SSH tunnel itself uses local HTTP.
 
-For a reverse proxy, leave the GigaMail port loopback-only and run the proxy
+For a reverse proxy, leave the aMail port loopback-only and run the proxy
 as a separately authenticated, TLS-terminating service on the same host.
 Only set `GIGAMAIL_TRUST_PROXY=true` when that proxy is local and strips any
-client-supplied forwarding headers; do not publish GigaMail directly.
+client-supplied forwarding headers; do not publish aMail directly.
 
 ## Nginx Proxy Manager
 
 For a domain served by an existing Nginx Proxy Manager instance, set the
 application to listen only on the VM's private address, then restart the
-GigaMail project:
+aMail project:
 
 ```sh
 # .env
@@ -89,15 +89,15 @@ traffic upstream. Do not make a public HTTP-only route. Keep
 mailbox API request. An NPM access list is a useful additional layer.
 
 `GIGAMAIL_TRUST_PROXY` can remain `false` for this configuration because
-GigaMail uses Bearer-token authentication and does not need forwarded client
+aMail uses Bearer-token authentication and does not need forwarded client
 addresses. If the proxy is on another LAN host, any LAN device able to reach
 `10.0.0.15:3080` can reach the login screen; it still cannot read mail without
-the high-entropy GigaMail access token.
+the high-entropy aMail access token.
 
 ## Optional Tor/Privoxy remote-content path
 
 The default `deploy/launch.sh` mode routes remote content through an internal
-Tor/Privoxy service. GigaMail fetches sanitized remote content server-side, so
+Tor/Privoxy service. aMail fetches sanitized remote content server-side, so
 a sender does not learn the browser's IP address or the VM's public IP. To
 start that configuration explicitly:
 
@@ -108,9 +108,9 @@ docker compose --profile privacy ps
 
 This starts `tor-proxy` and passes
 `REMOTE_CONTENT_PROXY_URL=http://tor-proxy:8118` only to that launch. Neither
-its SOCKS nor HTTP proxy port is published to the Docker host. GigaMail can
+its SOCKS nor HTTP proxy port is published to the Docker host. aMail can
 reach Privoxy over an internal network; Tor alone has a separate egress
-network, selected explicitly as Tor's default gateway. GigaMail's separate
+network, selected explicitly as Tor's default gateway. aMail's separate
 provider network is likewise its explicit default route for IMAP/SMTP. If the
 proxy is unavailable, remote-content requests fail closed rather than silently
 going direct.
@@ -120,7 +120,7 @@ IMAP/SMTP traffic, and remote images can still reveal message-specific data
 once explicitly loaded. Keep tracker blocking enabled, avoid opening unknown
 content unnecessarily, and expect some image hosts to reject Tor exits.
 
-If you run `sh deploy/launch.sh direct`, GigaMail starts without Tor/Privoxy,
+If you run `sh deploy/launch.sh direct`, aMail starts without Tor/Privoxy,
 but production builds keep remote content blocked. They do **not** fall back to
 direct remote fetching, so a stopped or omitted proxy cannot accidentally
 expose the VM's public IP. Direct mode is useful when you want mail access
@@ -182,8 +182,8 @@ merges.
 No GitHub deployment secrets or long-lived repository credentials are
 required. The production job locates exactly one persistent clone owned by
 the runner user which already contains the protected `.env` and the expected
-GigaMail deployment files; Actions workspaces are explicitly excluded. It
-first uses the working-directory label on the existing GigaMail Compose
+aMail deployment files; Actions workspaces are explicitly excluded. It
+first uses the working-directory label on the existing aMail Compose
 container. If no valid container-managed checkout exists, it searches the
 runner user's home directory and requires that clone's `origin` to be this
 GitHub repository. If the persistent clone lives elsewhere and there is no
@@ -193,7 +193,7 @@ GitHub `production` environment to its absolute path.
 The first CI-managed rollout can also repair a stale Compose working-directory
 label whose directory is missing or is no longer a valid clone. The bootstrap
 is allowed only below the runner user's home, only when exactly one running
-GigaMail container passes the authentication, encryption, and privacy health
+aMail container passes the authentication, encryption, and privacy health
 gates, only when its Compose project/config labels and `/data` named-volume
 labels agree, and only for a runner-owned parent directory. It creates a full
 local clone from the tested Actions workspace, pins `origin` to this
@@ -231,7 +231,7 @@ On a successful push, `deploy/production-deploy.sh`:
 - creates an online SQLite backup in the named data volume, retaining five;
 - checks out the exact commit that passed CI and force-recreates both project
   containers without touching another Compose project;
-- waits up to five minutes for GigaMail health and a local Tor control-port
+- waits up to five minutes for aMail health and a local Tor control-port
   check proving that the privacy relay reached 100% bootstrap; and
 - restores the last known-good commit and recreates its containers if health
   fails; the first CI-managed rollout restores the retained exact pre-CI images

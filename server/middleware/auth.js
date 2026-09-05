@@ -20,7 +20,7 @@ export function requestHasAccess(request, config) {
 export function accessGate(config) {
   return (request, response, next) => {
     if (requestHasAccess(request, config)) return next();
-    response.status(401).json({ error: { code: 'AUTH_REQUIRED', message: 'GigaMail access token required.' } });
+    response.status(401).json({ error: { code: 'AUTH_REQUIRED', message: 'aMail access token required.' } });
   };
 }
 export function sessionCookieOptions(config) {

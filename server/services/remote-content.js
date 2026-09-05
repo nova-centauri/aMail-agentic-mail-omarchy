@@ -14,7 +14,7 @@ const IMAGE_TYPES = new Set([
 const requestHeaders = {
   accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.5',
   'accept-encoding': 'identity',
-  'user-agent': 'GigaMail-Remote-Content/1.0',
+  'user-agent': 'aMail-Remote-Content/1.0',
 };
 
 function remoteError(message, code = 'REMOTE_CONTENT_BLOCKED', status = 422) {

@@ -62,19 +62,19 @@ export function BrandMark({ size = 32, className = '' }) {
   return (
     <svg className={`brand-mark ${className}`.trim()} width={size} height={size} viewBox="0 0 32 32" aria-hidden="true">
       <defs>
-        <linearGradient id={`${uid}-bg`} x1="4" y1="2" x2="28" y2="30" gradientUnits="userSpaceOnUse">
-          <stop stopColor="#1d4f86" />
-          <stop offset="1" stopColor="#0b1f3a" />
+        <linearGradient id={`${uid}-bg`} x1="3" y1="2" x2="29" y2="30" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#17324f" />
+          <stop offset="1" stopColor="#0a1524" />
         </linearGradient>
-        <linearGradient id={`${uid}-mail`} x1="8" y1="9" x2="24" y2="23" gradientUnits="userSpaceOnUse">
-          <stop stopColor="#7dd3fc" />
-          <stop offset="1" stopColor="#2dd4bf" />
+        <linearGradient id={`${uid}-mail`} x1="7" y1="10" x2="25" y2="24" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#7de3f4" />
+          <stop offset="1" stopColor="#2fd4c0" />
         </linearGradient>
       </defs>
-      <rect width="32" height="32" rx="8" fill={`url(#${uid}-bg)`} />
-      <rect x="6.4" y="9.3" width="19.2" height="13.4" rx="2.2" fill="none" stroke={`url(#${uid}-mail)`} strokeWidth="1.85" />
-      <path d="M7.6 10.7 16 16.6l8.4-5.9" fill="none" stroke={`url(#${uid}-mail)`} strokeWidth="1.85" strokeLinecap="round" strokeLinejoin="round" />
-      <circle cx="24.1" cy="9.1" r="2.45" fill="#5eead4" />
+      <rect width="32" height="32" rx="8.5" fill={`url(#${uid}-bg)`} />
+      <rect x="6.2" y="10.4" width="17.6" height="12.6" rx="2.4" fill="none" stroke={`url(#${uid}-mail)`} strokeWidth="1.9" />
+      <path d="M7.4 11.9 15 17.4l7.6-5.5" fill="none" stroke={`url(#${uid}-mail)`} strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M25 4.6l1.05 2.55L28.6 8.2l-2.55 1.05L25 11.8l-1.05-2.55L21.4 8.2l2.55-1.05z" fill="#5eead4" />
     </svg>
   );
 }

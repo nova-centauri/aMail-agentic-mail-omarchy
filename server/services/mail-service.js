@@ -888,7 +888,7 @@ export function createMailService({
       html: signed.html || undefined,
       inReplyTo: parent?.messageId || input.inReplyTo || undefined,
       references: references.length ? references.join(' ') : undefined,
-      headers: { 'X-Mailer': 'GigaMail' },
+      headers: { 'X-Mailer': 'aMail' },
       attachments: attachments.length ? mailerAttachments(attachments) : undefined,
     };
     let transport;

@@ -1,9 +1,9 @@
 {
-  "name": "gigamail",
+  "name": "amail",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "A privacy-first, self-hosted multi-account mail client.",
+  "description": "aMail (Agentic Mail): a privacy-first, self-hosted multi-account mail client.",
   "engines": {
     "node": ">=22.0.0"
   },

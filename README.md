@@ -1,8 +1,10 @@
-# GigaMail
+# aMail
 
-GigaMail is a self-hosted, Gmail-inspired inbox for multiple IMAP/SMTP accounts. It keeps mail credentials in your own Docker volume, combines conversations into threads, and treats remote message content as untrusted by default.
+aMail (Agentic Mail, formerly GigaMail) is a self-hosted inbox for multiple IMAP/SMTP accounts. It keeps mail credentials in your own Docker volume, combines conversations into threads, and treats remote message content as untrusted by default.
 
-> GigaMail is an independent project. It is not affiliated with Google or Gmail.
+> aMail is an independent project. It is not affiliated with Google or Gmail.
+>
+> The product name changed from GigaMail to aMail. Internal identifiers are unchanged for compatibility: the `GIGAMAIL_*` environment variables, the `gigamail` Compose project and `gigamail-data` volume, the `gigamail_session` cookie, the `gigamail.sqlite` database file, and browser storage keys. Existing deployments upgrade in place.
 
 ## What it includes
 
@@ -15,7 +17,7 @@ GigaMail is a self-hosted, Gmail-inspired inbox for multiple IMAP/SMTP accounts.
 - Remote images blocked by default. When enabled per message, they are fetched server-side through the privacy proxy, never by the browser.
 - Sanitized HTML mail, no scripts/forms/iframes, and SSRF protections for remote-content fetching
 - Encrypted stored account credentials (AES-256-GCM); an access token gate; passkey (WebAuthn) unlock; non-root Docker runtime
-- Dark chrome UI, Gmail-style keyboard shortcuts, rich compose, recipient chips, compose attachments, on-demand attachment download, and Gmail-style search (FTS5 plus operators)
+- Dark, token-based interface that collapses to a single full-width conversation list until a message is opened, Gmail-style keyboard shortcuts, rich compose, recipient chips, compose attachments, on-demand attachment download, and Gmail-style search (FTS5 plus operators)
 
 ## Quick start
 
@@ -50,12 +52,12 @@ full reverse-proxy configuration is in [`deploy/README.md`](deploy/README.md).
 
 ## Account settings
 
-Use **Settings → Add account**, select a provider, and enter the mailbox identity and provider-specific credential. GigaMail tests IMAP and SMTP in memory first; the account is persisted only after both checks succeed. Saved credentials are encrypted server-side and are never returned by the API.
+Use **Settings → Add account**, select a provider, and enter the mailbox identity and provider-specific credential. aMail tests IMAP and SMTP in memory first; the account is persisted only after both checks succeed. Saved credentials are encrypted server-side and are never returned by the API.
 
 - **Gmail / Google Workspace:** use the full email address and a Google app password. App passwords require 2-Step Verification and may be unavailable for some managed or Advanced Protection accounts.
-- **iCloud Mail:** use an Apple app-specific password. GigaMail uses the mailbox name for IMAP and the full address for SMTP, matching Apple's client settings.
+- **iCloud Mail:** use an Apple app-specific password. aMail uses the mailbox name for IMAP and the full address for SMTP, matching Apple's client settings.
 - **Mail-in-a-Box:** use the public hostname from the box's TLS certificate and the full mailbox address. This checkout includes a preset for `box.xer5.com` (IMAPS 993 and SMTP submission 587 with required STARTTLS); do not substitute its raw LAN IP because TLS hostname verification would fail.
-- **Outlook / Microsoft 365:** use an app password. GigaMail does not use Microsoft OAuth.
+- **Outlook / Microsoft 365:** use an app password. aMail does not use Microsoft OAuth.
 - **Custom:** enter separate IMAP/SMTP hosts, ports, and TLS modes. Non-implicit-TLS connections require STARTTLS before authentication.
 
 The setup API also exposes `GET /api/accounts/providers` for provider metadata and `POST /api/accounts/test` for a rate-limited, non-persisting connection check.
@@ -75,6 +77,15 @@ GIGAMAIL_ORIGIN=https://mail.xer0.io
 
 Empty values still get that pin when `NODE_ENV=production`. Local development without those variables derives RP ID and origin from the request Host header.
 
+## Interface
+
+The UI is a single dark theme built from design tokens in `src/styles/tokens.css`; the stylesheet layout is documented in [`src/styles/README.md`](src/styles/README.md).
+
+- **Reader pane only when needed.** With no conversation selected the list takes the full workspace, so a tall, narrow window is just the list. Opening a conversation splits the workspace; below 1000px wide the reader replaces the list instead.
+- **Rows adapt to the panel, not the window.** Wide list panels show sender, subject, and snippet in columns; narrow panels stack them. The switch is driven by a container query on the list panel.
+- **Sidebar.** The menu button collapses the sidebar to an icon rail on desktop and opens it as a drawer on windows 840px and narrower.
+- **Message bodies stay light.** HTML mail and the compose editor render on a light surface so messages look the way their authors intended.
+
 ## Keyboard shortcuts
 
 Press `?` in the mailbox for the cheatsheet. The same Gmail-style keys work while a conversation is focused: `j` / `k` move, `Enter` opens, `u` returns to the list, `e` archives, `#` trashes, `r` replies, `s` stars, `x` selects, `/` focuses search, `c` composes.
@@ -93,27 +104,27 @@ Every synchronized message is classified locally into **Primary**, **GitHub & CI
 
 Use `GET /api/messages?category=github_ci` (or `primary`, `logs`, `status`) with the existing `folder`, `accountId`, and `q` parameters. Omitting `category` returns all messages, and the response includes zero-filled conversation `categoryCounts` for the current folder/account/search scope.
 
-Most hosted providers have IMAP disabled by default or require an app password. GigaMail validates an account connection before saving it.
+Most hosted providers have IMAP disabled by default or require an app password. aMail validates an account connection before saving it.
 
 IMAP synchronization reads message metadata first and downloads raw message sources one at a time. `GIGAMAIL_SYNC_MAX_MESSAGE_BYTES` caps each raw RFC822 download (10 MiB by default; configurable from 64 KiB to 50 MiB). Messages above the cap are left on the mail server and reported as sanitized `IMAP_MESSAGE_TOO_LARGE` skips in the sync result, without downloading their body or attachments. Set the cap before an account's first sync: skipped UIDs are advanced so changing the cap later applies to future messages and does not backfill previously skipped mail.
 
 ## Privacy model
 
-GigaMail blocks remote content until you explicitly choose to load it. The default launch script includes an outbound Tor/Privoxy path; the message HTML points only to a local GigaMail endpoint, which fetches approved `http(s)` media through that proxy. Known tracking pixels remain blocked even when ordinary images are loaded. URLs targeting loopback, private, link-local, multicast, and cloud-metadata address ranges are rejected. If the proxy is absent, remote content fails closed rather than falling back to the VM's direct network connection.
+aMail blocks remote content until you explicitly choose to load it. The default launch script includes an outbound Tor/Privoxy path; the message HTML points only to a local aMail endpoint, which fetches approved `http(s)` media through that proxy. Known tracking pixels remain blocked even when ordinary images are loaded. URLs targeting loopback, private, link-local, multicast, and cloud-metadata address ranges are rejected. If the proxy is absent, remote content fails closed rather than falling back to the VM's direct network connection.
 
 This protects your browser IP and stops open-tracking pixels by default. It does not make the mail provider, your VM, or an external proxy operator unaware of activity. Use a trustworthy network egress path and keep the host patched.
 
 ## Operations
 
-- GigaMail only creates the `gigamail` Compose project, its own network, and named `gigamail-data` volume. It does not modify other Docker containers.
+- aMail only creates the `gigamail` Compose project, its own network, and named `gigamail-data` volume. It does not modify other Docker containers.
 - Back up the `gigamail-data` volume and your `.env` file together. Losing the encryption key makes saved account credentials unrecoverable by design.
-- While a mailbox tab is focused, GigaMail checks every connected inbox about every 15 seconds, and again immediately when the tab returns to the foreground. `SYNC_INTERVAL_MINUTES` (5 in `.env.example`) is the unattended fallback.
+- While a mailbox tab is focused, aMail checks every connected inbox about every 15 seconds, and again immediately when the tab returns to the foreground. `SYNC_INTERVAL_MINUTES` (5 in `.env.example`) is the unattended fallback.
 - Keep the service bound to localhost unless you put it behind TLS and an authentication-aware reverse proxy.
 - Use `docker compose logs -f gigamail` to diagnose connections and `docker compose pull && docker compose up -d` to update images.
 
 ## MCP connector
 
-GigaMail exposes a Cursor-compatible **Streamable HTTP** MCP endpoint on the same Express app as the REST API:
+aMail exposes a Cursor-compatible **Streamable HTTP** MCP endpoint on the same Express app as the REST API:
 
 | | |
 | --- | --- |

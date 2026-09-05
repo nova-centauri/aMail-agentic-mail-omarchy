@@ -69,16 +69,16 @@ export function AccessPanel({
   const passkeyPrimary = required && canUsePasskeys && passkeyCount > 0;
 
   return (
-    <div className="modal-layer access-layer" role="dialog" aria-modal="true" aria-label="Unlock GigaMail">
+    <div className="modal-layer access-layer" role="dialog" aria-modal="true" aria-label="Unlock aMail">
       {!required && <button type="button" className="modal-scrim" onClick={onClose} aria-label="Close unlock dialog" />}
       <form className="access-modal" onSubmit={submit}>
         <div className="access-mark">{passkeyPrimary ? <Icon name="key" size={26} /> : <BrandMark size={48} />}</div>
-        <h2>{required ? 'Unlock GigaMail' : 'Server access token'}</h2>
+        <h2>{required ? 'Unlock aMail' : 'Server access token'}</h2>
         <p>
           {required
             ? (passkeyPrimary
               ? 'Use your passkey to open the inbox. The access token is still available as a fallback.'
-              : 'This GigaMail server is protected. Enter its access token to open your mail.')
+              : 'This aMail server is protected. Enter its access token to open your mail.')
             : 'If this server has GIGAMAIL_ACCESS_TOKEN set, paste the matching token here.'}
         </p>
         {passkeyPrimary && (
@@ -108,12 +108,12 @@ export function AccessPanel({
           <>
             <label className="form-field">
               <span>Access token</span>
-              <input type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder="GigaMail access token" autoFocus={!passkeyPrimary} autoComplete="off" />
+              <input type="password" value={token} onChange={(event) => setToken(event.target.value)} placeholder="aMail access token" autoFocus={!passkeyPrimary} autoComplete="off" />
             </label>
             <small className="access-note">
               {passkeyPrimary
                 ? 'The token is a fallback. After unlock, a session cookie keeps this browser signed in.'
-                : 'Stored only in this browser session and sent as a Bearer token to this GigaMail server.'}
+                : 'Stored only in this browser session and sent as a Bearer token to this aMail server.'}
             </small>
           </>
         )}

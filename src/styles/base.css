@@ -1,0 +1,185 @@
+/* Reset, typography, and shared primitives (buttons, avatars, checks, toggles,
+   tooltips, chips, form fields, toast, skeleton). */
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body, #root { height: 100%; margin: 0; }
+html { background: var(--bg-0); }
+body {
+  min-width: 320px;
+  overflow: hidden;
+  color: var(--ink);
+  background: var(--bg-0);
+  font-family: var(--font-ui);
+  font-size: var(--fs-md);
+  line-height: var(--lh-body);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; border: 0; background: none; padding: 0; }
+button:disabled { cursor: default; }
+h1, h2, h3, p { margin: 0; }
+a { color: var(--accent); }
+:focus-visible { outline: 0; box-shadow: var(--focus-ring); }
+/* Text controls carry their own focus treatment (border/ring on the field). */
+input:focus-visible, textarea:focus-visible, select:focus-visible, [contenteditable]:focus-visible { box-shadow: none; }
+::selection { background: var(--accent-line); }
+
+* { scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb { border: 3px solid transparent; border-radius: 8px; background: var(--line-strong) content-box; }
+*::-webkit-scrollbar-track { background: transparent; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+}
+
+/* ---- Icons ---- */
+.icon { display: block; flex: 0 0 auto; }
+.icon.is-rotated { transform: rotate(180deg); }
+
+/* ---- Icon buttons ---- */
+.icon-button {
+  width: var(--icon-btn); height: var(--icon-btn); flex: 0 0 auto;
+  display: inline-grid; place-items: center;
+  border-radius: var(--r-pill); color: var(--ink-2); background: transparent;
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.icon-button:hover:not(:disabled), .icon-button.is-active { color: var(--ink); background: var(--bg-3); }
+.icon-button.is-active .icon { fill: var(--amber); stroke: var(--amber); }
+.icon-button:disabled { opacity: .4; }
+.is-spinning .icon { animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---- Tooltips ---- */
+.tooltip-wrap { position: relative; display: inline-flex; }
+.tooltip-wrap::after {
+  content: attr(data-tooltip);
+  position: absolute; z-index: 50; top: calc(100% + 6px); left: 50%;
+  padding: 4px 8px; border-radius: var(--r-sm);
+  color: var(--ink); background: var(--bg-4); box-shadow: var(--shadow-1);
+  font-size: var(--fs-xs); white-space: nowrap; pointer-events: none; opacity: 0;
+  transform: translate(-50%, -3px);
+  transition: opacity var(--t-fast) var(--ease), transform var(--t-fast) var(--ease);
+}
+.tooltip-wrap:hover::after, .tooltip-wrap:has(:focus-visible)::after { opacity: 1; transform: translate(-50%, 0); }
+.tooltip-wrap.tooltip-start::after { left: 0; transform: translate(0, -3px); }
+.tooltip-wrap.tooltip-start:hover::after, .tooltip-wrap.tooltip-start:has(:focus-visible)::after { transform: translate(0, 0); }
+.tooltip-wrap.tooltip-end::after { left: auto; right: 0; transform: translate(0, -3px); }
+.tooltip-wrap.tooltip-end:hover::after, .tooltip-wrap.tooltip-end:has(:focus-visible)::after { transform: translate(0, 0); }
+
+/* ---- Buttons ---- */
+.primary-button, .secondary-button, .text-button {
+  min-height: var(--control-h); padding: 0 var(--sp-4);
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  border-radius: var(--r-pill); font-size: var(--fs-sm); font-weight: 600; white-space: nowrap;
+  transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.primary-button { color: var(--accent-ink); background: var(--accent); }
+.primary-button:hover:not(:disabled) { background: var(--accent-strong); }
+.secondary-button { border: 1px solid var(--line-strong); color: var(--ink); background: transparent; }
+.secondary-button:hover:not(:disabled) { border-color: var(--accent-line); background: var(--accent-soft); }
+.text-button { color: var(--accent); background: transparent; }
+.text-button:hover:not(:disabled) { background: var(--accent-soft); }
+.primary-button:disabled, .secondary-button:disabled, .text-button:disabled { cursor: not-allowed; opacity: .5; }
+
+/* ---- Avatars ---- */
+.avatar {
+  --avatar-size: 36px; --avatar-color: #5e6ad2;
+  flex: 0 0 var(--avatar-size); width: var(--avatar-size); height: var(--avatar-size);
+  display: inline-grid; place-items: center; overflow: hidden;
+  border-radius: 50%; color: #fff; background: var(--avatar-color);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .1);
+  font-size: calc(var(--avatar-size) * .36); font-weight: 600; letter-spacing: .02em; line-height: 1;
+}
+.avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.avatar-sm { --avatar-size: 28px; }
+.avatar-md { --avatar-size: 36px; }
+.avatar-top { --avatar-size: 32px; }
+.avatar-hero { --avatar-size: 72px; }
+
+/* ---- Checkbox ---- */
+.check-wrap { position: relative; width: 32px; height: 32px; display: inline-grid; place-items: center; cursor: pointer; }
+.check-wrap input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.custom-check {
+  width: 17px; height: 17px; display: grid; place-items: center;
+  border: 1.5px solid var(--ink-3); border-radius: 4px; color: var(--accent-ink);
+  transition: background var(--t-fast), border-color var(--t-fast);
+}
+.custom-check .icon { opacity: 0; stroke-width: 3; }
+.check-wrap:hover .custom-check { border-color: var(--ink); }
+.check-wrap input:checked + .custom-check { border-color: var(--accent); background: var(--accent); }
+.check-wrap input:checked + .custom-check .icon { opacity: 1; }
+.check-wrap input:focus-visible + .custom-check { box-shadow: var(--focus-ring); }
+
+/* ---- Toggle switch ---- */
+.settings-toggle { min-height: 52px; display: flex; align-items: center; justify-content: space-between; gap: var(--sp-4); cursor: pointer; }
+.settings-toggle > span { display: grid; gap: 2px; }
+.settings-toggle strong { font-size: var(--fs-sm); font-weight: 600; }
+.settings-toggle small { color: var(--ink-3); font-size: var(--fs-xs); line-height: 1.4; }
+.settings-toggle input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.settings-toggle i {
+  position: relative; flex: 0 0 auto; width: 40px; height: 22px; border-radius: var(--r-pill);
+  background: var(--line-strong); transition: background var(--t-fast);
+}
+.settings-toggle i::after {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%;
+  background: var(--ink); box-shadow: 0 1px 3px rgba(0, 0, 0, .4); transition: transform var(--t-fast) var(--ease), background var(--t-fast);
+}
+.settings-toggle input:checked + i { background: var(--accent-strong); }
+.settings-toggle input:checked + i::after { transform: translateX(18px); background: #fff; }
+.settings-toggle input:focus-visible + i { box-shadow: var(--focus-ring); }
+
+/* ---- Form fields ---- */
+.form-field { display: grid; gap: 6px; margin-bottom: var(--sp-4); color: var(--ink-2); font-size: var(--fs-sm); font-weight: 600; }
+.form-field > span em { color: var(--ink-3); font-style: normal; font-weight: 400; }
+.form-field input, .form-field select, .form-field textarea {
+  width: 100%; min-height: 38px; padding: 8px 10px;
+  border: 1px solid var(--line-strong); border-radius: var(--r-md);
+  color: var(--ink); background: var(--bg-1); font-size: var(--fs-md); font-weight: 400; outline: 0;
+  transition: border-color var(--t-fast), box-shadow var(--t-fast);
+}
+.form-field textarea { min-height: 72px; resize: vertical; }
+.form-field input:focus, .form-field select:focus, .form-field textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.form-field small { color: var(--ink-3); font-size: var(--fs-2xs); font-weight: 400; line-height: 1.4; }
+.form-error { margin: 0 0 var(--sp-3); color: var(--red); font-size: var(--fs-sm); line-height: 1.4; }
+
+/* ---- Status pills ---- */
+.status-pill {
+  min-height: 20px; padding: 0 8px; display: inline-flex; align-items: center; border-radius: var(--r-pill);
+  color: var(--ink-2); background: var(--bg-4); font-size: var(--fs-2xs); font-style: normal; font-weight: 700;
+  letter-spacing: .04em; text-transform: uppercase; white-space: nowrap;
+}
+.status-pill.is-connected { color: var(--green); background: var(--green-soft); }
+.status-pill.is-attention { color: var(--amber); background: var(--amber-soft); }
+
+/* ---- Toast ---- */
+.toast {
+  position: fixed; z-index: var(--z-toast); bottom: 20px; left: 50%; transform: translateX(-50%);
+  min-height: 44px; min-width: 260px; max-width: calc(100vw - 32px);
+  padding: 6px 6px 6px 16px; display: flex; align-items: center; gap: var(--sp-3);
+  border: 1px solid var(--line-strong); border-radius: var(--r-md);
+  color: var(--ink); background: var(--bg-4); box-shadow: var(--shadow-2); font-size: var(--fs-sm);
+  animation: rise var(--t-med) var(--ease);
+}
+.toast span { flex: 1; }
+.toast button { min-height: 32px; padding: 0 10px; border-radius: var(--r-sm); color: var(--accent); font-size: var(--fs-xs); font-weight: 700; }
+.toast button:hover { background: var(--accent-soft); }
+@keyframes rise { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
+
+/* ---- Skeleton ---- */
+.skeleton-list { padding: 4px 0; }
+.skeleton-row { height: 52px; display: grid; grid-template-columns: 32px 140px 1fr 48px; align-items: center; gap: 12px; padding: 0 16px; border-bottom: 1px solid var(--line); }
+.skeleton-row > * { height: 11px; border-radius: var(--r-pill); background: linear-gradient(90deg, var(--bg-3) 20%, var(--bg-4) 40%, var(--bg-3) 60%); background-size: 200% 100%; animation: shimmer 1.3s infinite linear; }
+.skeleton-row i { width: 17px; height: 17px; border-radius: 4px; }
+.skeleton-row b { width: 70%; }
+@keyframes shimmer { to { background-position: -200% 0; } }
+
+/* ---- Scrims and modal layer ---- */
+.settings-scrim, .profile-scrim, .sidebar-scrim, .modal-scrim { position: fixed; inset: 0; background: rgba(4, 6, 10, .55); }
+.settings-scrim { z-index: calc(var(--z-drawer) - 1); }
+.profile-scrim { z-index: calc(var(--z-popover) - 1); }
+.sidebar-scrim { z-index: calc(var(--z-drawer) + 4); }
+.modal-layer { position: fixed; z-index: var(--z-modal); inset: 0; display: grid; place-items: center; padding: var(--sp-4); }
+.modal-scrim { position: absolute; }

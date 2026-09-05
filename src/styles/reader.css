@@ -1,0 +1,83 @@
+/* Reader pane: conversation heading and the stack of message cards. Message
+   bodies render on the light email surface (see tokens.css). */
+
+.thread-toolbar { padding-left: 6px; }
+.thread-scroll { min-height: 0; flex: 1; overflow-y: auto; padding-bottom: var(--sp-6); overscroll-behavior: contain; }
+.thread-heading { padding: var(--sp-5) var(--sp-5) var(--sp-4); }
+.thread-heading-main { min-width: 0; display: grid; gap: 6px; }
+.thread-title-line { min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; }
+.thread-title-line h1 { min-width: 0; flex: 0 1 auto; color: var(--ink); font-size: var(--fs-2xl); font-weight: 600; letter-spacing: -.02em; line-height: 1.25; overflow-wrap: anywhere; }
+.heading-labels { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.message-label { padding: 3px 8px; border-radius: var(--r-pill); color: var(--green); background: var(--green-soft); font-size: var(--fs-2xs); font-weight: 700; line-height: 1.2; }
+.neutral-label { color: var(--ink-2); background: var(--bg-4); text-transform: capitalize; }
+.category-reason { display: flex; align-items: center; gap: 6px; color: var(--ink-3); font-size: var(--fs-xs); }
+.category-reason .icon { color: var(--violet); }
+
+.conversation-stack { display: grid; gap: var(--sp-2); padding: 0 var(--sp-4); }
+.message-card { overflow: hidden; border: 1px solid var(--line); border-radius: var(--r-lg); }
+.message-card.is-expanded { box-shadow: var(--shadow-1); }
+.message-summary {
+  width: 100%; min-height: 58px; padding: 10px 12px; display: flex; align-items: center; gap: 12px;
+  color: var(--ink); text-align: left; transition: background var(--t-fast);
+}
+.message-card:not(.is-expanded) .message-summary:hover { background: var(--bg-3); }
+.message-summary > .icon { color: var(--ink-3); }
+.message-sender { min-width: 0; flex: 1; display: grid; gap: 1px; }
+.message-sender strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-md); font-weight: 600; }
+.message-sender small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); font-size: var(--fs-xs); }
+.message-summary time { flex: 0 0 auto; color: var(--ink-2); font-size: var(--fs-xs); white-space: nowrap; }
+.message-content { padding: 0 var(--sp-5) var(--sp-5) 60px; }
+.message-utilities { min-height: 28px; display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); color: var(--ink-2); font-size: var(--fs-xs); }
+.message-utilities > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.message-utilities > div { display: flex; flex: 0 0 auto; }
+.message-utilities .icon-button { width: 30px; height: 30px; }
+
+.message-body { padding-top: 10px; color: var(--ink); font-family: var(--font-mail); font-size: 14px; line-height: 1.55; }
+.message-body p { margin: 0 0 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.muted-copy { color: var(--ink-3); font-style: italic; }
+.html-email-body { color: var(--ink); font-family: var(--font-mail); font-size: 14px; line-height: 1.55; overflow-wrap: anywhere; }
+.html-email-body > :first-child { margin-top: 0; }
+.html-email-body > :last-child { margin-bottom: 14px; }
+.html-email-body a { color: var(--blue); }
+.html-email-body img { max-width: 100%; height: auto; }
+.html-email-body table { max-width: 100%; }
+.html-email-body .blocked-email-image { display: inline-block; min-width: 120px; min-height: 30px; border: 1px dashed var(--line-strong); border-radius: 4px; color: var(--ink-3); background: var(--bg-3); font-size: 11px; }
+
+.privacy-notice {
+  margin: 0 0 var(--sp-4); padding: 9px 10px; display: flex; align-items: center; gap: 10px;
+  border: 1px solid var(--line); border-radius: var(--r-md); color: var(--ink-2); background: var(--bg-3);
+  font-family: var(--font-ui); font-size: var(--fs-xs); line-height: 1.35;
+}
+.notice-icon { flex: 0 0 auto; color: var(--blue); }
+.privacy-notice > div { min-width: 0; flex: 1; display: grid; gap: 1px; }
+.privacy-notice strong { color: var(--ink); }
+.privacy-notice button { flex: 0 0 auto; padding: 5px 8px; border-radius: var(--r-sm); color: var(--blue); font-size: var(--fs-xs); font-weight: 700; white-space: nowrap; }
+.privacy-notice button:hover { background: var(--blue-soft); }
+.private-load-off { flex: 0 0 auto; color: var(--ink-3); font-size: var(--fs-2xs); white-space: nowrap; }
+
+.attachments { display: flex; flex-wrap: wrap; gap: 8px; padding: 2px 0 var(--sp-4); }
+.attachment-chip {
+  height: 34px; max-width: 260px; padding: 0 10px; display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--line-strong); border-radius: var(--r-md); color: var(--ink); background: var(--bg-2); text-decoration: none; cursor: default;
+}
+a.attachment-chip { cursor: pointer; }
+.attachment-chip:hover { background: var(--bg-3); }
+.attachment-chip > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-xs); }
+.attachment-chip small { color: var(--ink-3); font-size: var(--fs-2xs); white-space: nowrap; }
+
+.message-reply-actions { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 4px; }
+.message-reply-actions .secondary-button { min-height: 34px; font-size: var(--fs-sm); }
+
+@media (max-width: 840px) {
+  .thread-heading { padding: var(--sp-4) var(--sp-4) var(--sp-3); }
+  .thread-title-line h1 { font-size: var(--fs-xl); }
+  .conversation-stack { padding: 0 var(--sp-2); }
+  .message-content { padding: 0 var(--sp-3) var(--sp-4); }
+  .thread-toolbar .toolbar-left .icon-button:nth-of-type(n + 6) { display: none; }
+}
+@media (max-width: 650px) {
+  .message-summary { padding: 8px 10px; gap: 10px; }
+  .message-summary > .icon { display: none; }
+  .privacy-notice { flex-wrap: wrap; }
+  .privacy-notice > div span { display: none; }
+}
