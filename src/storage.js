@@ -38,3 +38,16 @@ export function writeUiPrefs(partial) {
     return partial;
   }
 }
+
+export function readDismissedFreshDrafts() {
+  const value = readUiPrefs().dismissedFreshDrafts;
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+export function writeDismissedFreshDrafts(dismissedAtById) {
+  const next = dismissedAtById && typeof dismissedAtById === 'object' && !Array.isArray(dismissedAtById)
+    ? dismissedAtById
+    : {};
+  writeUiPrefs({ dismissedFreshDrafts: next });
+  return next;
+}

@@ -639,6 +639,7 @@ export function createRepositories(db) {
         last_error = excluded.last_error, synced_at = excluded.synced_at`),
     draftById: db.prepare('SELECT * FROM drafts WHERE id = ?'),
     draftList: db.prepare('SELECT * FROM drafts WHERE account_id = ? ORDER BY updated_at DESC'),
+    draftListAll: db.prepare('SELECT * FROM drafts ORDER BY updated_at DESC'),
     draftInsert: db.prepare(`INSERT INTO drafts (
       id, account_id, thread_id, to_json, cc_json, bcc_json, subject, html_body,
       text_body, attachments_json, created_at, updated_at
@@ -920,6 +921,7 @@ export function createRepositories(db) {
     drafts: {
       get: (id) => publicDraft(queries.draftById.get(id), { includeContent: true }),
       list: (accountId) => queries.draftList.all(accountId).map((row) => publicDraft(row, { includeContent: false })),
+      listAll: () => queries.draftListAll.all().map((row) => publicDraft(row, { includeContent: false })),
       create(input) {
         const id = randomUUID();
         const timestamp = now();

@@ -42,6 +42,49 @@
 .smart-filter-chip.category-status { --chip-color: var(--cat-status); }
 .smart-filter-chip.category-ops_error { --chip-color: var(--cat-ops); }
 
+/* ---- Fresh drafts ---- */
+.fresh-drafts-card {
+  flex: 0 0 auto; padding: 10px var(--sp-3) 12px; display: grid; gap: 8px;
+  border-bottom: 1px solid var(--line); background: var(--bg-1);
+}
+.fresh-drafts-intro { min-width: 0; display: flex; align-items: center; gap: 8px; color: var(--ink-2); }
+.fresh-drafts-intro > span:nth-child(2) { min-width: 0; display: grid; gap: 0; }
+.fresh-drafts-intro strong { font-size: var(--fs-xs); font-weight: 650; white-space: nowrap; }
+.fresh-drafts-intro small { color: var(--ink-3); font-size: var(--fs-2xs); }
+.fresh-drafts-mark {
+  width: 26px; height: 26px; flex: 0 0 auto; display: grid; place-items: center;
+  border-radius: 8px; color: var(--amber); background: var(--amber-soft);
+}
+.fresh-drafts-all {
+  margin-left: auto; padding: 4px 8px; border-radius: var(--r-sm);
+  color: var(--ink-2); font-size: var(--fs-xs); font-weight: 650; white-space: nowrap;
+}
+.fresh-drafts-all:hover { color: var(--ink); background: var(--bg-3); }
+.fresh-drafts-scroll { min-width: 0; display: flex; align-items: stretch; gap: 8px; overflow-x: auto; padding: 2px; scrollbar-width: thin; }
+.fresh-draft-pill {
+  min-width: 220px; max-width: 280px; flex: 0 0 auto; padding: 4px 4px 4px 4px;
+  display: grid; grid-template-columns: minmax(0, 1fr) 28px 28px; align-items: center;
+  border: 1px solid var(--line-strong); border-radius: var(--r-xl); background: var(--bg-2);
+  transition: border-color var(--t-fast), background var(--t-fast);
+}
+.fresh-draft-pill:hover { border-color: var(--accent-line); background: var(--bg-3); }
+.fresh-draft-open {
+  min-width: 0; padding: 6px 8px; display: grid; gap: 2px; text-align: left; border-radius: var(--r-lg);
+}
+.fresh-draft-open:hover { background: transparent; }
+.fresh-draft-to { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); font-size: var(--fs-xs); font-weight: 650; }
+.fresh-draft-meta { min-width: 0; display: flex; align-items: baseline; gap: 8px; color: var(--ink-3); font-size: var(--fs-2xs); }
+.fresh-draft-subject { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); font-weight: 550; }
+.fresh-draft-meta time { flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+.fresh-draft-pill .fresh-draft-action { width: 28px; height: 28px; }
+.density-compact-ui .fresh-drafts-card { padding-block: 6px; }
+.density-compact-ui .fresh-drafts-intro small { display: none; }
+
+@container (max-width: 640px) {
+  .fresh-drafts-intro small { display: none; }
+  .fresh-draft-pill { min-width: 200px; max-width: 240px; }
+}
+
 /* ---- Rows ---- */
 .thread-list { min-height: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; }
 .thread-row {

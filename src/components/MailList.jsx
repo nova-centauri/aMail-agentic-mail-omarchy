@@ -1,6 +1,7 @@
 import { SMART_CATEGORIES } from '../mail/constants.js';
 import { smartCategoryMetadata } from '../mail/classify.js';
 import { formatListDate } from '../mail/dates.js';
+import { FreshDraftsCard } from './FreshDraftsCard.jsx';
 import { Icon } from './Icon.jsx';
 import { Checkbox, IconButton } from './ui.jsx';
 
@@ -149,7 +150,7 @@ function SkeletonRows() {
   );
 }
 
-export function MailList({ threads, totalCount, categoryCounts, selectedThread, cursorThreadId, loading, folder, query, activeCategory, setActiveCategory, selectedIds, setSelectedIds, onOpenThread, onToggleStar, onRefresh, onBulkAction, onCompose, onClearSearch, hideSmartFilters = false }) {
+export function MailList({ threads, totalCount, categoryCounts, selectedThread, cursorThreadId, loading, folder, query, activeCategory, setActiveCategory, selectedIds, setSelectedIds, onOpenThread, onToggleStar, onRefresh, onBulkAction, onCompose, onClearSearch, hideSmartFilters = false, freshDrafts = [], onOpenFreshDraft, onDismissFreshDraft, onDeleteFreshDraft, onViewAllDrafts }) {
   const allSelected = threads.length > 0 && threads.every((thread) => selectedIds.includes(thread.id));
   const toggleAll = () => setSelectedIds(allSelected ? [] : threads.map((thread) => thread.id));
   const toggleOne = (thread, checked) => setSelectedIds((current) => checked ? [...new Set([...current, thread.id])] : current.filter((id) => id !== thread.id));
@@ -165,6 +166,15 @@ export function MailList({ threads, totalCount, categoryCounts, selectedThread, 
         onToggleAll={toggleAll}
         loading={loading}
       />
+      {folder === 'inbox' && freshDrafts.length > 0 && (
+        <FreshDraftsCard
+          drafts={freshDrafts}
+          onOpen={onOpenFreshDraft}
+          onDismiss={onDismissFreshDraft}
+          onDelete={onDeleteFreshDraft}
+          onViewAll={onViewAllDrafts}
+        />
+      )}
       {folder === 'inbox' && !hideSmartFilters && <SmartFilterBar activeCategory={activeCategory} onChange={setActiveCategory} visibleCount={threads.length} categoryCounts={categoryCounts} loading={loading} />}
       {loading && !threads.length ? <SkeletonRows /> : threads.length ? (
         <div className="thread-list" id="conversation-list" role="tabpanel">

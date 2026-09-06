@@ -13,7 +13,8 @@ import { ThreadView } from './components/ThreadView.jsx';
 import { Topbar } from './components/Topbar.jsx';
 import { Toast } from './components/ui.jsx';
 import { EMPTY_FOLDER_COUNTS, PERSON_FLAGS, SMART_CATEGORIES, UNIFIED_ACCOUNT } from './mail/constants.js';
-import { demoAccounts, demoMailboxThreads } from './mail/demo.js';
+import { demoAccounts, demoDraftThreads, demoMailboxThreads } from './mail/demo.js';
+import { normalizeFreshDraft, pruneDismissedFreshDrafts, visibleFreshDrafts } from './mail/fresh-drafts.js';
 import { countSmartCategories, filterVisibleThreads } from './mail/filter.js';
 import { useLiveMailboxSync } from './mail/live-sync.js';
 import { quotedComposeHtml } from './mail/html.js';
@@ -23,7 +24,7 @@ import { sanitizeSignatureHtml } from './mail/signature.js';
 import { syncResultStatus, syncSkippedMessageCount } from './mail/sync.js';
 import { authenticateWithPasskey, passkeysSupported, registerPasskey } from './passkeys.js';
 import { clampIndex, shortcutAction } from './shortcuts.js';
-import { getAccessToken, persistAccessToken, readUiPrefs, writeUiPrefs } from './storage.js';
+import { getAccessToken, persistAccessToken, readDismissedFreshDrafts, readUiPrefs, writeDismissedFreshDrafts, writeUiPrefs } from './storage.js';
 
 export default function App() {
   const initialPrefs = useMemo(() => readUiPrefs(), []);
@@ -67,6 +68,9 @@ export default function App() {
   const loadRequestRef = useRef(0);
   const syncInFlightRef = useRef(false);
   const demoDraftsRef = useRef([]);
+  const demoDraftsSeededRef = useRef(false);
+  const [savedDrafts, setSavedDrafts] = useState([]);
+  const [dismissedFreshDrafts, setDismissedFreshDrafts] = useState(() => readDismissedFreshDrafts());
   const canUsePasskeys = passkeysSupported();
 
   const updateDensity = (value) => {
@@ -192,6 +196,7 @@ export default function App() {
         setCategoryCounts(countSmartCategories([]));
         setFolderCounts({ ...EMPTY_FOLDER_COUNTS });
         setSelectedThread(null);
+        setSavedDrafts([]);
         return;
       }
       const params = new URLSearchParams({ folder: activeFolder });
@@ -199,15 +204,22 @@ export default function App() {
       if (activeFolder === 'inbox' && !activePersonFlag && activeCategory !== 'all') params.set('category', activeCategory);
       if (activePersonFlag) params.set('flag', activePersonFlag);
       if (debouncedQuery) params.set('q', debouncedQuery);
-      const [accountData, mailData] = await Promise.all([
+      const draftParams = new URLSearchParams();
+      if (activeAccount?.id) draftParams.set('accountId', activeAccount.id);
+      const [accountData, mailData, draftData] = await Promise.all([
         api('/accounts'),
         api(`/messages?${params.toString()}`),
+        api(`/drafts${draftParams.toString() ? `?${draftParams}` : ''}`).catch(() => ({ drafts: [] })),
       ]);
       if (requestId !== loadRequestRef.current) return;
       const nextAccounts = getArray(accountData, ['accounts', 'items']).map(normalizeAccount);
       const rawThreads = getArray(mailData, ['threads', 'messages', 'items', 'data']);
       const nextThreads = rawThreads.map(normalizeThread);
       const isFreshSetup = nextAccounts.length === 0 && nextThreads.length === 0;
+      if (isFreshSetup && !demoDraftsSeededRef.current) {
+        demoDraftsRef.current = demoDraftThreads.map((item) => ({ ...item }));
+        demoDraftsSeededRef.current = true;
+      }
       const previewThreads = [...demoDraftsRef.current, ...demoMailboxThreads];
       const responseTotal = Number(mailData?.total);
       const nextCategoryCounts = mailData?.categoryCounts && typeof mailData.categoryCounts === 'object'
@@ -244,6 +256,15 @@ export default function App() {
         setFolderCounts(nextFolderCounts);
       }
       setIsDemo(isFreshSetup);
+      const nextSavedDrafts = isFreshSetup
+        ? previewThreads.filter((thread) => thread.folder === 'drafts' || thread.draftId).map(normalizeFreshDraft)
+        : getArray(draftData, ['drafts', 'items']).map(normalizeFreshDraft);
+      setSavedDrafts(nextSavedDrafts);
+      const prunedDismissals = pruneDismissedFreshDrafts(dismissedFreshDrafts, nextSavedDrafts);
+      if (prunedDismissals !== dismissedFreshDrafts) {
+        setDismissedFreshDrafts(prunedDismissals);
+        writeDismissedFreshDrafts(prunedDismissals);
+      }
       if (keepSelection && selectedThread) {
         const replacement = (isFreshSetup ? previewThreads : nextThreads).find((item) => item.id === selectedThread.id);
         setSelectedThread(replacement || null);
@@ -264,6 +285,7 @@ export default function App() {
         setCategoryCounts(countSmartCategories([]));
         setFolderCounts({ ...EMPTY_FOLDER_COUNTS });
         setSelectedThread(null);
+        setSavedDrafts([]);
       } else {
         // Keep the last confirmed mailbox intact. Preview data is only enabled
         // after a successful zero-account response, never as an outage fallback.
@@ -379,6 +401,10 @@ export default function App() {
   }, [cursorThread?.id]);
 
   const visibleTotal = isDemo ? visibleThreads.length : mailTotal;
+  const freshDrafts = useMemo(
+    () => (authenticated && !authRequired ? visibleFreshDrafts(savedDrafts, dismissedFreshDrafts) : []),
+    [authenticated, authRequired, dismissedFreshDrafts, savedDrafts],
+  );
 
   const counts = useMemo(() => ({
     inbox: folderCounts.inbox,
@@ -411,46 +437,51 @@ export default function App() {
     setSelectedThread(null);
   };
 
+  const openSavedDraft = async (source, { expanded = false } = {}) => {
+    const draftMessage = source.messages?.at(-1) || source;
+    const draftId = source.draftId || String(source.id || '').replace(/^draft:/, '');
+    let attachments = source.attachments || draftMessage.attachments || [];
+    let body = draftMessage.body || source.textBody || '';
+    let htmlBody = draftMessage.bodyHtml || source.htmlBody || '';
+    let subject = source.subject === '(no subject)' ? '' : (source.subject || '');
+    let to = formatRecipients(source.to || draftMessage.to);
+    let cc = formatRecipients(source.cc || draftMessage.cc);
+    let bcc = formatRecipients(source.bcc || draftMessage.bcc);
+    if (!isDemo && draftId) {
+      try {
+        const data = await api(`/drafts/${encodeURIComponent(draftId)}`);
+        const draft = data?.draft || data;
+        attachments = draft?.attachments || attachments;
+        body = draft?.textBody || body;
+        htmlBody = draft?.htmlBody || htmlBody;
+        subject = draft?.subject || subject;
+        to = formatRecipients(draft?.to || source.to);
+        cc = formatRecipients(draft?.cc || source.cc);
+        bcc = formatRecipients(draft?.bcc || source.bcc);
+      } catch {
+        // The list payload is enough to keep editing if the full draft fetch fails.
+      }
+    }
+    setComposeContext({
+      mode: 'draft',
+      draftId,
+      accountId: source.accountId || draftMessage.accountId || null,
+      threadId: source.threadId && source.threadId !== source.id && !String(source.threadId).startsWith('draft:') ? source.threadId : null,
+      to,
+      cc,
+      bcc,
+      subject,
+      body,
+      htmlBody: htmlBody || body,
+      attachments,
+      expanded,
+    });
+    setComposeOpen(true);
+  };
+
   const openThread = async (thread) => {
     if (thread.folder === 'drafts' || thread.draftId) {
-      const draftMessage = thread.messages?.at(-1) || thread;
-      const draftId = thread.draftId || String(thread.id).replace(/^draft:/, '');
-      let attachments = thread.attachments || draftMessage.attachments || [];
-      let body = draftMessage.body || '';
-      let htmlBody = draftMessage.bodyHtml || '';
-      let subject = thread.subject === '(no subject)' ? '' : thread.subject;
-      let to = formatRecipients(thread.to || draftMessage.to);
-      let cc = formatRecipients(thread.cc || draftMessage.cc);
-      let bcc = formatRecipients(thread.bcc || draftMessage.bcc);
-      if (!isDemo && draftId) {
-        try {
-          const data = await api(`/drafts/${encodeURIComponent(draftId)}`);
-          const draft = data?.draft || data;
-          attachments = draft?.attachments || attachments;
-          body = draft?.textBody || body;
-          htmlBody = draft?.htmlBody || htmlBody;
-          subject = draft?.subject || subject;
-          to = formatRecipients(draft?.to || thread.to);
-          cc = formatRecipients(draft?.cc || thread.cc);
-          bcc = formatRecipients(draft?.bcc || thread.bcc);
-        } catch {
-          // The list payload is enough to keep editing if the full draft fetch fails.
-        }
-      }
-      setComposeContext({
-        mode: 'draft',
-        draftId,
-        accountId: thread.accountId || draftMessage.accountId || null,
-        threadId: thread.threadId && thread.threadId !== thread.id ? thread.threadId : null,
-        to,
-        cc,
-        bcc,
-        subject,
-        body,
-        htmlBody: htmlBody || body,
-        attachments,
-      });
-      setComposeOpen(true);
+      await openSavedDraft(thread);
       return;
     }
     const alreadyRead = !thread.unread;
@@ -656,6 +687,7 @@ export default function App() {
     });
     if (localOnly) demoDraftsRef.current = [draftThread, ...demoDraftsRef.current.filter((item) => item.draftId !== id)];
     setThreads((current) => [draftThread, ...current.filter((item) => item.draftId !== id && item.id !== `draft:${id}`)]);
+    setSavedDrafts((current) => [normalizeFreshDraft({ ...draft, id, accountId, updatedAt: timestamp }), ...current.filter((item) => item.id !== id && item.draftId !== id)]);
     if (!replacesExisting) {
       setFolderCounts((current) => ({ ...current, drafts: current.drafts + 1 }));
       if (!localOnly && activeFolder === 'drafts') setMailTotal((current) => current + 1);
@@ -666,14 +698,42 @@ export default function App() {
   const draftRemoved = (draftId) => {
     const id = String(draftId);
     const existed = threads.some((item) => item.draftId === id || item.id === `draft:${id}`)
-      || demoDraftsRef.current.some((item) => item.draftId === id || item.id === `draft:${id}`);
+      || demoDraftsRef.current.some((item) => item.draftId === id || item.id === `draft:${id}`)
+      || savedDrafts.some((item) => item.id === id || item.draftId === id);
     demoDraftsRef.current = demoDraftsRef.current.filter((item) => item.draftId !== id && item.id !== `draft:${id}`);
     setThreads((current) => current.filter((item) => item.draftId !== id && item.id !== `draft:${id}`));
+    setSavedDrafts((current) => current.filter((item) => item.id !== id && item.draftId !== id));
     if (existed) {
       setFolderCounts((current) => ({ ...current, drafts: Math.max(0, current.drafts - 1) }));
       if (!isDemo && activeFolder === 'drafts') setMailTotal((current) => Math.max(0, current - 1));
     }
     setSelectedThread((current) => current?.draftId === id || current?.id === `draft:${id}` ? null : current);
+    if (composeContext?.draftId === id) closeCompose();
+  };
+
+  const dismissFreshDraft = (draft) => {
+    const id = String(draft?.id || draft?.draftId || '');
+    if (!id) return;
+    const next = { ...dismissedFreshDrafts, [id]: new Date().toISOString() };
+    setDismissedFreshDrafts(next);
+    writeDismissedFreshDrafts(next);
+  };
+
+  const deleteFreshDraft = async (draft) => {
+    const id = String(draft?.draftId || draft?.id || '');
+    if (!id) return;
+    if (!isDemo) {
+      try {
+        await api(`/drafts/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      } catch (requestError) {
+        setNotice(requestError.status === 401 || requestError.status === 403
+          ? 'Unlock aMail before deleting this draft.'
+          : `The draft could not be deleted. ${requestError.message || 'Try again when the server is available.'}`);
+        return;
+      }
+    }
+    draftRemoved(id);
+    setNotice('Draft deleted.');
   };
 
   const lockSession = async () => {
@@ -681,6 +741,7 @@ export default function App() {
     setProfileOpen(false);
     setSettingsOpen(false);
     setComposeOpen(false);
+    setComposeContext(null);
     setAddAccountOpen(false);
     try {
       await api('/session', { method: 'DELETE' });
@@ -698,6 +759,7 @@ export default function App() {
     setMailTotal(0);
     setCategoryCounts(countSmartCategories([]));
     setFolderCounts({ ...EMPTY_FOLDER_COUNTS });
+    setSavedDrafts([]);
     setIsDemo(false);
     setOffline(false);
     setNotice('Signed out of this browser session.');
@@ -877,6 +939,11 @@ export default function App() {
             onCompose={openNewCompose}
             onClearSearch={() => setQuery('')}
             hideSmartFilters={Boolean(activePersonFlag)}
+            freshDrafts={freshDrafts}
+            onOpenFreshDraft={(draft) => { void openSavedDraft(draft, { expanded: true }); }}
+            onDismissFreshDraft={dismissFreshDraft}
+            onDeleteFreshDraft={(draft) => { void deleteFreshDraft(draft); }}
+            onViewAllDrafts={() => { setActiveFolder('drafts'); setActiveCategory('all'); setActivePersonFlag(null); setQuery(''); setSelectedThread(null); setSelectedIds([]); }}
           />
           {selectedThread ? <ThreadView key={selectedThread.id} thread={selectedThread} activeFolder={activeFolder} onBack={() => setSelectedThread(null)} onAction={applyAction} onLoadRemote={loadRemoteContent} onReply={openReplyComposer} onReplyAll={(thread, message) => openReplyComposer(thread, message, { replyAll: true })} onForward={openForwardComposer} allowPrivateImages={privacy.privateImages} /> : null}
         </div>

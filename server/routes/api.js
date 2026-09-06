@@ -394,8 +394,11 @@ export function registerApi(app, { config, repos, mailService, remoteContent, pa
 
   router.get('/drafts', (request, response) => {
     const accountId = String(request.query.accountId || '');
-    if (!accountId) throw new ValidationError('accountId is required.');
-    response.json({ drafts: repos.drafts.list(accountId) });
+    if (accountId) {
+      response.json({ drafts: repos.drafts.list(accountId) });
+      return;
+    }
+    response.json({ drafts: repos.drafts.listAll() });
   });
   router.post('/drafts', (request, response) => {
     const body = request.body || {};

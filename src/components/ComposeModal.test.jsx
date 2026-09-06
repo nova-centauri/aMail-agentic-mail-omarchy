@@ -68,4 +68,29 @@ describe('ComposeModal', () => {
     expect(screen.getByTitle('maya@studio.com')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Remove Maya Chen <maya@studio.com>' })).toBeInTheDocument();
   });
+
+  it('opens a saved draft in the full writer pane', () => {
+    render(
+      <ComposeModal
+        account={account}
+        accounts={[account]}
+        contacts={contacts}
+        isDemo
+        initialReply={{
+          mode: 'draft',
+          draftId: 'd1',
+          to: 'maya@studio.com',
+          subject: 'Design follow-up',
+          htmlBody: '<p>Thanks for the notes.</p>',
+          expanded: true,
+        }}
+        onClose={vi.fn()}
+        onSent={vi.fn()}
+        onDraftSaved={vi.fn()}
+        onDraftRemoved={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole('dialog', { name: 'New message' })).toHaveClass('is-expanded');
+    expect(screen.getByDisplayValue('Design follow-up')).toBeInTheDocument();
+  });
 });

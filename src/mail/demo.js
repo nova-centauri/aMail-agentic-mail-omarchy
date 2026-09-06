@@ -335,4 +335,58 @@ const demoThreads = [
   },
 ];
 
+const demoDraftSources = [
+  {
+    id: 'draft:preview-press',
+    draftId: 'preview-press',
+    threadId: 'draft:preview-press',
+    folder: 'drafts',
+    subject: 'Re: Press schedule for Thursday',
+    snippet: 'Thursday afternoon still works. I will send the confirmed window after I check the run sheet.',
+    from: { name: 'Nova Centauri', email: 'nova@centauri.dev', color: '#8e24aa' },
+    to: [{ name: 'Phil', email: 'phil@midstaelitho.com' }],
+    timestamp: new Date(Date.now() - 1000 * 60 * 14).toISOString(),
+    unread: false,
+    starred: false,
+    labels: ['Draft'],
+    messageCount: 1,
+    messages: [
+      {
+        id: 'draft-message:preview-press',
+        from: { name: 'Nova Centauri', email: 'nova@centauri.dev', color: '#8e24aa' },
+        to: [{ name: 'Phil', email: 'phil@midstaelitho.com' }],
+        timestamp: new Date(Date.now() - 1000 * 60 * 14).toISOString(),
+        body: 'Hi Phil,\n\nThursday afternoon still works. I will send the confirmed window after I check the run sheet.\n\nNova',
+        htmlBody: '<p>Hi Phil,</p><p>Thursday afternoon still works. I will send the confirmed window after I check the run sheet.</p><p>Nova</p>',
+      },
+    ],
+  },
+  {
+    id: 'draft:preview-design',
+    draftId: 'preview-design',
+    threadId: 'draft:preview-design',
+    folder: 'drafts',
+    subject: 'Design sync follow-up',
+    snippet: 'Thanks for the handoff notes. I left two comments on the mobile states and will send a cleaned reply shortly.',
+    from: { name: 'Nova Centauri', email: 'nova@centauri.dev', color: '#8e24aa' },
+    to: [{ name: 'Maya Chen', email: 'maya@studio.com' }, { name: 'Jordan Lee', email: 'jordan@example.com' }],
+    timestamp: new Date(Date.now() - 1000 * 60 * 55).toISOString(),
+    unread: false,
+    starred: false,
+    labels: ['Draft'],
+    messageCount: 1,
+    messages: [
+      {
+        id: 'draft-message:preview-design',
+        from: { name: 'Nova Centauri', email: 'nova@centauri.dev', color: '#8e24aa' },
+        to: [{ name: 'Maya Chen', email: 'maya@studio.com' }, { name: 'Jordan Lee', email: 'jordan@example.com' }],
+        timestamp: new Date(Date.now() - 1000 * 60 * 55).toISOString(),
+        body: 'Hi Maya,\n\nThanks for the handoff notes. I left two comments on the mobile states and will send a cleaned reply shortly.\n\nNova',
+        htmlBody: '<p>Hi Maya,</p><p>Thanks for the handoff notes. I left two comments on the mobile states and will send a cleaned reply shortly.</p><p>Nova</p>',
+      },
+    ],
+  },
+];
+
 export const demoMailboxThreads = demoThreads.map(normalizeThread);
+export const demoDraftThreads = demoDraftSources.map(normalizeThread);

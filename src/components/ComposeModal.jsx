@@ -43,7 +43,7 @@ export function ComposeModal({ account, accounts, contacts = [], isDemo, onClose
   const [attachments, setAttachments] = useState(initialReply?.attachments || []);
   const [extraFields, setExtraFields] = useState(Boolean(initialReply?.cc || initialReply?.bcc));
   const [isMinimized, setIsMinimized] = useState(false);
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(Boolean(initialReply?.expanded));
   const [isSending, setIsSending] = useState(false);
   const [isSavingDraft, setIsSavingDraft] = useState(false);
   const [draftId, setDraftId] = useState(initialReply?.draftId || '');
@@ -262,7 +262,7 @@ export function ComposeModal({ account, accounts, contacts = [], isDemo, onClose
               onChange={setTo}
               contacts={contacts}
               placeholder="Recipients"
-              autoFocus
+              autoFocus={!initialReply?.draftId}
               extra={<button type="button" onClick={() => setExtraFields((value) => !value)}>{extraFields ? 'Hide' : 'Cc Bcc'}</button>}
             />
           </div>

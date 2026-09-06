@@ -8,7 +8,7 @@ the tokens in `tokens.css`; nothing else hard-codes colors.
 | `tokens.css` | Color, type scale, spacing, radii, elevation, layout sizes, z-index layers, and the `.email-light` re-map for light surfaces |
 | `base.css` | Reset, typography, focus, scrollbars, and primitives: buttons, icon buttons, tooltips, avatars, checkbox, toggle, form fields, status pills, toast, skeleton, scrims |
 | `shell.css` | The app grid (`.mail-app`), top bar, sidebar (full, compact rail, mobile drawer), workspace, banners, and the list/reader split |
-| `list.css` | Conversation list: toolbar, smart-view chips, rows (with container queries), density, empty state |
+| `list.css` | Conversation list: toolbar, Fresh Drafts card, smart-view chips, rows (with container queries), density, empty state |
 | `reader.css` | Reader pane: heading, message cards, email body, privacy notice, attachments |
 | `compose.css` | Compose window, recipient chips, and the shared rich-text editor |
 | `panels.css` | Quick settings drawer, profile menu, search options, and the modals (add account, unlock, shortcuts) |
