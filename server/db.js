@@ -855,7 +855,7 @@ export function createRepositories(db) {
       },
       forThread: (threadId) => queries.messagesByThread.all(threadId).map(publicMessage),
       findByRfcId: (accountId, messageId) => publicMessage(queries.messageByRfcId.get(accountId, messageId)),
-      upsert(input) {
+      upsert(input, meta = null) {
         const classification = classifyMessage(input);
         const classifiedInput = {
           ...input,
@@ -876,6 +876,7 @@ export function createRepositories(db) {
         const timestamp = now();
         const row = { ...classifiedInput, updated_at: timestamp };
         if (existing) {
+          if (meta) meta.created = false;
           row.id = existing.id;
           queries.messageUpdate.run(row);
           recomputeThread(existing.thread_id);
@@ -883,6 +884,7 @@ export function createRepositories(db) {
           syncFts(existing.id);
           return publicMessage(queries.messageById.get(existing.id));
         }
+        if (meta) meta.created = true;
         row.id ||= randomUUID();
         row.created_at ||= timestamp;
         queries.messageInsert.run(row);

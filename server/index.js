@@ -7,6 +7,8 @@ import { createRemoteContentService } from './services/remote-content.js';
 import { createPasskeyService } from './services/passkeys.js';
 import { createApp } from './app.js';
 import { configureSmartFilter } from './services/smart-filter.js';
+import { createEventBus } from './services/events.js';
+import { createIdleWatcher } from './services/idle.js';
 
 const config = loadConfig();
 configureSmartFilter({ opsSources: config.opsSources });
@@ -20,12 +22,18 @@ try {
 }
 const repos = createRepositories(database);
 const remoteContent = createRemoteContentService({ config, repos, logger });
-const mailService = createMailService({ config, repos, logger });
+const events = createEventBus();
+const mailService = createMailService({ config, repos, logger, events });
 const passkeys = createPasskeyService({ config, repos });
-const app = createApp({ config, repos, mailService, remoteContent, logger, passkeys });
+const idle = config.imapIdle ? createIdleWatcher({ config, repos, mailService, logger, events }) : null;
+const app = createApp({ config, repos, mailService, remoteContent, logger, passkeys, events, idle });
 
 const server = app.listen(config.port, config.host, () => {
   logger.info({ host: config.host, port: config.port, dataDir: config.dataDir }, 'aMail is ready');
+  if (idle) {
+    idle.start();
+    logger.info({ maxIdleMs: config.imapIdleMaxMs }, 'IMAP IDLE push watchers enabled');
+  }
 });
 
 let pollTimer;
@@ -39,6 +47,7 @@ if (config.syncIntervalMinutes > 0) {
 async function shutdown(signal) {
   logger.info({ signal }, 'Shutting down aMail');
   if (pollTimer) clearInterval(pollTimer);
+  if (idle) await idle.stop().catch(() => {});
   server.close(async () => {
     await remoteContent.close().catch(() => {});
     repos.close();

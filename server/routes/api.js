@@ -20,6 +20,7 @@ import { sanitizeComposeHtml } from '../utils/signature.js';
 import { AppError, ConflictError, NotFoundError, ServiceUnavailableError, ValidationError } from '../errors.js';
 import { accessGate, requestHasAccess, sessionCookieClearOptions, sessionCookieOptions } from '../middleware/auth.js';
 import { LEGACY_SESSION_COOKIE, SESSION_COOKIE } from '../config.js';
+import { NOOP_EVENTS } from '../services/events.js';
 
 function initials(value) {
   return String(value || '?').split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase() || '?';
@@ -93,12 +94,17 @@ function updateTargets(repos, mailService, id, state) {
   return Promise.all(repos.messages.forThread(thread.id).map((item) => mailService.updateMessageState(item.id, state)));
 }
 
-export function registerApi(app, { config, repos, mailService, remoteContent, passkeys }) {
+export function registerApi(app, { config, repos, mailService, remoteContent, passkeys, events = NOOP_EVENTS, idle = null }) {
   app.get('/api/health', (_request, response) => {
     response.json({
       status: 'ok',
       version: '0.1.0',
       releaseSha: config.releaseSha || null,
+      // Capability flags let thin clients (the Omarchy plugin) pick push over
+      // polling without probing every endpoint.
+      features: ['events', ...(idle ? ['idle'] : [])],
+      eventSeq: events.seq,
+      idle: idle ? idle.status() : null,
       accounts: repos.accounts.list().length,
       authProtected: Boolean(config.accessToken),
       credentialsConfigured: Boolean(config.credentialKey),
@@ -258,6 +264,7 @@ export function registerApi(app, { config, repos, mailService, remoteContent, pa
     // unreachable receiving/sending server never leave a broken saved account.
     const connection = await mailService.testSettings(body);
     const account = repos.accounts.create(input);
+    events.emit('account.added', { accountId: account.id, email: account.email });
     response.status(201).json({ account, connection });
   });
   router.patch('/accounts/:id', accountProbeLimiter, async (request, response) => {
@@ -271,10 +278,12 @@ export function registerApi(app, { config, repos, mailService, remoteContent, pa
       ? await mailService.testSettings(accountTestInput(body, existing, config))
       : undefined;
     const account = repos.accounts.update(existing.id, input);
+    if (connectionChanged || Object.hasOwn(body, 'syncEnabled')) events.emit('account.updated', { accountId: account.id, email: account.email });
     response.json({ account, ...(connection ? { connection } : {}) });
   });
   router.delete('/accounts/:id', (request, response) => {
     if (!repos.accounts.remove(request.params.id)) throw new NotFoundError('Mail account not found.');
+    events.emit('account.removed', { accountId: request.params.id });
     response.status(204).end();
   });
   router.put('/accounts/:id/avatar', (request, response) => {

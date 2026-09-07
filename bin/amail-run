@@ -1,0 +1,30 @@
+#!/bin/bash
+# Runtime picker for the plugin's JavaScript. omarchy-shell's PATH is minimal,
+# so look in the usual places for node (preferred; server mode needs it) and
+# fall back to bun for the dependency-free client pieces.
+# usage: amail-run <daemon|cli> [args…]
+set -u
+here="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+kind="${1:-cli}"; shift || true
+case "$kind" in
+  daemon) script="$here/plugin/daemon.mjs" ;;
+  cli)    script="$here/plugin/cli.mjs" ;;
+  server) script="$here/server/index.js" ;;
+  *) echo "amail-run: unknown target '$kind'" >&2; exit 2 ;;
+esac
+
+export PATH="$HOME/.local/share/mise/shims:$HOME/.local/bin:$HOME/.bun/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+runtime=""
+for candidate in node "$HOME/.local/share/mise/shims/node" /usr/bin/node /usr/local/bin/node; do
+  if command -v "$candidate" >/dev/null 2>&1; then runtime="$(command -v "$candidate")"; break; fi
+done
+if [ -z "$runtime" ] && [ "$kind" != "server" ]; then
+  for candidate in bun "$HOME/.bun/bin/bun" "$HOME/.local/bin/bun" /usr/bin/bun; do
+    if command -v "$candidate" >/dev/null 2>&1; then runtime="$(command -v "$candidate")"; break; fi
+  done
+fi
+if [ -z "$runtime" ]; then
+  echo '{"ok":false,"error":"no JavaScript runtime found: install node (sudo pacman -S nodejs) or bun"}' >&2
+  exit 69
+fi
+exec "$runtime" "$script" "$@"

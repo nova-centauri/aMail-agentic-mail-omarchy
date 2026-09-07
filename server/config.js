@@ -87,6 +87,11 @@ export function loadConfig(env = process.env) {
     // 0 disables background polling. Sync calls open short-lived connections;
     // aMail intentionally does not maintain an IDLE socket per account.
     syncIntervalMinutes: integer(readEnv(env, 'SYNC_INTERVAL_MINUTES', env.SYNC_INTERVAL_MINUTES), 0, { min: 0, max: 1440 }),
+    // Push path: one IMAP connection per account parked in IDLE on INBOX so new
+    // mail is ingested within a second of arrival. On by default; the periodic
+    // poll above remains the safety net for servers without IDLE.
+    imapIdle: boolean(readEnv(env, 'IMAP_IDLE'), true),
+    imapIdleMaxMs: integer(readEnv(env, 'IMAP_IDLE_MAX_MS'), 4 * 60_000, { min: 30_000, max: 25 * 60_000 }),
     remoteContentMaxBytes: integer(readEnv(env, 'REMOTE_CONTENT_MAX_BYTES'), 5 * 1024 * 1024, {
       min: 16 * 1024,
       max: 25 * 1024 * 1024,

@@ -19,6 +19,7 @@ import {
 import { NotFoundError, ServiceUnavailableError, ValidationError } from '../errors.js';
 import { sanitizeComposeHtml } from '../utils/signature.js';
 import { stringify } from '../db.js';
+import { NOOP_EVENTS } from './events.js';
 import {
   attachmentContentBuffer,
   mailerAttachments,
@@ -346,6 +347,7 @@ export function createMailService({
   createSmtpTransport = (options) => nodemailer.createTransport(options),
   compileMessage = compileRfc822Message,
   createMessageId = () => `<${randomUUID()}@amail.local>`,
+  events = NOOP_EVENTS,
 }) {
   const newImapClient = (account, credentials) => new ImapClient(buildImapOptions(account, credentials, config));
   const newSmtpTransport = (account, credentials) => createSmtpTransport(buildSmtpOptions(account, credentials, config));
@@ -428,7 +430,8 @@ export function createMailService({
     const thread = resolveThread({ accountId: account.id, subject, inReplyTo, references });
     const receivedAt = asIso(message.internalDate || parsed.date || envelope.date);
 
-    return repos.messages.upsert({
+    const upsertMeta = {};
+    const saved = repos.messages.upsert({
       account_id: account.id,
       thread_id: thread.id,
       mailbox,
@@ -457,7 +460,25 @@ export function createMailService({
       is_spam: mailboxRole === 'spam' ? 1 : 0,
       snoozed_until: null,
       is_sent: isSent ? 1 : 0,
-    });
+    }, upsertMeta);
+    if (saved && upsertMeta.created) {
+      events.emit('message.new', {
+        accountId: account.id,
+        accountEmail: account.email,
+        messageId: saved.id,
+        threadId: saved.threadId,
+        mailbox,
+        folder: mailboxRole,
+        subject: saved.subject,
+        from: saved.from,
+        snippet: saved.snippet,
+        receivedAt: saved.receivedAt,
+        isRead: saved.isRead,
+        isSent: saved.isSent,
+        category: saved.category,
+      });
+    }
+    return saved;
   }
 
   async function syncMailbox({ account, client, descriptor, limit }) {
@@ -566,6 +587,9 @@ export function createMailService({
         synced_at: new Date().toISOString(),
       });
       repos.accounts.markSynced(account.id);
+      if (imported || uidValidityChanged) {
+        events.emit('sync.mailbox', { accountId: account.id, mailbox, role, imported, skipped, uidValidityChanged });
+      }
       return {
         mailbox,
         role,
@@ -592,7 +616,7 @@ export function createMailService({
     }
   }
 
-  async function syncAccount(accountId, { mailbox, limit = config.syncBatchSize } = {}) {
+  async function syncAccount(accountId, { mailbox, limit = config.syncBatchSize, inboxOnly = false } = {}) {
     const { account, credentials } = accountAndCredentials(accountId);
     const explicitMailbox = typeof mailbox === 'string' && mailbox.trim() ? mailbox.trim() : null;
     // Existing UI clients ask to sync "INBOX". Treat that as the normal account
@@ -618,9 +642,14 @@ export function createMailService({
     }
 
     try {
-      const descriptors = singleMailbox
+      let descriptors = singleMailbox
         ? [{ mailbox: explicitMailbox, role: folderForMailbox(explicitMailbox), allMailMirror: false }]
         : discoverSyncMailboxes(await client.list());
+      // An IDLE signal only says INBOX grew. Syncing just that mailbox keeps
+      // the push path to one round-trip instead of a full account bundle.
+      if (inboxOnly && !singleMailbox) {
+        descriptors = descriptors.filter((descriptor) => descriptor.role === 'inbox' || String(descriptor.mailbox).toUpperCase() === 'INBOX');
+      }
       const mailboxes = [];
       for (const descriptor of descriptors) {
         try {
@@ -652,6 +681,7 @@ export function createMailService({
           mailboxes,
         };
       }
+      events.emit('sync.account', { accountId, imported, skipped, status, inboxOnly });
       return { accountId, imported, skipped, status, mailboxes };
     } finally {
       await client.logout().catch(() => {});
@@ -964,6 +994,7 @@ export function createMailService({
       is_sent: 1,
     });
     if (input.draftId) repos.drafts.remove(input.draftId);
+    events.emit('message.sent', { accountId: account.id, messageId: saved.id, threadId: saved.threadId, subject: saved.subject, to: saved.to });
     const sentCopy = await appendProviderSentCopy({ account, credentials, rawMessage, sentAt });
     return { ...saved, delivery, sentCopy };
   }
@@ -1060,6 +1091,18 @@ export function createMailService({
     const existing = repos.messages.get(id);
     if (!existing) throw new NotFoundError('Message not found.');
     const updated = repos.messages.setState(id, state);
+    events.emit('message.state', {
+      accountId: updated.accountId,
+      messageId: updated.id,
+      threadId: updated.threadId,
+      state,
+      isRead: updated.isRead,
+      isStarred: updated.isStarred,
+      isArchived: updated.isArchived,
+      isTrashed: updated.isTrashed,
+      isAnalyzed: updated.isAnalyzed,
+      analyzedBy: updated.analyzedBy,
+    });
     // Mail mutations are intentionally best-effort so offline local state stays
     // usable. The API response says whether IMAP accepted, skipped, or failed it.
     try {

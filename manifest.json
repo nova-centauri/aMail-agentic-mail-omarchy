@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.nova-centauri.amail",
+  "name": "aMail",
+  "version": "0.2.0",
+  "author": "Steve Barrett",
+  "license": "MIT",
+  "description": "Agentic mail in the Omarchy bar. Every inbox you own in one hub, one MCP endpoint for your agents, and an analyzed/unanalyzed flag per message alongside read/unread. Client mode follows an aMail server you already run; server mode runs aMail here. New mail is pushed (IMAP IDLE → SSE) so the badge moves within a second.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "aMail",
+    "description": "Unread and not-yet-analyzed counts across every connected mailbox. Left-click = triage panel · middle-click = refresh · right-click = open aMail.",
+    "category": "Network",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "badge": "unread",
+      "showZero": false
+    },
+    "schema": [
+      { "key": "badge", "type": "string", "label": "Badge count (unread, unanalyzed, both)" },
+      { "key": "showZero", "type": "boolean", "label": "Show the icon when the count is zero" }
+    ]
+  }
+}

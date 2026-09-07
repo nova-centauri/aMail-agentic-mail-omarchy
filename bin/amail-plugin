@@ -1,0 +1,197 @@
+#!/bin/bash
+# aMail Omarchy plugin command line.
+#
+#   amail-plugin connect <url>            client mode: follow an aMail server (prompts for the access token)
+#   amail-plugin server install           server mode: run aMail on this machine as a systemd user service
+#   amail-plugin server start|stop|restart|status|logs
+#   amail-plugin status                   what the daemon sees right now
+#   amail-plugin open                     open the aMail web client
+#   amail-plugin refresh                  ask the daemon to refresh now
+#   amail-plugin sync                     ask the server to poll every mailbox now
+#   amail-plugin mcp-config               MCP snippet for your agents
+#   amail-plugin set <key> <value>        plugin setting (badge, toasts, pollSeconds, …)
+#   amail-plugin enable|disable           toggle the bar widget in omarchy-shell
+set -euo pipefail
+
+here="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+run="$here/bin/amail-run"
+plugin_id="io.github.nova-centauri.amail"
+config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/amail"
+state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/amail"
+data_dir="${XDG_DATA_HOME:-$HOME/.local/share}/amail"
+server_env="$config_dir/server.env"
+# Server mode runs from a private copy: npm's node_modules must never land in
+# the plugin checkout (omarchy plugin validate rejects symlinks there).
+server_dir="$data_dir/server"
+unit_name="amail-server.service"
+unit_file="$HOME/.config/systemd/user/$unit_name"
+server_port="${AMAIL_PLUGIN_SERVER_PORT:-3080}"
+
+say() { printf '%s\n' "$*"; }
+die() { printf 'amail-plugin: %s\n' "$*" >&2; exit 1; }
+have() { command -v "$1" >/dev/null 2>&1; }
+json_get() { jq -r "$1" 2>/dev/null; }
+
+cmd_connect() {
+  local url="${1:-}"
+  [ -n "$url" ] || die "usage: amail-plugin connect <https://mail.example.com>"
+  local token="${AMAIL_ACCESS_TOKEN:-}"
+  if [ -z "$token" ]; then
+    if [ -t 0 ]; then
+      if have gum; then
+        token="$(gum input --password --placeholder "AMAIL_ACCESS_TOKEN for $url")"
+      else
+        read -r -s -p "Access token for $url: " token; echo
+      fi
+    else
+      token="$(cat)"
+    fi
+  fi
+  [ -n "$token" ] || die "no token given"
+  local out
+  out="$(printf '%s' "$token" | "$run" cli connect "$url" --mode "${MODE:-client}" --token-stdin)" || { say "$out"; exit 1; }
+  say "Connected to $(printf '%s' "$out" | json_get .url) — $(printf '%s' "$out" | json_get .accounts) accounts."
+  if [ "$(printf '%s' "$out" | json_get .push)" = "true" ]; then
+    say "Push: yes (server-sent events$( [ "$(printf '%s' "$out" | json_get .idle)" = "true" ] && printf ' + IMAP IDLE'))."
+  else
+    say "Push: no — this server predates /api/events, so the plugin polls. Deploy this fork there for instant new-mail."
+  fi
+  say "Token stored in $config_dir/token (0600)."
+  cmd_enable || true
+}
+
+cmd_status() {
+  "$run" cli state 2>/dev/null | jq '{online, transport, mode, url, unread, unanalyzed, accounts: (.accounts|length), conversations: (.conversations|length), lastEventAt, lastRefreshAt, error, idle}' \
+    || say "daemon has not written state yet (is the widget enabled? omarchy plugin enable $plugin_id)"
+}
+
+cmd_open() {
+  local url
+  url="$("$run" cli config | json_get .config.url)"
+  [ -n "$url" ] && [ "$url" != "null" ] || die "not configured; run: amail-plugin connect <url>"
+  if have omarchy-launch-webapp; then omarchy-launch-webapp "$url"; else xdg-open "$url"; fi
+}
+
+cmd_enable() {
+  if have omarchy; then
+    omarchy plugin enable "$plugin_id" >/dev/null 2>&1 && say "Bar widget enabled ($plugin_id)." || say "Enable the widget with: omarchy plugin enable $plugin_id"
+  fi
+}
+cmd_disable() { omarchy plugin disable "$plugin_id"; }
+
+# ---------------------------------------------------------------- server mode
+ensure_node() {
+  local node=""
+  for c in node "$HOME/.local/share/mise/shims/node" /usr/bin/node; do
+    if command -v "$c" >/dev/null 2>&1; then node="$(command -v "$c")"; break; fi
+  done
+  [ -n "$node" ] || die "server mode needs node ≥ 22 (sudo pacman -S nodejs npm)"
+  local major; major="$("$node" -v | sed 's/^v//' | cut -d. -f1)"
+  [ "$major" -ge 22 ] || die "server mode needs node ≥ 22, found $("$node" -v)"
+  printf '%s' "$node"
+}
+
+server_install() {
+  local node; node="$(ensure_node)"
+  local npm="$(dirname "$node")/npm"; have npm && npm="$(command -v npm)"
+  mkdir -p "$config_dir" "$data_dir" "$(dirname "$unit_file")"
+  chmod 700 "$config_dir" "$data_dir"
+  if [ ! -f "$server_env" ]; then
+    say "Generating secrets in $server_env"
+    cat > "$server_env" <<ENV
+# aMail server-mode configuration written by amail-plugin. Keep this private.
+NODE_ENV=production
+HOST=127.0.0.1
+PORT=$server_port
+AMAIL_DATA_DIR=$data_dir
+AMAIL_STATIC_DIR=$server_dir/dist
+AMAIL_ENCRYPTION_KEY=$(openssl rand -hex 32)
+AMAIL_ACCESS_TOKEN=$(openssl rand -hex 32)
+AMAIL_COOKIE_SECURE=false
+AMAIL_IMAP_IDLE=true
+SYNC_INTERVAL_MINUTES=5
+LOG_LEVEL=info
+ENV
+    chmod 600 "$server_env"
+  fi
+  say "Copying aMail to $server_dir …"
+  mkdir -p "$server_dir"
+  if have rsync; then
+    rsync -a --delete --exclude node_modules --exclude .git --exclude dist --exclude data "$here/" "$server_dir/"
+  else
+    (cd "$here" && find . -path ./node_modules -prune -o -path ./.git -prune -o -path ./dist -prune -o -path ./data -prune -o -type f -print0 | xargs -0 -I{} cp --parents {} "$server_dir/")
+  fi
+  say "Installing server dependencies (npm ci) …"
+  (cd "$server_dir" && "$npm" ci --no-audit --no-fund --loglevel=error)
+  say "Building the web client …"
+  (cd "$server_dir" && "$npm" run build --silent)
+  cat > "$unit_file" <<UNIT
+[Unit]
+Description=aMail (Agentic Mail) local server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=$server_env
+WorkingDirectory=$server_dir
+ExecStart=$node $server_dir/server/index.js
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target
+UNIT
+  systemctl --user daemon-reload
+  systemctl --user enable --now "$unit_name"
+  say "Waiting for aMail on http://127.0.0.1:$server_port …"
+  for _ in $(seq 1 40); do
+    curl -fsS "http://127.0.0.1:$server_port/api/health" >/dev/null 2>&1 && break
+    sleep 0.5
+  done
+  curl -fsS "http://127.0.0.1:$server_port/api/health" >/dev/null 2>&1 || { systemctl --user status "$unit_name" --no-pager | tail -20; die "server did not come up; see: journalctl --user -u $unit_name"; }
+  local token; token="$(sed -n 's/^AMAIL_ACCESS_TOKEN=//p' "$server_env")"
+  AMAIL_ACCESS_TOKEN="$token" MODE=server cmd_connect "http://127.0.0.1:$server_port"
+  say
+  say "aMail is running locally. Open it (amail-plugin open) and add your mailboxes; agents connect with:"
+  "$run" cli mcp-config | jq .
+  say "The token lives in $server_env and $config_dir/token."
+}
+
+cmd_server() {
+  local sub="${1:-status}"; shift || true
+  case "$sub" in
+    install) server_install ;;
+    start|stop|restart) systemctl --user "$sub" "$unit_name" ;;
+    status) systemctl --user status "$unit_name" --no-pager 2>/dev/null || say "not installed (amail-plugin server install)" ;;
+    logs) journalctl --user -u "$unit_name" -n "${1:-100}" -f ;;
+    uninstall)
+      systemctl --user disable --now "$unit_name" 2>/dev/null || true
+      rm -f "$unit_file"; systemctl --user daemon-reload
+      say "Service removed. Mail data kept in $data_dir; secrets kept in $server_env; server copy in $server_dir." ;;
+    *) die "usage: amail-plugin server <install|start|stop|restart|status|logs|uninstall>" ;;
+  esac
+}
+
+cmd_daemon_logs() { tail -n "${1:-100}" -f "$state_dir/daemon.log" 2>/dev/null || die "no daemon log at $state_dir/daemon.log"; }
+
+case "${1:-help}" in
+  connect) shift; cmd_connect "$@" ;;
+  server) shift; cmd_server "$@" ;;
+  status) cmd_status ;;
+  open) cmd_open ;;
+  refresh) "$run" cli refresh ;;
+  sync) "$run" cli sync ;;
+  mcp-config) "$run" cli mcp-config | jq . ;;
+  set) shift; "$run" cli set "$@" ;;
+  config) "$run" cli config | jq . ;;
+  health) "$run" cli health | jq . ;;
+  enable) cmd_enable ;;
+  disable) cmd_disable ;;
+  logs) shift; cmd_daemon_logs "$@" ;;
+  cli) shift; "$run" cli "$@" ;;
+  help|-h|--help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *) die "unknown command '$1' (try: amail-plugin help)" ;;
+esac
