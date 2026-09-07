@@ -144,6 +144,7 @@ function detectNew(conversations, accountEmails) {
 }
 
 async function refresh(reason = 'timer') {
+  if (!api) return;
   if (refreshing) { refreshQueued = true; return; }
   refreshing = true;
   try {
@@ -279,6 +280,7 @@ function handleEventBlock(block, armHeartbeat) {
   if (type === 'hello') {
     armHeartbeat(Math.max(30_000, (Number(event?.heartbeatMs) || 20_000) * 3));
     if (event?.gap || !lastRefreshAt) scheduleRefresh('hello');
+    writeState();
     return;
   }
   armHeartbeat(75_000);
@@ -299,7 +301,7 @@ function handleEventBlock(block, armHeartbeat) {
 
 // ---------------------------------------------------------------- poll
 async function nudgeSync() {
-  if (syncInFlight) return;
+  if (!api || syncInFlight) return;
   syncInFlight = true;
   try {
     // A full sync over many accounts can take a while; do not let it block

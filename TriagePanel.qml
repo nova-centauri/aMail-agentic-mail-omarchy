@@ -607,6 +607,18 @@ Panel {
     }
   }
 
+  function debugInfo() {
+    return JSON.stringify({
+      opened: root.opened, windowOpen: panelWindow.open, windowVisible: panelWindow.visible,
+      screen: panelWindow.screen ? panelWindow.screen.name : null,
+      contentWidth: panelWindow.contentWidth, contentHeight: panelWindow.contentHeight,
+      cardOrigin: [panelWindow.cardOrigin.x, panelWindow.cardOrigin.y],
+      anchor: [panelWindow.anchorScreenPos.x, panelWindow.anchorScreenPos.y, panelWindow.anchorW, panelWindow.anchorH],
+      barPos: panelWindow.barPos, hasBar: !!root.bar, items: root.items.length,
+      columnH: column.height, bodyH: body.height, listVisible: listView.visible
+    })
+  }
+
   function stepConversation(dx) {
     if (items.length === 0) return
     var next = clamp(cursor + dx, 0, items.length - 1)

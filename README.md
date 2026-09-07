@@ -20,6 +20,51 @@ aMail is the open-source continuation of GigaMail and upgrades existing GigaMail
 - **Secure by default.** Credentials encrypted at rest (AES-256-GCM), access-token gate, passkey (WebAuthn) unlock, read-only non-root container bound to loopback.
 - **A real mail client.** Compose with a visual HTML editor, recipient chips, attachments, per-account signatures and identities, Gmail-style shortcuts, right-click context menus on conversations, messages, drafts, and accounts, FTS5 search with operators, snooze, star, archive.
 
+## Omarchy plugin
+
+This repository is also an [Omarchy](https://omarchy.org) shell plugin: aMail in the bar, with a triage panel and desktop toasts for new mail. It runs in two modes.
+
+| Mode | What runs where | When to use it |
+| --- | --- | --- |
+| **Client** | The plugin follows an aMail server you already run (Docker, a VPS, a home box). Only a small daemon runs on the desktop. | You have one hub and several machines. |
+| **Server** | The plugin installs aMail on this machine as a systemd user service and follows it on `127.0.0.1:3080`. | This is the hub. |
+
+Both modes share one plugin, one badge, one panel, and one MCP endpoint for your agents.
+
+```sh
+omarchy plugin add https://github.com/nova-centauri/aMail-agentic-mail-omarchy.git --enable
+PLUGIN=~/.config/omarchy/plugins/io.github.nova-centauri.amail
+
+$PLUGIN/bin/amail-plugin connect https://mail.example.com    # client mode: prompts for AMAIL_ACCESS_TOKEN
+$PLUGIN/bin/amail-plugin server install                     # server mode: node ≥ 22, generates secrets, starts the service
+```
+
+Put `$PLUGIN/bin` on your `PATH` (or symlink `amail-plugin` into `~/.local/bin`) and the rest is:
+
+```sh
+amail-plugin status        # what the daemon sees: transport, counts, accounts, last event
+amail-plugin open          # the full aMail web client as an Omarchy web app
+amail-plugin mcp-config    # the MCP snippet for Cursor / Claude / Codex
+amail-plugin set badge unanalyzed   # bar badge: unread (default), unanalyzed, or both
+amail-plugin set toasts false
+amail-plugin server logs   # server mode only
+```
+
+**Bar widget.** `󰇮 3` is the unread count (or the not-yet-analyzed count, your choice). Dimmed means the server is unreachable. Left-click opens the panel, middle-click refreshes, right-click opens the web client.
+
+**Panel.** Three views: Unread, Not analyzed, Inbox. `j`/`k` move, `Enter` reads the thread, `a` marks analyzed, `e` archives, `r` toggles read, `s` stars, `#` trashes, `o` opens the web client, `c` composes there, `1`/`2`/`3` switch views, `?` shows the keys. Every action is applied optimistically and confirmed by the next push from the server.
+
+**New mail is pushed, not polled.** This fork adds two pieces to the server so a message reaches the bar about a second after the provider receives it:
+
+- `server/services/idle.js` parks one IMAP connection per account in `IDLE` on INBOX and runs an inbox-only sync the instant the server reports new mail (`AMAIL_IMAP_IDLE=true`, the default; `AMAIL_IMAP_IDLE_MAX_MS` re-issues IDLE before servers time it out). The periodic poll (`SYNC_INTERVAL_MINUTES`) stays on as the safety net.
+- `GET /api/events` is a Server-Sent Events stream of `message.new`, `message.state`, `message.sent`, `sync.*`, and `account.*` events, gated by the same token as everything else. The plugin daemon holds one such connection; agents can too. `Last-Event-ID` replays what a short disconnect missed.
+
+`GET /api/health` advertises `"features": ["events", "idle"]` so the plugin picks push automatically. Against an older aMail server it falls back to what a focused browser tab does: list polling every `pollSeconds` and a `POST /api/sync` nudge every `syncSeconds`.
+
+**Files.** `~/.config/amail/plugin.json` (mode, URL, settings), `~/.config/amail/token` (0600), `~/.local/state/amail/state.json` (what the bar renders: subjects, senders, counts, ids; never bodies), and in server mode `~/.config/amail/server.env` plus `~/.local/share/amail/` (database and a private copy of the server). Message bodies are fetched on demand when you open a thread and are not written to disk by the plugin.
+
+**IPC.** `omarchy-shell io.github.nova-centauri.amail status|open|close|toggle|refresh|web|counts`, and `goto <conversationId>` to open one conversation (this is what a toast's Open button does).
+
 ## Quick start (Docker)
 
 ```sh

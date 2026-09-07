@@ -91,6 +91,15 @@ BarWidget {
     onLoaded: root.applyState(text())
   }
 
+  // Followers (other screens) only see inotify events; poll gently as a
+  // fallback so a missed rename never leaves a stale badge.
+  Timer {
+    interval: root.leader ? 30000 : 5000
+    running: true
+    repeat: true
+    onTriggered: stateView.reload()
+  }
+
   // ---- the daemon (leader only). It exits 75 when setup completes so it can
   // come back with the new configuration; anything else is a crash we retry.
   Process {
@@ -98,7 +107,10 @@ BarWidget {
     running: root.leader
     command: [root.runner, "daemon"]
     environment: ({ AMAIL_PLUGIN_ID: root.moduleName })
-    stdout: SplitParser { onRead: function(line) { /* state file carries everything */ } }
+    // Each state line means the file was just rewritten. Reloading here covers
+    // the first write (FileView cannot watch a file that does not exist yet)
+    // and makes the leader's badge move the instant the daemon does.
+    stdout: SplitParser { onRead: function(line) { stateView.reload() } }
     stderr: SplitParser {
       onRead: function(line) {
         root.daemonLog = String(line).slice(0, 400)
@@ -182,6 +194,7 @@ BarWidget {
     function refresh(): string { root.refresh(); return "ok" }
     function goto(id: string): string { root.showConversation(id); return "shown" }
     function web(): string { root.openWeb(""); return "ok" }
+    function debug(): string { return panel.debugInfo() }
     function counts(): string { return JSON.stringify({ unread: root.unread, unanalyzed: root.unanalyzed, online: root.online, transport: root.transport }) }
   }
 }
