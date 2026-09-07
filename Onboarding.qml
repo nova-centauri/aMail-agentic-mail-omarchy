@@ -255,7 +255,7 @@ Item {
           }
           Button {
             text: "Back"
-            foreground: root.foreground; accent: root.accent; fontFamily: root.fontFamily; fontSize: Style.font.bodySmall
+            foreground: root.foreground; accent: root.accent; fontFamily: root.fontFamily; fontSize: Style.font.body
             onClicked: { root.error = ""; root.step = "mode" }
           }
         }
@@ -321,7 +321,7 @@ Item {
           Button {
             text: "Back"
             enabled: !root.busy
-            foreground: root.foreground; accent: root.accent; fontFamily: root.fontFamily; fontSize: Style.font.bodySmall
+            foreground: root.foreground; accent: root.accent; fontFamily: root.fontFamily; fontSize: Style.font.body
             onClicked: { root.error = ""; root.step = "mode" }
           }
         }
@@ -376,6 +376,8 @@ Item {
         Text {
           width: parent.width
           text: (widget.mode === "server" ? "Server mode · " : "Client mode · ") + widget.url
+            + " · " + widget.accounts.length + " accounts"
+            + (widget.idle && widget.idle.enabled ? " · IDLE " + widget.idle.connected + "/" + widget.idle.total : "")
           color: root.dim; font.family: root.fontFamily; font.pixelSize: Style.font.caption; elide: Text.ElideRight
         }
         PanelSectionHeader { text: "Bar badge"; foreground: root.foreground; fontFamily: root.fontFamily }
@@ -398,7 +400,7 @@ Item {
           spacing: Style.space(6)
           Button { text: "Change server or token"; iconText: "󰌆"; foreground: root.foreground; accent: root.accent; fontFamily: root.fontFamily; fontSize: Style.font.bodySmall; onClicked: { root.error = ""; root.step = "mode" } }
           Button { text: "Open aMail"; iconText: "󰖟"; foreground: root.foreground; accent: root.accent; fontFamily: root.fontFamily; fontSize: Style.font.bodySmall; onClicked: { widget.openWeb(""); root.finished() } }
-          Button { text: "Done"; foreground: root.foreground; accent: root.accent; fontFamily: root.fontFamily; fontSize: Style.font.bodySmall; onClicked: root.finished() }
+          Button { text: "Done"; iconText: "󰄬"; foreground: root.foreground; accent: root.accent; fontFamily: root.fontFamily; fontSize: Style.font.bodySmall; onClicked: root.finished() }
         }
       }
     }

@@ -22,6 +22,48 @@ aMail is the open-source continuation of GigaMail and upgrades existing GigaMail
 
 ## Omarchy plugin
 
+<p align="center"><img src="docs/screenshots/bar.png" alt="The Omarchy bar with the aMail counters: 12 unread, 15 not yet analyzed" width="720"></p>
+
+Two counters live in the bar. **󰇮 unread** is the human queue. **󰚩 not analyzed** is the agent queue: messages no agent has processed yet. Both move within about a second of new mail arriving when the server runs this fork.
+
+<table>
+  <tr>
+    <td><img src="docs/screenshots/panel-unread.png" alt="Triage panel, Unread view" width="100%"></td>
+    <td><img src="docs/screenshots/panel-thread.png" alt="Reading a thread in the panel" width="100%"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Unread view. Account colour on the left, robot glyph on anything an agent has not analyzed yet.</sub></td>
+    <td align="center"><sub>A thread, with analyzed / archive / star / read / trash one key away.</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/panel-job.png" alt="Mark all read running as a throttled job with a progress bar" width="100%"></td>
+    <td><img src="docs/screenshots/panel-unanalyzed.png" alt="Not analyzed view" width="100%"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Bulk work runs as a throttled background job: progress, rate, ETA, worker count, cancel.</sub></td>
+    <td align="center"><sub>The agent queue. <code>a</code> marks a conversation analyzed by hand.</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/wizard-mode.png" alt="First-run wizard: choose client or server mode" width="100%"></td>
+    <td><img src="docs/screenshots/wizard-client.png" alt="Client mode: server URL and access token" width="100%"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>First run: follow a server you already run, or run aMail here.</sub></td>
+    <td align="center"><sub>Client mode verifies the token live before saving it (0600).</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/wizard-server.png" alt="Server mode: one-click install" width="100%"></td>
+    <td><img src="docs/screenshots/settings.png" alt="Settings: badge and toasts" width="100%"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Server mode: secrets, systemd user unit, IMAP IDLE, done.</sub></td>
+    <td align="center"><sub>Settings: which counters the bar shows, desktop toasts.</sub></td>
+  </tr>
+</table>
+
+<sub>Every name, address, and subject in these screenshots is fabricated (<code>node plugin/demo.mjs</code> renders the same demo inbox on any machine; <code>node plugin/demo.mjs off</code> returns to live mail).</sub>
+
+
 This repository is also an [Omarchy](https://omarchy.org) shell plugin: aMail in the bar, with a triage panel and desktop toasts for new mail. It runs in two modes.
 
 | Mode | What runs where | When to use it |
@@ -50,9 +92,11 @@ amail-plugin set toasts false
 amail-plugin server logs   # server mode only
 ```
 
-**Bar widget.** `󰇮 3` is the unread count (or the not-yet-analyzed count, your choice). Dimmed means the server is unreachable. Left-click opens the panel, middle-click refreshes, right-click opens the web client.
+**Bar widget.** `󰇮 12  󰚩 15` is unread and not-yet-analyzed; `amail-plugin set badge unread|unanalyzed|both` picks what shows. Dimmed means the server is unreachable. Left-click opens the panel, middle-click refreshes, right-click opens the web client.
 
-**Panel.** Three views: Unread, Not analyzed, Inbox. `j`/`k` move, `Enter` reads the thread, `a` marks analyzed, `e` archives, `r` toggles read, `s` stars, `#` trashes, `o` opens the web client, `c` composes there, `1`/`2`/`3` switch views, `?` shows the keys. Every action is applied optimistically and confirmed by the next push from the server.
+**Bulk work stays light.** Mark all read (the envelope in the header, or `M`) runs as a background job in the CLI, not in the shell: it pages through the server's unread view, then works with at most two concurrent requests, a pacing gap between them, and an automatic drop to one worker when the server slows down. The panel shows progress, rate, ETA, and a cancel button, and keeps the job running while closed. Meanwhile the daemon coalesces the resulting flood of state events into at most one refresh every 1.5 s.
+
+**Panel.** Three views: Unread, Not analyzed, Inbox. `j`/`k` move, `Enter` reads the thread, `a` marks analyzed, `e` archives, `r` toggles read, `M` marks everything read, `s` stars, `#` trashes, `o` opens the web client, `c` composes there, `1`/`2`/`3` switch views, `?` shows the keys. Every action is applied optimistically and confirmed by the next push from the server.
 
 **New mail is pushed, not polled.** This fork adds two pieces to the server so a message reaches the bar about a second after the provider receives it:
 
@@ -63,7 +107,7 @@ amail-plugin server logs   # server mode only
 
 **Files.** `~/.config/amail/plugin.json` (mode, URL, settings), `~/.config/amail/token` (0600), `~/.local/state/amail/state.json` (what the bar renders: subjects, senders, counts, ids; never bodies), and in server mode `~/.config/amail/server.env` plus `~/.local/share/amail/` (database and a private copy of the server). Message bodies are fetched on demand when you open a thread and are not written to disk by the plugin.
 
-**IPC.** `omarchy-shell io.github.nova-centauri.amail status|open|close|toggle|refresh|web|counts`, and `goto <conversationId>` to open one conversation (this is what a toast's Open button does).
+**IPC.** `omarchy-shell io.github.nova-centauri.amail status|open|close|toggle|refresh|web|counts`, `goto <conversationId>` to open one conversation (what a toast's Open button does), `view unread|unanalyzed|all`, `setup`, `snapshot <file.png>` to render the open panel to a PNG, and `debug` for geometry and job state.
 
 ## Quick start (Docker)
 

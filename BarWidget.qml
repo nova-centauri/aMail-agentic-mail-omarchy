@@ -20,7 +20,13 @@ BarWidget {
   readonly property string home: Quickshell.env("HOME")
   readonly property string pluginDir: decodeURIComponent(Qt.resolvedUrl(".").toString().replace(/^file:\/\//, "").replace(/\/$/, ""))
   readonly property string runner: pluginDir + "/bin/amail-run"
-  readonly property string stateFile: home + "/.local/state/amail/state.json"
+  readonly property string liveStateFile: home + "/.local/state/amail/state.json"
+  // Demo mode: drop a fabricated state at ~/.local/state/amail/demo.json
+  // (plugin/demo.mjs writes one) and the widget renders it instead of the
+  // daemon's, without running the daemon. Used for screenshots and docs.
+  readonly property string demoFile: home + "/.local/state/amail/demo.json"
+  property bool demo: false
+  readonly property string stateFile: demo ? demoFile : liveStateFile
 
   readonly property var ownScreen: QsWindow.window ? QsWindow.window.screen : null
   readonly property bool leader: !ownScreen || Quickshell.screens.length === 0
@@ -43,14 +49,29 @@ BarWidget {
   property string conversationsJson: ""
   property var idle: null
   property string daemonLog: ""
+  property var demoThreads: ({})
 
-  readonly property string badgeMode: String(setting("badge", "unread"))
+  // Two counters, two meanings: 󰇮 unread is the human queue, 󰚩 unanalyzed is
+  // the agent queue (messages no agent has processed yet). "badge" picks
+  // which to show: both (default), unread, or unanalyzed.
+  property string badgeSetting: String(setting("badge", ""))
+  readonly property string badgeMode: badgeSetting !== "" ? badgeSetting : configBadge
+  property string configBadge: "both"
   readonly property bool showZero: setting("showZero", false) === true
-  readonly property int badgeCount: badgeMode === "unanalyzed" ? unanalyzed : unread
-  readonly property string badgeText: badgeMode === "both"
-    ? (unread + "·" + unanalyzed)
-    : String(badgeCount)
-  readonly property bool hasWork: badgeMode === "both" ? (unread > 0 || unanalyzed > 0) : badgeCount > 0
+  readonly property bool showUnread: badgeMode !== "unanalyzed"
+  readonly property bool showUnanalyzed: badgeMode !== "unread"
+  function compact(n) {
+    if (n < 1000) return String(n)
+    if (n < 10000) return (n / 1000).toFixed(1).replace(/\.0$/, "") + "k"
+    return Math.round(n / 1000) + "k"
+  }
+  readonly property string badgeText: {
+    var parts = []
+    if (showUnread && (unread > 0 || showZero)) parts.push("󰇮 " + compact(unread))
+    if (showUnanalyzed && (unanalyzed > 0 || showZero)) parts.push("󰚩 " + compact(unanalyzed))
+    return parts.length ? parts.join("  ") : "󰇮"
+  }
+  readonly property bool hasWork: (showUnread && unread > 0) || (showUnanalyzed && unanalyzed > 0)
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
@@ -71,6 +92,8 @@ BarWidget {
     root.unanalyzed = Number(d.unanalyzed) || 0
     root.inboxTotal = Number(d.inboxTotal) || 0
     root.idle = d.idle || null
+    if (d.badge) root.configBadge = String(d.badge)
+    root.demoThreads = d.demoThreads && typeof d.demoThreads === "object" ? d.demoThreads : ({})
     var accounts = Array.isArray(d.accounts) ? d.accounts : []
     if (JSON.stringify(accounts) !== JSON.stringify(root.accounts)) root.accounts = accounts
     var list = Array.isArray(d.conversations) ? d.conversations : []
@@ -90,6 +113,16 @@ BarWidget {
     onFileChanged: reload()
     onLoaded: root.applyState(text())
   }
+  FileView {
+    id: demoProbe
+    path: root.demoFile
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: root.demo = String(text()).trim() !== ""
+    onLoadFailed: root.demo = false
+  }
+  onDemoChanged: stateView.reload()
 
   // Followers (other screens) only see inotify events; poll gently as a
   // fallback so a missed rename never leaves a stale badge.
@@ -104,7 +137,7 @@ BarWidget {
   // come back with the new configuration; anything else is a crash we retry.
   Process {
     id: daemon
-    running: root.leader
+    running: root.leader && !root.demo
     command: [root.runner, "daemon"]
     environment: ({ AMAIL_PLUGIN_ID: root.moduleName })
     // Each state line means the file was just rewritten. Reloading here covers
@@ -129,11 +162,11 @@ BarWidget {
   Timer {
     id: restartTimer
     repeat: false
-    onTriggered: if (root.leader && !daemon.running) daemon.running = true
+    onTriggered: if (root.leader && !root.demo && !daemon.running) daemon.running = true
   }
   onLeaderChanged: {
-    if (root.leader && !daemon.running) daemon.running = true
-    if (!root.leader && daemon.running) daemon.running = false
+    if (root.leader && !root.demo && !daemon.running) daemon.running = true
+    if ((!root.leader || root.demo) && daemon.running) daemon.running = false
   }
 
   Process {
@@ -158,7 +191,7 @@ BarWidget {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: "󰇮" + ((root.hasWork || root.showZero) ? " " + root.badgeText : "")
+    text: root.badgeText
     active: root.unread > 0
     dimmed: !root.online
     tooltipText: !root.configured ? "aMail: click to set up"
@@ -195,6 +228,12 @@ BarWidget {
     function goto(id: string): string { root.showConversation(id); return "shown" }
     function web(): string { root.openWeb(""); return "ok" }
     function debug(): string { return panel.debugInfo() }
+    function snapshot(path: string): string { return panel.snapshot(path) }
+    function demo(): string { return "demo=" + root.demo + " file=" + root.demoFile }
+    function dryrun(): string { return panel.dryRunJob() }
+    function shelljob(): string { return panel.shellJob() }
+    function view(name: string): string { panel.setFilter(String(name)); return "ok" }
+    function setup(step: string): string { panel.openSetup(String(step || "mode")); return "ok" }
     function counts(): string { return JSON.stringify({ unread: root.unread, unanalyzed: root.unanalyzed, online: root.online, transport: root.transport }) }
   }
 }

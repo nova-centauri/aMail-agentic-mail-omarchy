@@ -19,7 +19,7 @@ export const DEFAULT_CONFIG = Object.freeze({
   mode: 'client',            // "client" (remote aMail) or "server" (local aMail managed by the plugin)
   url: '',                   // base URL of the aMail instance, e.g. https://mail.example.com
   tokenFile: TOKEN_FILE,     // 0600 file holding AMAIL_ACCESS_TOKEN
-  badge: 'unread',           // bar badge: "unread" | "unanalyzed" | "both"
+  badge: 'both',             // bar badge: "both" (unread + not yet analyzed) | "unread" | "unanalyzed"
   toasts: true,              // desktop notification for new unread mail
   toastSnippet: false,       // include a body snippet in the toast (lands in notification history)
   listSize: 60,              // conversations kept in the panel

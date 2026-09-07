@@ -9,6 +9,9 @@ import {
 } from './lib.mjs';
 
 const [command, ...rest] = process.argv.slice(2);
+// A consumer that stops reading (the panel closing a job, `| head`) must not
+// turn into a crash dump; just stop.
+process.stdout.on('error', (error) => { if (error?.code === 'EPIPE') process.exit(0); });
 
 function out(value) {
   process.stdout.write(`${JSON.stringify(value)}\n`);
@@ -96,35 +99,79 @@ async function main() {
       return;
     }
     case 'read-all': {
-      // Mark every unread inbox conversation read. Pages through the server's
-      // own is:unread view (not just the panel's window) and fans the POSTs
-      // out with bounded concurrency; each one also updates IMAP server-side.
+      // Mark every unread inbox conversation read as a throttled job.
+      //
+      // A large inbox means thousands of POSTs, each of which also sets the
+      // IMAP flag server-side, so this deliberately runs light: bounded
+      // concurrency (default 2), a pacing gap between requests, and an
+      // adaptive backoff to one worker when the server gets slow. Progress
+      // is streamed as JSON lines so the panel can draw a bar and an ETA:
+      //   {"type":"progress","done":n,"total":N,"failed":f,"rate":r,"etaSeconds":s}
+      //   {"type":"done",...}
       const { client } = api();
       const accountId = opt('account', '');
+      const dryRun = rest.includes('--dry-run');
+      const maxConcurrency = Math.max(1, Math.min(4, Number(opt('concurrency', 2)) || 2));
+      const limit = Math.max(1, Math.min(20_000, Number(opt('limit', 5000)) || 5000));
+      const paceMs = Math.max(0, Number(opt('pace', 40)) || 0);
+      const emit = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
+
+      emit({ type: 'start', phase: 'scan' });
       const ids = [];
-      for (let page = 1; page <= 10; page += 1) {
+      for (let page = 1; page <= Math.ceil(limit / 200); page += 1) {
         const payload = await client.get(`/api/messages?folder=inbox&q=${encodeURIComponent('is:unread')}&pageSize=200&page=${page}${accountId ? `&accountId=${encodeURIComponent(accountId)}` : ''}`);
         const batch = (payload.messages || []).filter((conversation) => !conversation.isRead).map((conversation) => conversation.id);
         ids.push(...batch);
-        if ((payload.messages || []).length < 200) break;
+        emit({ type: 'progress', phase: 'scan', done: 0, total: Math.min(limit, Number(payload.total) || ids.length), scanned: ids.length });
+        if ((payload.messages || []).length < 200 || ids.length >= limit) break;
       }
-      let marked = 0;
+      const queue = [...new Set(ids)].slice(0, limit);
+      const total = queue.length;
+      let done = 0;
       let failed = 0;
-      const queue = [...new Set(ids)];
+      let concurrency = maxConcurrency;
+      let slowStreak = 0;
+      const startedAt = Date.now();
+      let lastEmit = 0;
+      const report = (type = 'progress') => {
+        const elapsed = (Date.now() - startedAt) / 1000;
+        const rate = elapsed > 0 ? done / elapsed : 0;
+        const remaining = total - done - failed;
+        emit({ type, phase: 'mark', done, failed, total, rate: Number(rate.toFixed(2)), etaSeconds: rate > 0 ? Math.round(remaining / rate) : null, concurrency, dryRun });
+        lastEmit = Date.now();
+      };
+      report('start');
+      const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+      let active = 0;
       const worker = async () => {
-        while (queue.length) {
+        while (queue.length && !stopped) {
+          // Adaptive: workers beyond the current allowance park until it grows back.
+          if (active >= concurrency) { await sleep(100); continue; }
+          active += 1;
           const id = queue.shift();
+          const t0 = Date.now();
           try {
-            await client.post(`/api/messages/${encodeURIComponent(id)}/read`, { read: true }, { timeout: 60_000 });
-            marked += 1;
+            if (!dryRun) await client.post(`/api/messages/${encodeURIComponent(id)}/read`, { read: true }, { timeout: 60_000 });
+            else await sleep(15);
+            done += 1;
           } catch {
             failed += 1;
+          } finally {
+            active -= 1;
           }
+          const took = Date.now() - t0;
+          if (took > 2500) { slowStreak += 1; if (slowStreak >= 3 && concurrency > 1) { concurrency = 1; slowStreak = 0; } }
+          else if (took < 800) { slowStreak = 0; if (concurrency < maxConcurrency && (done + failed) % 25 === 0) concurrency += 1; }
+          if (Date.now() - lastEmit >= 250) report();
+          if (paceMs) await sleep(paceMs);
         }
       };
-      await Promise.all(Array.from({ length: Math.min(6, queue.length || 1) }, worker));
+      let stopped = false;
+      for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { stopped = true; });
+      await Promise.all(Array.from({ length: Math.min(maxConcurrency, total || 1) }, worker));
       pokeDaemon();
-      out({ ok: failed === 0, marked, failed, total: ids.length });
+      report(stopped ? 'cancelled' : 'done');
+      if (stopped) process.exit(130);
       return;
     }
     case 'list': {

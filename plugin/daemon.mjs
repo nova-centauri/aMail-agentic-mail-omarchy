@@ -189,12 +189,21 @@ async function refresh(reason = 'timer') {
   }
 }
 
+// Throttle: a bulk job (mark all read, an agent sweeping a thousand
+// messages) produces a firehose of state events. Coalesce them so the daemon
+// re-fetches at most about once every 1.5 s while that is going on, and
+// immediately again once it goes quiet.
+const MIN_REFRESH_GAP_MS = 1_500;
+let lastRefreshStartedAt = 0;
 function scheduleRefresh(reason, delayMs = 150) {
   if (refreshTimer) return;
+  const sinceLast = Date.now() - lastRefreshStartedAt;
+  const delay = Math.max(delayMs, MIN_REFRESH_GAP_MS - sinceLast);
   refreshTimer = setTimeout(() => {
     refreshTimer = null;
+    lastRefreshStartedAt = Date.now();
     void refresh(reason);
-  }, delayMs);
+  }, delay);
 }
 
 async function probeHealth() {
@@ -372,7 +381,7 @@ async function main() {
   setInterval(() => {}, 60_000);
 }
 
-process.on('SIGUSR1', () => scheduleRefresh('signal', 0));
+process.on('SIGUSR1', () => scheduleRefresh('signal', 50));
 process.on('SIGUSR2', () => { void nudgeSync(); scheduleRefresh('signal', 0); });
 for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
   process.on(signal, () => {

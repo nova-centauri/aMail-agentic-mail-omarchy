@@ -84,8 +84,7 @@ Panel {
     if (!widget.configured) return "Not configured — run: amail-plugin connect <url>"
     if (!widget.online) return "Offline" + (widget.lastError !== "" ? " · " + widget.lastError : "")
     var t = widget.transport === "push" ? "push" : widget.transport === "poll" ? "polling" : widget.transport
-    var idle = widget.idle && widget.idle.enabled ? " · IDLE " + widget.idle.connected + "/" + widget.idle.total : ""
-    return widget.unread + " unread · " + widget.unanalyzed + " to analyze · " + widget.accounts.length + " accounts · " + t + idle
+    return widget.unread + " unread · " + widget.unanalyzed + " to analyze · " + t
   }
 
   // ---------------------------------------------------------------- actions
@@ -115,10 +114,17 @@ Panel {
     root.thread = null
     root.threadError = ""
     root.threadLoading = true
-    threadProc.forId = root.openId
-    threadProc.command = [root.runner, "cli", "thread", root.openId]
-    if (threadProc.running) threadProc.running = false
-    threadProc.running = true
+    if (widget.demo) {
+      var demo = widget.demoThreads[root.openId]
+      root.threadLoading = false
+      if (demo) { root.thread = demo; root.override(root.openId, { isRead: true, unreadCount: 0 }) }
+      else root.threadError = "no demo thread"
+    } else {
+      threadProc.forId = root.openId
+      threadProc.command = [root.runner, "cli", "thread", root.openId]
+      if (threadProc.running) threadProc.running = false
+      threadProc.running = true
+    }
     var idx = -1
     for (var i = 0; i < items.length; i++) if (items[i].id === root.openId) idx = i
     if (idx >= 0) root.cursor = idx
@@ -165,7 +171,7 @@ Panel {
   }
 
   function act(id, action) {
-    if (!id) return
+    if (!id || widget.demo) return
     var cmd = [root.runner, "cli", "action", String(id), action]
     if (actionProc.running) { var q = actionProc.queue.slice(); q.push(cmd); actionProc.queue = q; return }
     actionProc.command = cmd
@@ -216,36 +222,105 @@ Panel {
     act(id, "trash"); flash("Moved to trash")
     if (openId !== "") backToList()
   }
+  // ---------------------------------------------------------------- bulk jobs
+  //
+  // Anything that touches many conversations runs as a throttled background
+  // job in the CLI, which streams progress lines. The panel draws a bar with
+  // rate and ETA, lets you cancel, and keeps the job alive while closed.
+  property var job: null   // { name, phase, done, failed, total, rate, etaSeconds, concurrency, running }
+
   Process {
-    id: readAllProc
-    stdout: StdioCollector {
-      onStreamFinished: {
-        try {
-          var d = JSON.parse(text.trim())
-          if (d.ok === true) root.flash(d.marked > 0 ? "Marked " + d.marked + " read" : "Nothing was unread")
-          else root.flash("✗ " + (d.failed ? d.failed + " could not be marked read" : String(d.error || "mark all read failed")))
-        } catch (e) { root.flash("✗ mark all read failed") }
+    id: jobProc
+    property string jobName: ""
+    property string lastStderr: ""
+    property int lines: 0
+    property string lastLine: ""
+    stderr: SplitParser { onRead: function(line) { jobProc.lastStderr = String(line).slice(0, 300) } }
+    stdout: SplitParser {
+      onRead: function(line) {
+        jobProc.lines += 1
+        jobProc.lastLine = String(line).slice(0, 200)
+        var d
+        try { d = JSON.parse(String(line).trim()) } catch (e) { return }
+        if (!d || !d.type) return
+        var j = Object.assign({}, root.job || {}, {
+          name: jobProc.jobName,
+          phase: String(d.phase || ""),
+          done: Number(d.done) || 0,
+          failed: Number(d.failed) || 0,
+          total: Number(d.total) || 0,
+          scanned: Number(d.scanned) || 0,
+          rate: Number(d.rate) || 0,
+          etaSeconds: d.etaSeconds === null || d.etaSeconds === undefined ? -1 : Number(d.etaSeconds),
+          concurrency: Number(d.concurrency) || 0,
+          running: d.type !== "done" && d.type !== "cancelled"
+        })
+        root.job = j
+        if (d.type === "done") {
+          root.flash(j.failed > 0 ? "Done: " + j.done + " read, " + j.failed + " failed" : (j.done > 0 ? "Marked " + j.done + " read" : "Nothing was unread"))
+          jobClear.restart()
+          widget.refresh()
+        } else if (d.type === "cancelled") {
+          root.flash("Cancelled after " + j.done)
+          jobClear.restart()
+          widget.refresh()
+        }
+      }
+    }
+    onExited: function(code) {
+      if (root.job && root.job.running) {
+        root.job = Object.assign({}, root.job, { running: false })
+        root.flash(code === 0 ? "Finished" : "✗ job stopped (exit " + code + ")")
+        jobClear.restart()
         widget.refresh()
       }
     }
   }
+  Timer { id: jobClear; interval: 6000; onTriggered: if (root.job && !root.job.running) root.job = null }
+
+  function startJob(name, args) {
+    if (jobProc.running) { flash("A job is already running"); return false }
+    root.job = { name: name, phase: "scan", done: 0, failed: 0, total: 0, scanned: 0, rate: 0, etaSeconds: -1, concurrency: 0, running: true }
+    jobProc.jobName = name
+    jobProc.command = [root.runner, "cli"].concat(args)
+    jobProc.running = true
+    return true
+  }
+  function cancelJob() {
+    if (!jobProc.running) return
+    jobProc.signal(15)
+    flash("Stopping…")
+  }
+  function jobLabel() {
+    var j = root.job
+    if (!j) return ""
+    if (j.phase === "scan") return j.name + " · scanning" + (j.scanned ? " " + j.scanned : "") + (j.total ? " of " + j.total : "") + "…"
+    var text = j.name + " · " + j.done + " / " + j.total
+    if (j.failed) text += " · " + j.failed + " failed"
+    if (j.running && j.rate > 0) text += " · " + j.rate.toFixed(1) + "/s"
+    if (j.running && j.etaSeconds >= 0) text += " · " + root.etaText(j.etaSeconds) + " left"
+    if (j.running && j.concurrency) text += " · " + j.concurrency + (j.concurrency === 1 ? " worker" : " workers")
+    if (!j.running) text += " · done"
+    return text
+  }
+  function etaText(seconds) {
+    if (seconds < 60) return seconds + "s"
+    if (seconds < 3600) return Math.round(seconds / 60) + " min"
+    return (seconds / 3600).toFixed(1) + " h"
+  }
+
   function markAllRead() {
-    if (readAllProc.running) return
     var list = widget.conversations
     var next = Object.assign({}, pending)
-    var n = 0
     for (var i = 0; i < list.length; i++) {
       if (list[i].isRead) continue
       next[list[i].id] = Object.assign({}, next[list[i].id] || {}, { isRead: true, unreadCount: 0 })
-      n += 1
     }
+    if (!startJob("Mark all read", ["read-all"])) return
     root.pending = next
     overrideTtl.restart()
     // The badge is the daemon's number; zero it now, the next push confirms.
     widget.unread = 0
-    flash(n > 0 ? "Marking everything read…" : "Marking read…")
-    readAllProc.command = [root.runner, "cli", "read-all"]
-    readAllProc.running = true
   }
   function conversationById(id) {
     var list = widget.conversations
@@ -263,7 +338,10 @@ Panel {
     root.setupOpen = false
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
-  function setFilter(f) { root.filter = f; root.cursor = 0; listView.positionViewAtBeginning() }
+  function setFilter(f) {
+    if (root.openId !== "") backToList()
+    root.filter = f; root.cursor = 0; listView.positionViewAtBeginning()
+  }
 
   onOpenedChanged: if (opened) {
     nowMs = Date.now()
@@ -286,7 +364,7 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: keyCatcher
-    contentWidth: panelWindow.fittedContentWidth(Style.space(460))
+    contentWidth: panelWindow.fittedContentWidth(Style.space(500))
     contentHeight: panelWindow.fittedContentHeight(Style.space(640), Style.space(720))
 
     PanelKeyCatcher {
@@ -406,6 +484,61 @@ Panel {
 
         PanelSeparator { width: parent.width; foreground: root.foreground }
 
+        // ---------- bulk job progress ----------
+        Item {
+          id: jobBar
+          visible: root.job !== null
+          width: parent.width
+          height: visible ? jobColumn.implicitHeight + Style.space(4) : 0
+          Column {
+            id: jobColumn
+            width: parent.width
+            spacing: Style.space(4)
+            Row {
+              width: parent.width
+              spacing: Style.space(6)
+              Text {
+                width: parent.width - cancelButton.width - Style.space(6)
+                text: root.jobLabel()
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+                elide: Text.ElideRight
+                anchors.verticalCenter: parent.verticalCenter
+              }
+              PanelActionButton {
+                id: cancelButton
+                iconText: root.job && root.job.running ? "󰅖" : "󰄬"
+                tooltipText: root.job && root.job.running ? "Cancel" : "Finished"
+                enabled: root.job && root.job.running
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                size: Style.space(18)
+                onClicked: root.cancelJob()
+              }
+            }
+            Rectangle {
+              width: parent.width
+              height: Style.space(4)
+              radius: height / 2
+              color: root.alpha(root.foreground, 0.12)
+              Rectangle {
+                id: jobFill
+                height: parent.height
+                radius: height / 2
+                color: root.job && root.job.failed > 0 ? root.urgent : root.accent
+                width: {
+                  var j = root.job
+                  if (!j) return 0
+                  if (j.phase === "scan" || j.total === 0) return j.running ? parent.width * 0.05 : parent.width
+                  return parent.width * Math.min(1, (j.done + j.failed) / j.total)
+                }
+                Behavior on width { NumberAnimation { duration: 200; easing.type: Easing.OutCubic } }
+              }
+            }
+          }
+        }
+
         // ---------- body ----------
         Item {
           id: body
@@ -479,7 +612,7 @@ Panel {
                   }
                   Text {
                     id: fromText
-                    width: parent.width - timeText.width - analyzedMark.width - (modelData.isRead ? 0 : Style.space(13)) - Style.space(12)
+                    width: rowColumn.width - timeText.implicitWidth - (modelData.isAnalyzed ? 0 : analyzedMark.implicitWidth + Style.space(6)) - (modelData.isRead ? 0 : Style.space(13)) - Style.space(12)
                     text: root.personLabel(modelData.from)
                     color: root.foreground
                     font.family: root.fontFamily
@@ -495,7 +628,6 @@ Panel {
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.bodySmall
                     visible: !modelData.isAnalyzed
-                    width: visible ? implicitWidth : 0
                   }
                   Text {
                     id: timeText
@@ -682,9 +814,28 @@ Panel {
       cardOrigin: [panelWindow.cardOrigin.x, panelWindow.cardOrigin.y],
       anchor: [panelWindow.anchorScreenPos.x, panelWindow.anchorScreenPos.y, panelWindow.anchorW, panelWindow.anchorH],
       barPos: panelWindow.barPos, hasBar: !!root.bar, items: root.items.length,
-      columnH: column.height, bodyH: body.height, listVisible: listView.visible
+      columnH: column.height, bodyH: body.height, listVisible: listView.visible,
+      job: root.job, jobRunning: jobProc.running, jobLines: jobProc.lines, jobStderr: jobProc.lastStderr, jobLastLine: jobProc.lastLine
     })
   }
+  // Render the popup card to a PNG (docs and bug reports). The card is the
+  // KeyboardPanel's BorderSurface: the key catcher's grandparent.
+  function snapshot(path) {
+    if (!root.opened) return "panel is closed"
+    var target = keyCatcher.parent && keyCatcher.parent.parent ? keyCatcher.parent.parent : keyCatcher
+    var ok = target.grabToImage(function(result) { result.saveToFile(String(path)) }, Qt.size(target.width * 2, target.height * 2))
+    return ok ? "grabbing " + path : "grab failed"
+  }
+  function shellJob() {
+    if (jobProc.running) return "busy"
+    root.job = { name: "Mark all read", phase: "scan", done: 0, failed: 0, total: 0, scanned: 0, rate: 0, etaSeconds: -1, concurrency: 0, running: true }
+    jobProc.jobName = "Mark all read"
+    jobProc.command = ["sh", "-c", "i=0; while [ $i -le 3765 ]; do printf '{\"type\":\"progress\",\"phase\":\"mark\",\"done\":%s,\"total\":3765,\"rate\":41.8,\"etaSeconds\":%s,\"concurrency\":2}\n' $i $(( (3765 - i) / 42 )); i=$((i + 137)); sleep 0.5; done; printf '{\"type\":\"done\",\"phase\":\"mark\",\"done\":3765,\"total\":3765}\n'"]
+    jobProc.running = true
+    return "started"
+  }
+  // Exercises the job pipeline without touching mail (omarchy-shell … dryrun).
+  function dryRunJob() { return startJob("Dry run", ["read-all", "--dry-run", "--limit", "120"]) ? "started" : "busy" }
 
   function stepConversation(dx) {
     if (items.length === 0) return
