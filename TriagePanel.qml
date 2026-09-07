@@ -216,6 +216,37 @@ Panel {
     act(id, "trash"); flash("Moved to trash")
     if (openId !== "") backToList()
   }
+  Process {
+    id: readAllProc
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          var d = JSON.parse(text.trim())
+          if (d.ok === true) root.flash(d.marked > 0 ? "Marked " + d.marked + " read" : "Nothing was unread")
+          else root.flash("✗ " + (d.failed ? d.failed + " could not be marked read" : String(d.error || "mark all read failed")))
+        } catch (e) { root.flash("✗ mark all read failed") }
+        widget.refresh()
+      }
+    }
+  }
+  function markAllRead() {
+    if (readAllProc.running) return
+    var list = widget.conversations
+    var next = Object.assign({}, pending)
+    var n = 0
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].isRead) continue
+      next[list[i].id] = Object.assign({}, next[list[i].id] || {}, { isRead: true, unreadCount: 0 })
+      n += 1
+    }
+    root.pending = next
+    overrideTtl.restart()
+    // The badge is the daemon's number; zero it now, the next push confirms.
+    widget.unread = 0
+    flash(n > 0 ? "Marking everything read…" : "Marking read…")
+    readAllProc.command = [root.runner, "cli", "read-all"]
+    readAllProc.running = true
+  }
   function conversationById(id) {
     var list = widget.conversations
     for (var i = 0; i < list.length; i++) if (list[i].id === id) return Object.assign({}, list[i], pending[id] || {})
@@ -301,11 +332,12 @@ Panel {
           case "o": root.openInWeb(); break
           case "c": root.compose(); break
           case "R": root.refreshNow(); break
+          case "M": root.markAllRead(); break
           case "u": if (root.openId !== "") root.backToList(); break
           case "1": root.setFilter("unread"); break
           case "2": root.setFilter("unanalyzed"); break
           case "3": root.setFilter("all"); break
-          case "?": root.flash("j/k move · Enter open · a analyzed · e archive · r read · s star · # trash · o web · c compose · 1/2/3 filter"); break
+          case "?": root.flash("j/k move · Enter open · a analyzed · e archive · r read · M all read · s star · # trash · o web · c compose · 1/2/3 filter"); break
         }
       }
 
@@ -332,6 +364,7 @@ Panel {
           trailingControl: Component {
             Row {
               spacing: Style.space(4)
+              PanelActionButton { iconText: "󰇯"; tooltipText: "Mark all as read (M)"; foreground: root.foreground; fontFamily: root.fontFamily; onClicked: root.markAllRead() }
               PanelActionButton { iconText: "󰑐"; tooltipText: "Refresh (R)"; foreground: root.foreground; fontFamily: root.fontFamily; onClicked: root.refreshNow() }
               PanelActionButton { iconText: "󱞁"; tooltipText: "Compose in aMail (c)"; foreground: root.foreground; fontFamily: root.fontFamily; onClicked: root.compose() }
               PanelActionButton { iconText: "󰖟"; tooltipText: "Open aMail (o)"; foreground: root.foreground; fontFamily: root.fontFamily; onClicked: root.openInWeb() }

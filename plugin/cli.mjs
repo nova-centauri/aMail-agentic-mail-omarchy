@@ -95,6 +95,38 @@ async function main() {
       out({ ok: true, action, id, remoteSync: result?.message?.remoteSync || null });
       return;
     }
+    case 'read-all': {
+      // Mark every unread inbox conversation read. Pages through the server's
+      // own is:unread view (not just the panel's window) and fans the POSTs
+      // out with bounded concurrency; each one also updates IMAP server-side.
+      const { client } = api();
+      const accountId = opt('account', '');
+      const ids = [];
+      for (let page = 1; page <= 10; page += 1) {
+        const payload = await client.get(`/api/messages?folder=inbox&q=${encodeURIComponent('is:unread')}&pageSize=200&page=${page}${accountId ? `&accountId=${encodeURIComponent(accountId)}` : ''}`);
+        const batch = (payload.messages || []).filter((conversation) => !conversation.isRead).map((conversation) => conversation.id);
+        ids.push(...batch);
+        if ((payload.messages || []).length < 200) break;
+      }
+      let marked = 0;
+      let failed = 0;
+      const queue = [...new Set(ids)];
+      const worker = async () => {
+        while (queue.length) {
+          const id = queue.shift();
+          try {
+            await client.post(`/api/messages/${encodeURIComponent(id)}/read`, { read: true }, { timeout: 60_000 });
+            marked += 1;
+          } catch {
+            failed += 1;
+          }
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(6, queue.length || 1) }, worker));
+      pokeDaemon();
+      out({ ok: failed === 0, marked, failed, total: ids.length });
+      return;
+    }
     case 'list': {
       const { client } = api();
       const q = opt('q', '');
@@ -205,7 +237,7 @@ async function main() {
       return;
     }
     default:
-      fail('usage: cli.mjs <thread|action|list|accounts|health|sync|refresh|state|config|set|connect|mcp-config> …', 2);
+      fail('usage: cli.mjs <thread|action|read-all|list|accounts|health|sync|refresh|state|config|set|connect|mcp-config> …', 2);
   }
 }
 
