@@ -18,7 +18,7 @@ aMail is the open-source continuation of GigaMail and upgrades existing GigaMail
 - **First-run wizard.** Connect inboxes, get agent config snippets, and learn the analyzed flow in four steps.
 - **Private by default.** Remote content is blocked until you ask; when loaded, it is fetched server-side through an optional Tor/Privoxy relay, never by the browser. Known tracking pixels stay blocked. HTML is sanitized; SSRF targets are rejected.
 - **Secure by default.** Credentials encrypted at rest (AES-256-GCM), access-token gate, passkey (WebAuthn) unlock, read-only non-root container bound to loopback.
-- **A real mail client.** Compose with a visual HTML editor, recipient chips, attachments, per-account signatures and identities, Gmail-style shortcuts, FTS5 search with operators, snooze, star, archive.
+- **A real mail client.** Compose with a visual HTML editor, recipient chips, attachments, per-account signatures and identities, Gmail-style shortcuts, right-click context menus on conversations, messages, drafts, and accounts, FTS5 search with operators, snooze, star, archive.
 
 ## Quick start (Docker)
 

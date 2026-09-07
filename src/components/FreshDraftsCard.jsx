@@ -2,7 +2,7 @@ import { draftRecipientLabel, draftSavedLabel, draftSubjectLabel } from '../mail
 import { Icon } from './Icon.jsx';
 import { IconButton } from './ui.jsx';
 
-export function FreshDraftsCard({ drafts, onOpen, onDismiss, onDelete, onViewAll }) {
+export function FreshDraftsCard({ drafts, onOpen, onDismiss, onDelete, onViewAll, onContextMenu }) {
   if (!drafts?.length) return null;
   return (
     <section className="fresh-drafts-card" aria-label="Fresh drafts">
@@ -24,7 +24,7 @@ export function FreshDraftsCard({ drafts, onOpen, onDismiss, onDelete, onViewAll
           const subject = draftSubjectLabel(draft);
           const saved = draftSavedLabel(draft);
           return (
-            <article key={draft.id} className="fresh-draft-pill" role="listitem">
+            <article key={draft.id} className="fresh-draft-pill" role="listitem" onContextMenu={onContextMenu ? (event) => onContextMenu(event, draft) : undefined}>
               <button
                 type="button"
                 className="fresh-draft-open"

@@ -1,6 +1,8 @@
 import { SMART_CATEGORIES } from '../mail/constants.js';
 import { smartCategoryMetadata } from '../mail/classify.js';
+import { copyText, draftContextMenu, threadContextMenu } from '../mail/context-menu.js';
 import { formatListDate } from '../mail/dates.js';
+import { ContextMenu, useContextMenu } from './ContextMenu.jsx';
 import { FreshDraftsCard } from './FreshDraftsCard.jsx';
 import { Icon } from './Icon.jsx';
 import { Checkbox, IconButton } from './ui.jsx';
@@ -91,15 +93,16 @@ export function CategoryBadge({ thread, showPrimary = false }) {
   );
 }
 
-function ThreadRow({ thread, selected, isCursor, isChecked, onOpen, onCheck, onToggleStar }) {
+function ThreadRow({ thread, selected, isCursor, isChecked, isMenuTarget, onOpen, onCheck, onToggleStar, onContextMenu }) {
   const sender = thread.from?.name || thread.from?.email || 'Unknown sender';
   return (
     <article
       data-thread-id={thread.id}
-      className={`thread-row ${thread.unread ? 'is-unread' : ''} ${selected ? 'is-selected' : ''} ${isCursor ? 'is-cursor' : ''}`}
+      className={`thread-row ${thread.unread ? 'is-unread' : ''} ${selected ? 'is-selected' : ''} ${isCursor ? 'is-cursor' : ''} ${isMenuTarget ? 'is-menu-target' : ''}`}
       role="button"
       tabIndex={0}
       onClick={() => onOpen(thread)}
+      onContextMenu={onContextMenu ? (event) => onContextMenu(event, thread) : undefined}
       onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); onOpen(thread); } }}
     >
       <Checkbox checked={isChecked} onChange={onCheck} label={`Select ${thread.subject}`} />
@@ -157,10 +160,34 @@ function SkeletonRows() {
   );
 }
 
-export function MailList({ threads, totalCount, categoryCounts, selectedThread, cursorThreadId, loading, folder, query, activeCategory, setActiveCategory, selectedIds, setSelectedIds, onOpenThread, onToggleStar, onRefresh, onBulkAction, onCompose, onClearSearch, hideSmartFilters = false, freshDrafts = [], onOpenFreshDraft, onDismissFreshDraft, onDeleteFreshDraft, onViewAllDrafts }) {
+export function MailList({ threads, totalCount, categoryCounts, selectedThread, cursorThreadId, loading, folder, query, activeCategory, setActiveCategory, selectedIds, setSelectedIds, onOpenThread, onToggleStar, onRefresh, onBulkAction, onCompose, onClearSearch, hideSmartFilters = false, freshDrafts = [], onOpenFreshDraft, onDismissFreshDraft, onDeleteFreshDraft, onViewAllDrafts, onReply, onForward, onNotice }) {
   const allSelected = threads.length > 0 && threads.every((thread) => selectedIds.includes(thread.id));
   const toggleAll = () => setSelectedIds(allSelected ? [] : threads.map((thread) => thread.id));
   const toggleOne = (thread, checked) => setSelectedIds((current) => checked ? [...new Set([...current, thread.id])] : current.filter((id) => id !== thread.id));
+  const { menu, openMenu, closeMenu } = useContextMenu();
+  const copyWithNotice = (text, confirmation) => {
+    void copyText(text).then((copied) => onNotice?.(copied ? confirmation : 'Could not copy to the clipboard.'));
+  };
+  const openThreadMenu = (event, thread) => openMenu(event, {
+    ...threadContextMenu(thread, {
+      selectedIds,
+      handlers: {
+        openThread: onOpenThread,
+        reply: onReply,
+        forward: onForward,
+        applyAction: onBulkAction,
+        toggleStar: onToggleStar,
+        toggleSelect: toggleOne,
+        clearSelection: () => setSelectedIds([]),
+        deleteDraft: onDeleteFreshDraft,
+        copyText: onNotice ? copyWithNotice : undefined,
+      },
+    }),
+    context: { threadId: thread.id },
+  });
+  const openDraftMenu = (event, draft) => openMenu(event, draftContextMenu(draft, {
+    handlers: { open: onOpenFreshDraft, dismiss: onDismissFreshDraft, remove: onDeleteFreshDraft },
+  }));
   return (
     <section className={`mail-list-panel ${selectedThread ? 'has-selected-thread' : ''}`} aria-label="Conversation list">
       <ListToolbar
@@ -180,6 +207,7 @@ export function MailList({ threads, totalCount, categoryCounts, selectedThread, 
           onDismiss={onDismissFreshDraft}
           onDelete={onDeleteFreshDraft}
           onViewAll={onViewAllDrafts}
+          onContextMenu={openDraftMenu}
         />
       )}
       {folder === 'inbox' && !hideSmartFilters && <SmartFilterBar activeCategory={activeCategory} onChange={setActiveCategory} visibleCount={threads.length} categoryCounts={categoryCounts} loading={loading} />}
@@ -192,15 +220,18 @@ export function MailList({ threads, totalCount, categoryCounts, selectedThread, 
               selected={selectedThread?.id === thread.id}
               isCursor={cursorThreadId === thread.id}
               isChecked={selectedIds.includes(thread.id)}
+              isMenuTarget={menu?.context?.threadId === thread.id}
               onOpen={onOpenThread}
               onCheck={(checked) => toggleOne(thread, checked)}
               onToggleStar={onToggleStar}
+              onContextMenu={openThreadMenu}
             />
           ))}
         </div>
       ) : (
         <EmptyMailbox folder={folder} query={query} category={activeCategory} onCompose={onCompose} onClearSearch={onClearSearch} onClearCategory={() => setActiveCategory('all')} onRefresh={onRefresh} />
       )}
+      <ContextMenu menu={menu} onClose={closeMenu} />
     </section>
   );
 }

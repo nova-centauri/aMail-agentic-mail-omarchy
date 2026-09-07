@@ -1,16 +1,35 @@
 import { useState } from 'react';
 import { folders, UNIFIED_ACCOUNT } from '../mail/constants.js';
+import { accountContextMenu, flagContextMenu } from '../mail/context-menu.js';
 import { demoAccounts } from '../mail/demo.js';
+import { ContextMenu, useContextMenu } from './ContextMenu.jsx';
 import { Icon } from './Icon.jsx';
 import { Avatar, IconButton } from './ui.jsx';
 
-export function Sidebar({ compact, mobileOpen, onCloseMobile, activeFolder, setActiveFolder, counts, onCompose, accounts, activeAccount, setActiveAccount, onSelectUnified, onOpenSettings, isDemo, onAddAccount, activePersonFlag, onSelectPersonFlag, personFlags = [], onManageFlags, agentQueueActive = false, onSelectAgentQueue }) {
+export function Sidebar({ compact, mobileOpen, onCloseMobile, activeFolder, setActiveFolder, counts, onCompose, accounts, activeAccount, setActiveAccount, onSelectUnified, onOpenSettings, isDemo, onAddAccount, activePersonFlag, onSelectPersonFlag, personFlags = [], onManageFlags, agentQueueActive = false, onSelectAgentQueue, onSyncAccount }) {
   const [showMore, setShowMore] = useState(false);
   const displayAccounts = accounts.length ? accounts : isDemo ? demoAccounts : [];
   const items = showMore
     ? [...folders, { id: 'all', label: 'All mail', icon: 'mail' }, { id: 'spam', label: 'Spam', icon: 'spam' }, { id: 'trash', label: 'Trash', icon: 'trash' }]
     : folders;
   const connectedCount = accounts.length;
+  const { menu, openMenu, closeMenu } = useContextMenu();
+  const openAccountMenu = (event, account) => openMenu(event, accountContextMenu(account, {
+    active: account ? activeAccount?.id === account.id : !activeAccount,
+    handlers: {
+      selectAccount: (item) => { setActiveAccount(item); onCloseMobile(); },
+      selectUnified: () => { onSelectUnified(); onCloseMobile(); },
+      sync: onSyncAccount && !isDemo ? onSyncAccount : undefined,
+      openSettings: () => { onOpenSettings(); onCloseMobile(); },
+    },
+  }));
+  const openFlagMenu = (event, flag) => openMenu(event, flagContextMenu(flag, {
+    active: activePersonFlag === flag.id,
+    handlers: {
+      select: (flagId) => { onSelectPersonFlag?.(flagId); onCloseMobile(); },
+      manage: onManageFlags ? () => { onManageFlags(); onCloseMobile(); } : undefined,
+    },
+  }));
   return (
     <>
       {mobileOpen && <button type="button" className="sidebar-scrim" aria-label="Close navigation" onClick={onCloseMobile} />}
@@ -67,6 +86,7 @@ export function Sidebar({ compact, mobileOpen, onCloseMobile, activeFolder, setA
                   type="button"
                   key={flag.id}
                   onClick={() => { onSelectPersonFlag?.(flag.id); onCloseMobile(); }}
+                  onContextMenu={(event) => openFlagMenu(event, flag)}
                   className={`nav-item label-nav ${activePersonFlag === flag.id ? 'is-selected' : ''}`}
                   title={compact ? flag.label : flag.description}
                 >
@@ -88,14 +108,14 @@ export function Sidebar({ compact, mobileOpen, onCloseMobile, activeFolder, setA
               <IconButton label="Add account" onClick={() => { onAddAccount?.(); onCloseMobile(); }}><Icon name="plus" size={18} /></IconButton>
             </div>
             {accounts.length > 0 && (
-              <button type="button" className={`account-row unified-account-row ${!activeAccount ? 'is-active' : ''}`} onClick={() => { onSelectUnified(); onCloseMobile(); }} title={compact ? 'All inboxes' : undefined}>
+              <button type="button" className={`account-row unified-account-row ${!activeAccount ? 'is-active' : ''}`} onClick={() => { onSelectUnified(); onCloseMobile(); }} onContextMenu={(event) => openAccountMenu(event, null)} title={compact ? 'All inboxes' : undefined}>
                 <Avatar person={UNIFIED_ACCOUNT} size="sm" />
                 <span className="account-row-text"><strong>All inboxes</strong><small>Unified inbox</small></span>
                 {!activeAccount && <Icon name="check" size={16} />}
               </button>
             )}
             {displayAccounts.map((account) => (
-              <button type="button" key={account.id} className={`account-row ${activeAccount?.id === account.id ? 'is-active' : ''}`} onClick={() => { setActiveAccount(account); onCloseMobile(); }} title={compact ? account.email : undefined}>
+              <button type="button" key={account.id} className={`account-row ${activeAccount?.id === account.id ? 'is-active' : ''}`} onClick={() => { setActiveAccount(account); onCloseMobile(); }} onContextMenu={(event) => openAccountMenu(event, account)} title={compact ? account.email : undefined}>
                 <Avatar person={account} size="sm" />
                 <span className="account-row-text"><strong>{account.name}</strong><small>{account.email}</small></span>
                 <span className={`connection-dot ${account.connected ? 'is-connected' : ''}`} title={account.connected ? 'Connected' : 'Needs attention'} />
@@ -118,6 +138,7 @@ export function Sidebar({ compact, mobileOpen, onCloseMobile, activeFolder, setA
         </button>
         </div>
       </aside>
+      <ContextMenu menu={menu} onClose={closeMenu} />
     </>
   );
 }

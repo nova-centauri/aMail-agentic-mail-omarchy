@@ -96,7 +96,7 @@
   border-bottom: 1px solid var(--line); color: var(--ink-2); font-size: var(--fs-md);
   transition: background var(--t-fast);
 }
-.thread-row:hover { background: var(--bg-2); }
+.thread-row:hover, .thread-row.is-menu-target { background: var(--bg-2); }
 .thread-row.is-unread { color: var(--ink); }
 .thread-row.is-selected { background: var(--accent-soft); }
 .thread-row.is-cursor { box-shadow: inset 3px 0 var(--accent); }

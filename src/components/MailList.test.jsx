@@ -1,4 +1,5 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { MailList, SmartFilterBar } from './MailList.jsx';
 
@@ -75,5 +76,36 @@ describe('MailList', () => {
     expect(screen.getByText('Priya')).toBeInTheDocument();
     rerender(<MailList {...defaults} folder="drafts" freshDrafts={[draft]} />);
     expect(screen.queryByRole('region', { name: 'Fresh drafts' })).not.toBeInTheDocument();
+  });
+
+  it('opens a context menu on a row and routes actions through the list callbacks', async () => {
+    const user = userEvent.setup();
+    const onBulkAction = vi.fn();
+    const onReply = vi.fn();
+    render(<MailList {...defaults} selectedThread={null} onBulkAction={onBulkAction} onReply={onReply} onNotice={vi.fn()} />);
+    const row = screen.getByRole('button', { name: /hello/i });
+    fireEvent.contextMenu(row, { clientX: 30, clientY: 40, button: 2 });
+    const menu = screen.getByRole('menu', { name: 'Actions for Hello' });
+    expect(menu).toBeInTheDocument();
+    expect(row).toHaveClass('is-menu-target');
+    expect(screen.getByRole('menuitem', { name: /mark as read/i })).toBeInTheDocument();
+    await user.click(screen.getByRole('menuitem', { name: /^archive/i }));
+    expect(onBulkAction).toHaveBeenCalledWith('archive', ['t1']);
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+
+    fireEvent.contextMenu(row, { clientX: 30, clientY: 40, button: 2 });
+    await user.click(screen.getByRole('menuitem', { name: /^reply/i }));
+    expect(onReply).toHaveBeenCalledWith(thread);
+  });
+
+  it('acts on the whole checked selection when the row is part of it', async () => {
+    const user = userEvent.setup();
+    const onBulkAction = vi.fn();
+    const second = { ...thread, id: 't2', subject: 'Second' };
+    render(<MailList {...defaults} threads={[thread, second]} selectedIds={['t1', 't2']} selectedThread={null} onBulkAction={onBulkAction} />);
+    fireEvent.contextMenu(screen.getByRole('button', { name: /hello/i }), { clientX: 30, clientY: 40, button: 2 });
+    expect(screen.getByRole('menu', { name: 'Actions for 2 conversations selected' })).toBeInTheDocument();
+    await user.click(screen.getByRole('menuitem', { name: /move to trash/i }));
+    expect(onBulkAction).toHaveBeenCalledWith('trash', ['t1', 't2']);
   });
 });

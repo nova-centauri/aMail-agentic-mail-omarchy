@@ -97,6 +97,35 @@
 .logout-button:hover { background: var(--bg-3); }
 .profile-menu-footer { padding-top: var(--sp-3); color: var(--ink-3); text-align: center; font-size: var(--fs-2xs); line-height: 1.4; }
 
+/* ---- Context menu (right-click) ---- */
+.context-menu {
+  position: fixed; z-index: var(--z-popover); min-width: 224px; max-width: min(320px, calc(100vw - 16px)); max-height: calc(100dvh - 16px);
+  padding: 6px; overflow-y: auto; outline: 0;
+  border: 1px solid var(--line-strong); border-radius: var(--r-lg); color: var(--ink); background: var(--bg-2); box-shadow: var(--shadow-3);
+  animation: menu-in var(--t-fast) var(--ease);
+  user-select: none; -webkit-user-select: none;
+}
+/* Fade only; a scale transform here would skew the size the menu is measured
+   at before it is clamped to the viewport. */
+@keyframes menu-in { from { opacity: 0; } to { opacity: 1; } }
+.context-menu-title { max-width: 100%; padding: 6px 10px 7px; overflow: hidden; color: var(--ink-3); font-size: var(--fs-2xs); font-weight: 700; letter-spacing: .06em; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
+.context-menu hr { margin: 5px 6px; border: 0; border-top: 1px solid var(--line); }
+.context-menu-item {
+  width: 100%; min-height: 34px; padding: 0 10px 0 8px; display: flex; align-items: center; gap: 10px;
+  border-radius: var(--r-sm); color: var(--ink-2); text-align: left; font-size: var(--fs-sm); font-weight: 500;
+}
+.context-menu-item:focus, .context-menu-item:hover:not(:disabled) { color: var(--ink); background: var(--bg-3); box-shadow: none; }
+.context-menu-item:disabled { cursor: default; opacity: .5; }
+.context-menu-icon { width: 18px; height: 18px; flex: 0 0 auto; display: grid; place-items: center; color: var(--ink-3); }
+.context-menu-item:focus .context-menu-icon, .context-menu-item:hover:not(:disabled) .context-menu-icon { color: var(--ink-2); }
+.context-menu-item.is-checked, .context-menu-item.is-checked .context-menu-icon { color: var(--accent); }
+.context-menu-item.is-checked:disabled { opacity: 1; }
+.context-menu-label { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.context-menu-item kbd { min-width: 22px; padding: 1px 6px; border: 1px solid var(--line-strong); border-radius: 4px; color: var(--ink-3); background: var(--bg-1); font-family: var(--font-mono); font-size: 11px; text-align: center; }
+.context-menu-item.is-danger { color: var(--red); }
+.context-menu-item.is-danger .context-menu-icon { color: var(--red); }
+.context-menu-item.is-danger:focus, .context-menu-item.is-danger:hover:not(:disabled) { color: var(--red); background: var(--red-soft); }
+
 /* ---- Modals ---- */
 .account-modal, .access-modal, .shortcut-modal {
   position: relative; z-index: 1; display: flex; flex-direction: column; overflow: hidden;

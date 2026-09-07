@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { smartCategoryMetadata } from '../mail/classify.js';
+import { copyText, messageContextMenu, openThreadContextMenu } from '../mail/context-menu.js';
 import { formatAttachmentSize, formatListDate, formatMessageDate } from '../mail/dates.js';
 import { sanitizeEmailHtml } from '../mail/html.js';
 import { formatRecipients, normalizeMessage, recipientArray } from '../mail/normalize.js';
+import { ContextMenu, useContextMenu } from './ContextMenu.jsx';
 import { Icon } from './Icon.jsx';
 import { Avatar, IconButton } from './ui.jsx';
 import { CategoryBadge } from './MailList.jsx';
@@ -76,12 +78,18 @@ function MessageBody({ message, onLoadRemote, allowPrivateImages }) {
   );
 }
 
-function MessageCard({ message, expanded, onToggle, onLoadRemote, onReply, onReplyAll, onForward, allowPrivateImages }) {
+function MessageCard({ message, expanded, onToggle, onLoadRemote, onReply, onReplyAll, onForward, onContextMenu, allowPrivateImages }) {
   const from = message.from || {};
   const recipientList = formatRecipients(message.to);
   const canReplyAll = [...recipientArray(message.to), ...recipientArray(message.cc)].length > 1;
+  const handleContextMenu = (event) => {
+    // The rendered email keeps the browser menu: copying text, opening links,
+    // and saving images from mail is what people right-click there for.
+    if (event.target.closest('.message-body')) return;
+    onContextMenu?.(event, message, { expanded, canReplyAll });
+  };
   return (
-    <article className={`message-card email-light ${expanded ? 'is-expanded' : ''}`}>
+    <article className={`message-card email-light ${expanded ? 'is-expanded' : ''}`} onContextMenu={onContextMenu ? handleContextMenu : undefined}>
       <button type="button" className="message-summary" onClick={onToggle} aria-expanded={expanded}>
         <Avatar person={from} size="md" />
         <span className="message-sender"><strong>{from.name || from.email || 'Unknown sender'}</strong><small>{expanded ? (from.email || '') : message.body?.replace(/\s+/g, ' ').slice(0, 88)}</small></span>
@@ -109,7 +117,7 @@ function MessageCard({ message, expanded, onToggle, onLoadRemote, onReply, onRep
   );
 }
 
-export function ThreadView({ thread, activeFolder, onBack, onAction, onLoadRemote, onReply, onReplyAll, onForward, allowPrivateImages }) {
+export function ThreadView({ thread, activeFolder, onBack, onAction, onLoadRemote, onReply, onReplyAll, onForward, onToggleStar, onNotice, allowPrivateImages }) {
   const sourceMessages = thread.messages?.length ? thread.messages : [normalizeMessage(thread)];
   const classification = smartCategoryMetadata(thread);
   const [expandedIds, setExpandedIds] = useState(() => new Set([sourceMessages.at(-1)?.id]));
@@ -119,11 +127,34 @@ export function ThreadView({ thread, activeFolder, onBack, onAction, onLoadRemot
     if (next.has(id)) next.delete(id); else next.add(id);
     return next;
   });
+  const { menu, openMenu, closeMenu } = useContextMenu();
+  const copyWithNotice = onNotice
+    ? (text, confirmation) => { void copyText(text).then((copied) => onNotice(copied ? confirmation : 'Could not copy to the clipboard.')); }
+    : undefined;
+  const openHeadingMenu = (event) => openMenu(event, openThreadContextMenu(thread, {
+    handlers: {
+      applyAction: onAction,
+      toggleStar: onToggleStar,
+      copyText: copyWithNotice,
+      back: onBack,
+    },
+  }));
+  const openMessageMenu = (event, message, { expanded, canReplyAll }) => openMenu(event, messageContextMenu(message, {
+    expanded,
+    canReplyAll,
+    handlers: {
+      reply: (target) => onReply(thread, target),
+      replyAll: (target) => onReplyAll(thread, target),
+      forward: (target) => onForward(thread, target),
+      toggleExpanded: (target) => toggleExpanded(target.id),
+      copyText: copyWithNotice,
+    },
+  }));
   return (
     <section className="thread-panel" aria-label="Open conversation">
       <ThreadToolbar onBack={onBack} onAction={(action) => onAction(action, [thread.id])} isRead={!thread.unread} isAnalyzed={thread.analyzed !== false} />
       <div className="thread-scroll">
-        <div className="thread-heading">
+        <div className="thread-heading" onContextMenu={openHeadingMenu}>
           <div className="thread-heading-main">
             <div className="thread-title-line">
               <h1>{thread.subject || '(no subject)'}</h1>
@@ -150,11 +181,13 @@ export function ThreadView({ thread, activeFolder, onBack, onAction, onLoadRemot
               onReply={(target) => onReply(thread, target)}
               onReplyAll={(target) => onReplyAll(thread, target)}
               onForward={(target) => onForward(thread, target)}
+              onContextMenu={openMessageMenu}
               allowPrivateImages={allowPrivateImages}
             />
           ))}
         </div>
       </div>
+      <ContextMenu menu={menu} onClose={closeMenu} />
     </section>
   );
 }

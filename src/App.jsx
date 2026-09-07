@@ -384,7 +384,7 @@ export default function App() {
     }
   }, [activeCategory, activeFolder, activePersonFlag]);
 
-  const refreshMailbox = async () => {
+  const syncMailbox = async (account = activeAccount) => {
     if (isDemo) {
       await loadMailbox({ keepSelection: false });
       return;
@@ -395,9 +395,9 @@ export default function App() {
     }
     syncInFlightRef.current = true;
     setLoading(true);
-    setNotice(activeAccount ? `Syncing ${activeAccount.email}…` : 'Syncing all connected accounts…');
+    setNotice(account ? `Syncing ${account.email}…` : 'Syncing all connected accounts…');
     try {
-      const syncPath = activeAccount?.id ? `/accounts/${encodeURIComponent(activeAccount.id)}/sync` : '/sync';
+      const syncPath = account?.id ? `/accounts/${encodeURIComponent(account.id)}/sync` : '/sync';
       const response = await api(syncPath, { method: 'POST', body: JSON.stringify({ mailbox: 'INBOX' }) });
       const status = syncResultStatus(response);
       const skippedMessages = syncSkippedMessageCount(response);
@@ -416,6 +416,8 @@ export default function App() {
       }
     }
   };
+
+  const refreshMailbox = () => syncMailbox(activeAccount);
 
   const effectivePersonFlags = isDemo && !personFlags.length ? DEMO_PERSON_FLAGS : personFlags;
   const visibleThreads = useMemo(() => filterVisibleThreads(threads, {
@@ -632,6 +634,8 @@ export default function App() {
 
   useEffect(() => {
     const handleKeys = (event) => {
+      // Open context menus own their keys (arrows, Enter, Escape, typeahead).
+      if (event.target?.closest?.('[role="menu"]')) return;
       const action = shortcutAction(event);
       if (!action) return;
       if (composeOpen && action !== 'escape' && action !== 'help') return;
@@ -968,6 +972,7 @@ export default function App() {
         onManageFlags={() => setSettingsOpen(true)}
         agentQueueActive={agentQueueActive}
         onSelectAgentQueue={selectAgentQueue}
+        onSyncAccount={(account) => { void syncMailbox(account); }}
         isDemo={isDemo}
       />
       <main className="mail-workspace">
@@ -1009,8 +1014,11 @@ export default function App() {
             onDismissFreshDraft={dismissFreshDraft}
             onDeleteFreshDraft={(draft) => { void deleteFreshDraft(draft); }}
             onViewAllDrafts={() => { setActiveFolder('drafts'); setActiveCategory('all'); setActivePersonFlag(null); setQuery(''); setSelectedThread(null); setSelectedIds([]); }}
+            onReply={(thread) => openReplyComposer(thread, thread.messages?.at(-1) || thread)}
+            onForward={(thread) => openForwardComposer(thread, thread.messages?.at(-1) || thread)}
+            onNotice={setNotice}
           />
-          {selectedThread ? <ThreadView key={selectedThread.id} thread={selectedThread} activeFolder={activeFolder} onBack={() => setSelectedThread(null)} onAction={applyAction} onLoadRemote={loadRemoteContent} onReply={openReplyComposer} onReplyAll={(thread, message) => openReplyComposer(thread, message, { replyAll: true })} onForward={openForwardComposer} allowPrivateImages={privacy.privateImages} /> : null}
+          {selectedThread ? <ThreadView key={selectedThread.id} thread={selectedThread} activeFolder={activeFolder} onBack={() => setSelectedThread(null)} onAction={applyAction} onLoadRemote={loadRemoteContent} onReply={openReplyComposer} onReplyAll={(thread, message) => openReplyComposer(thread, message, { replyAll: true })} onForward={openForwardComposer} onToggleStar={toggleStar} onNotice={setNotice} allowPrivateImages={privacy.privateImages} /> : null}
         </div>
       </main>
       {composeOpen && <ComposeModal key={composeContext?.draftId || composeContext?.mode || 'compose'} account={composeAccount} accounts={identityAccounts} contacts={composeContacts} isDemo={isDemo} initialReply={composeContext} onClose={closeCompose} onSent={sendMessage} onDraftSaved={draftSaved} onDraftRemoved={draftRemoved} />}
