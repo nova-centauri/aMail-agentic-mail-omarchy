@@ -64,7 +64,7 @@ Two counters live in the bar. **󰇮 unread** is the human queue. **󰚩 not ana
 <sub>Every name, address, and subject in these screenshots is fabricated (<code>node plugin/demo.mjs</code> renders the same demo inbox on any machine; <code>node plugin/demo.mjs off</code> returns to live mail).</sub>
 
 
-This repository is also an [Omarchy](https://omarchy.org) shell plugin: aMail in the bar, with a triage panel and desktop toasts for new mail. It runs in two modes.
+This repository is also an [Omarchy](https://omarchy.org) shell plugin: an email harness that wrangles many accounts into one funnel for your agents, and a simple mail client for you. aMail in the bar, a triage panel, desktop toasts for new mail. It runs in two modes.
 
 | Mode | What runs where | When to use it |
 | --- | --- | --- |

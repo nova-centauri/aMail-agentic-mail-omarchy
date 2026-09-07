@@ -5,7 +5,7 @@
   "version": "0.2.0",
   "author": "Steve Barrett",
   "license": "MIT",
-  "description": "Agentic mail in the Omarchy bar. Every inbox you own in one hub, one MCP endpoint for your agents, and an analyzed/unanalyzed flag per message alongside read/unread. Client mode follows an aMail server you already run; server mode runs aMail here. New mail is pushed (IMAP IDLE → SSE) so the badge moves within a second.",
+  "description": "An email harness that wrangles many accounts into one funnel for your agents, and works as a simple mail client too. Every IMAP/SMTP inbox in one hub, one MCP endpoint, and an analyzed/not-analyzed flag on each message next to read/unread. Bar counters for both queues, a keyboard triage panel, toasts, and a first-run wizard. Client mode follows an aMail server you already run; server mode runs aMail here. New mail is pushed (IMAP IDLE → SSE) so the badge moves within a second.",
   "kinds": [
     "bar-widget"
   ],
@@ -23,8 +23,16 @@
       "showZero": false
     },
     "schema": [
-      { "key": "badge", "type": "string", "label": "Badge count (unread, unanalyzed, both)" },
-      { "key": "showZero", "type": "boolean", "label": "Show the icon when the count is zero" }
+      {
+        "key": "badge",
+        "type": "string",
+        "label": "Badge count (unread, unanalyzed, both)"
+      },
+      {
+        "key": "showZero",
+        "type": "boolean",
+        "label": "Show the icon when the count is zero"
+      }
     ]
   }
 }
