@@ -107,6 +107,16 @@ amail-plugin server logs   # server mode only
 
 **Files.** `~/.config/amail/plugin.json` (mode, URL, settings), `~/.config/amail/token` (0600), `~/.local/state/amail/state.json` (what the bar renders: subjects, senders, counts, ids; never bodies), and in server mode `~/.config/amail/server.env` plus `~/.local/share/amail/` (database and a private copy of the server). Message bodies are fetched on demand when you open a thread and are not written to disk by the plugin.
 
+**Dependencies.** Client mode needs a JavaScript runtime for the plugin daemon: `node` (≥ 22) or `bun`, found on the usual paths including mise shims. Server mode needs `node` ≥ 22 and `npm` (the aMail server is Node; `better-sqlite3` ships prebuilt binaries), `openssl` for secret generation, `systemd --user`, and `rsync` (optional, `cp` fallback). The CLI uses `jq`, `curl`, and `gum` (optional, for the token prompt); toasts use `notify-send`; the web client opens through `omarchy-launch-webapp`. Everything the plugin writes lives under `~/.config/amail`, `~/.local/state/amail`, and `~/.local/share/amail`; it never edits Hyprland or Omarchy configuration.
+
+**Remove.**
+
+```sh
+omarchy plugin remove io.github.nova-centauri.amail   # the widget and daemon
+amail-plugin server uninstall                          # server mode only: stops and removes the systemd unit
+rm -rf ~/.config/amail ~/.local/state/amail ~/.local/share/amail   # optional: token, state, local mail database
+```
+
 **IPC.** `omarchy-shell io.github.nova-centauri.amail status|open|close|toggle|refresh|web|counts`, `goto <conversationId>` to open one conversation (what a toast's Open button does), `view unread|unanalyzed|all`, `setup`, `snapshot <file.png>` to render the open panel to a PNG, and `debug` for geometry and job state.
 
 ## Quick start (Docker)
