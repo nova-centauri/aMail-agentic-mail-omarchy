@@ -32,3 +32,26 @@ describe('filterVisibleThreads', () => {
     expect(withFiles.map((thread) => thread.id)).toEqual(['note-file']);
   });
 });
+
+describe('person flags and the analyzed flag', () => {
+  const flags = [{ id: 'alice', label: 'Alice', emails: ['Alice@Example.com'], color: '#0b57d0' }];
+
+  it('matches configured person flags case-insensitively across any address role', () => {
+    const cc = { id: 'cc', folder: 'inbox', subject: 'FYI', snippet: '', from: { email: 'bob@example.com' }, cc: [{ email: 'alice@example.com' }], category: 'primary', labels: [] };
+    const visible = filterVisibleThreads([...threads, cc], { activeFolder: 'inbox', activeCategory: 'all', activePersonFlag: 'alice', personFlags: flags, query: '' });
+    expect(visible.map((thread) => thread.id)).toEqual(['note', 'note-file', 'cc']);
+  });
+
+  it('shows nothing for a flag id that is not configured', () => {
+    const visible = filterVisibleThreads(threads, { activeFolder: 'inbox', activeCategory: 'all', activePersonFlag: 'ghost', personFlags: flags, query: '' });
+    expect(visible).toEqual([]);
+  });
+
+  it('supports the agent queue search is:unanalyzed', () => {
+    const mixed = threads.map((thread, index) => ({ ...thread, analyzed: index % 2 === 0 }));
+    const pending = filterVisibleThreads(mixed, { activeFolder: 'inbox', activeCategory: 'all', query: 'is:unanalyzed' });
+    expect(pending.map((thread) => thread.id)).toEqual(['quiet', 'note-file']);
+    const done = filterVisibleThreads(mixed, { activeFolder: 'inbox', activeCategory: 'all', query: 'is:analyzed' });
+    expect(done.map((thread) => thread.id)).toEqual(['note', 'fail']);
+  });
+});

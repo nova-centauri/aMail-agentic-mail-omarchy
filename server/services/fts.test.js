@@ -6,7 +6,7 @@ test('FTS queries are tokenized and never pass raw operators', () => {
   assert.equal(toFtsMatchQuery(''), '');
   assert.equal(toFtsMatchQuery('   '), '');
   assert.equal(toFtsMatchQuery('Workflow failed'), '"workflow"* AND "failed"*');
-  assert.equal(toFtsMatchQuery('phil@midstatelitho.com'), '"phil@midstatelitho.com"*');
+  assert.equal(toFtsMatchQuery('priya@printworks.example'), '"priya@printworks.example"*');
   assert.equal(toFtsMatchQuery('hello "OR" world'), '"hello"* AND "or"* AND "world"*');
   assert.equal(toFtsMatchQuery('!!!'), '');
 });

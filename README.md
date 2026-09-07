@@ -1,185 +1,133 @@
-# aMail
+# aMail — Agentic Mail
 
-aMail (Agentic Mail, formerly GigaMail) is a self-hosted inbox for multiple IMAP/SMTP accounts. It keeps mail credentials in your own Docker volume, combines conversations into threads, and treats remote message content as untrusted by default.
+aMail is a self-hosted mail client that holds all of your inboxes in one place and gives your agents a single, authenticated point of connection to every one of them.
 
-> aMail is an independent project. It is not affiliated with Google or Gmail.
->
-> The product name changed from GigaMail to aMail. Internal identifiers are unchanged for compatibility: the `GIGAMAIL_*` environment variables, the `gigamail` Compose project and `gigamail-data` volume, the `gigamail_session` cookie, the `gigamail.sqlite` database file, and browser storage keys. Existing deployments upgrade in place.
+It is **agentic first**: alongside the human read/unread state, every message carries an **analyzed / not yet analyzed** flag that agents set as they process mail. Ask for `is:unanalyzed`, do the work, mark it analyzed, and nothing gets handled twice — by an agent or by you.
 
-## What it includes
+aMail is the open-source continuation of GigaMail and upgrades existing GigaMail installations in place.
 
-- One unified inbox for up to 12 (or more) IMAP/SMTP accounts
-- Guided Gmail, iCloud, Mail-in-a-Box, and custom IMAP/SMTP onboarding that checks both incoming and outgoing mail before saving
-- Explainable smart views for GitHub/CI notifications, logs and alerts, and service-status updates
-- Conversation threading from `Message-ID`, `In-Reply-To`, `References`, and a safe subject fallback
-- Per-account identities, HTML or plain-text signatures, profile photos/initials, compose, reply, archive, trash, read and star actions
-- Server-side IMAP syncing and SMTP sending; no browser-to-mail-provider credentials
-- Remote images blocked by default. When enabled per message, they are fetched server-side through the privacy proxy, never by the browser.
-- Sanitized HTML mail, no scripts/forms/iframes, and SSRF protections for remote-content fetching
-- Encrypted stored account credentials (AES-256-GCM); an access token gate; passkey (WebAuthn) unlock; non-root Docker runtime
-- Dark, token-based interface that collapses to a single full-width conversation list until a message is opened, Gmail-style keyboard shortcuts, rich compose, recipient chips, compose attachments, on-demand attachment download, and Gmail-style search (FTS5 plus operators)
+> aMail is an independent project. It is not affiliated with Google, Gmail, Apple, or Microsoft.
 
-## Quick start
+## What it does
 
-1. Copy `.env.example` to `.env` and generate strong values:
+- **Unified inbox** for any number of IMAP/SMTP accounts: Gmail, iCloud, Outlook, Mail-in-a-Box, or any custom server. Threading from `Message-ID`/`References` with a safe subject fallback.
+- **One endpoint for agents.** A Streamable HTTP [MCP](https://modelcontextprotocol.io) server at `/mcp` plus a REST API at `/api`, both gated by the same access token. Cursor, Claude, or anything that speaks HTTP can list, search, read, reply, triage, and manage accounts.
+- **Analyzed flags.** `analyzedAt`/`analyzedBy` per message, `unanalyzedCount` per conversation, `is:analyzed`/`is:unanalyzed` search operators, a "Not yet analyzed" queue in the sidebar, and `message_action: analyzed` for agents. Local-only; never written back to IMAP.
+- **Explainable smart views.** Deterministic, on-device classification into Primary, GitHub CI, Logs, Status updates, and Ops errors, each with a human-readable reason. Routine infrastructure digests from sources you configure stay out of the default inbox unless they report a failure.
+- **Flagged people.** Turn any set of addresses into a sidebar folder. Edit in Settings, or let an agent manage the list with `list_flags`/`set_flags`.
+- **First-run wizard.** Connect inboxes, get agent config snippets, and learn the analyzed flow in four steps.
+- **Private by default.** Remote content is blocked until you ask; when loaded, it is fetched server-side through an optional Tor/Privoxy relay, never by the browser. Known tracking pixels stay blocked. HTML is sanitized; SSRF targets are rejected.
+- **Secure by default.** Credentials encrypted at rest (AES-256-GCM), access-token gate, passkey (WebAuthn) unlock, read-only non-root container bound to loopback.
+- **A real mail client.** Compose with a visual HTML editor, recipient chips, attachments, per-account signatures and identities, Gmail-style shortcuts, FTS5 search with operators, snooze, star, archive.
 
-   ```sh
-   cp .env.example .env
-   openssl rand -base64 32 # paste as GIGAMAIL_ENCRYPTION_KEY
-   openssl rand -hex 32    # paste as GIGAMAIL_ACCESS_TOKEN
-   ```
-
-2. Start the isolated, privacy-preserving stack:
-
-   ```sh
-   sh deploy/launch.sh
-   ```
-
-3. The default Compose mapping is deliberately loopback-only: `127.0.0.1:3080`. Open it through an SSH tunnel:
-
-   ```sh
-   ssh -L 3080:127.0.0.1:3080 mitsubishi@your-server
-   ```
-
-   Then visit `http://localhost:3080`. If a passkey is registered, use it to unlock; otherwise enter the access token, then add a passkey in **Settings**. Use **Settings → Add account** to connect mailboxes. The UI is designed for a unified inbox of roughly 12 accounts.
-
-See [`deploy/README.md`](deploy/README.md) for deployment and backup details.
-
-If you use Nginx Proxy Manager for a public HTTPS domain, set
-`GIGAMAIL_BIND_ADDRESS` to the VM's specific private IP (such as
-`10.0.0.15`), not `0.0.0.0`; terminate TLS and force HTTPS in the proxy. The
-full reverse-proxy configuration is in [`deploy/README.md`](deploy/README.md).
-
-## Account settings
-
-Use **Settings → Add account**, select a provider, and enter the mailbox identity and provider-specific credential. aMail tests IMAP and SMTP in memory first; the account is persisted only after both checks succeed. Saved credentials are encrypted server-side and are never returned by the API.
-
-- **Gmail / Google Workspace:** use the full email address and a Google app password. App passwords require 2-Step Verification and may be unavailable for some managed or Advanced Protection accounts.
-- **iCloud Mail:** use an Apple app-specific password. aMail uses the mailbox name for IMAP and the full address for SMTP, matching Apple's client settings.
-- **Mail-in-a-Box:** use the public hostname from the box's TLS certificate and the full mailbox address. This checkout includes a preset for `box.xer5.com` (IMAPS 993 and SMTP submission 587 with required STARTTLS); do not substitute its raw LAN IP because TLS hostname verification would fail.
-- **Outlook / Microsoft 365:** use an app password. aMail does not use Microsoft OAuth.
-- **Custom:** enter separate IMAP/SMTP hosts, ports, and TLS modes. Non-implicit-TLS connections require STARTTLS before authentication.
-
-The setup API also exposes `GET /api/accounts/providers` for provider metadata and `POST /api/accounts/test` for a rate-limited, non-persisting connection check.
-
-Per-account signatures accept **uploaded HTML**, **pasted HTML**, or **visual (WYSIWYG) editing** in Settings. Stored signatures are sanitized before save and send: scripts, event handlers, and CSS `url()` values are removed. Designed HTML signatures keep formatting, links, tables, and safe images; existing plain-text signatures still send as before.
-
-## Passkeys and the access token
-
-`GIGAMAIL_ACCESS_TOKEN` still gates the API. After a successful token unlock, **Settings → Passkeys** can register a discoverable WebAuthn credential for this inbox. Later visits can unlock with that passkey; the server sets the same `gigamail_session` cookie used by token login.
-
-Production pins these to the public HTTPS site so passkeys work behind Nginx:
+## Quick start (Docker)
 
 ```sh
-GIGAMAIL_RP_ID=mail.xer0.io
-GIGAMAIL_ORIGIN=https://mail.xer0.io
+git clone https://github.com/<you>/amail.git && cd amail
+cp .env.example .env
+openssl rand -hex 32   # paste as AMAIL_ENCRYPTION_KEY
+openssl rand -hex 32   # paste as AMAIL_ACCESS_TOKEN
+sh deploy/launch.sh    # builds and starts aMail + the Tor relay, loopback-only
 ```
 
-Empty values still get that pin when `NODE_ENV=production`. Local development without those variables derives RP ID and origin from the request Host header.
+Open `http://127.0.0.1:3080` (through an SSH tunnel if the server is remote), unlock with the access token, and the setup wizard takes it from there. See [`deploy/README.md`](deploy/README.md) for reverse proxies, passkey origins, backups, and upgrades.
 
-## Interface
+## Quick start (local development)
 
-The UI is a single dark theme built from design tokens in `src/styles/tokens.css`; the stylesheet layout is documented in [`src/styles/README.md`](src/styles/README.md).
+```sh
+npm install
+cp .env.example .env    # set the two secrets; AMAIL_COOKIE_SECURE=false for plain http
+npm run dev             # Vite on :5173, API on :3000
+```
 
-- **Reader pane only when needed.** With no conversation selected the list takes the full workspace, so a tall, narrow window is just the list. Opening a conversation splits the workspace; below 1000px wide the reader replaces the list instead.
-- **Rows adapt to the panel, not the window.** Wide list panels show sender, subject, and snippet in columns; narrow panels stack them. The switch is driven by a container query on the list panel.
-- **Sidebar.** The menu button collapses the sidebar to an icon rail on desktop and opens it as a drawer on windows 840px and narrower.
-- **Message bodies stay light.** HTML mail and the compose editor render on a light surface so messages look the way their authors intended.
+## Connecting an agent
 
-## Keyboard shortcuts
-
-Press `?` in the mailbox for the cheatsheet. The same Gmail-style keys work while a conversation is focused: `j` / `k` move, `Enter` opens, `u` returns to the list, `e` archives, `#` trashes, `r` replies, `s` stars, `x` selects, `/` focuses search, `c` composes.
-
-## Attachments and search
-
-Opening a message issues a short-lived signed URL for each attachment (`GET /api/content/attachment?token=`). Inbound bytes are fetched from IMAP on demand and are not stored as blobs. Inline `cid:` images in HTML are rewritten to the same endpoint. Compose can attach files (up to eight, 8 MiB combined); those bytes ride with the SMTP message and a local sent copy so they can be downloaded before the next IMAP sync.
-
-Compose uses the same visual HTML editor as signatures (bold, lists, color, links, and images). Recipients are chips with autocomplete from people already in the mailbox. The paperclip still attaches files (up to eight, 8 MiB combined).
-
-Mailbox search uses SQLite FTS5 over leftover free text (subject, snippet, sender, recipients, and plain text). Gmail-style operators are honored: `from:`, `to:`, `subject:`, `has:attachment`, `after:YYYY-MM-DD`, `before:YYYY-MM-DD`, `newer_than:7d`, `older_than:2w`, `is:unread`, `is:starred`, and `in:sent`. The tune control next to search writes those operators. Routine ops digests stay out of the default inbox, but search can still find them.
-
-## Smart inbox views
-
-Every synchronized message is classified locally into **Primary**, **GitHub & CI**, **Logs & alerts**, or **Status updates**. Classification is deterministic—no message content is sent to an external model—and every message includes a human-readable reason for its category. A conversation appears under the category of its latest message, while search can still find text in older messages without showing a stale conversation summary. Existing databases are backfilled automatically when the smart-filter rule version changes.
-
-Use `GET /api/messages?category=github_ci` (or `primary`, `logs`, `status`) with the existing `folder`, `accountId`, and `q` parameters. Omitting `category` returns all messages, and the response includes zero-filled conversation `categoryCounts` for the current folder/account/search scope.
-
-Most hosted providers have IMAP disabled by default or require an app password. aMail validates an account connection before saving it.
-
-IMAP synchronization reads message metadata first and downloads raw message sources one at a time. `GIGAMAIL_SYNC_MAX_MESSAGE_BYTES` caps each raw RFC822 download (10 MiB by default; configurable from 64 KiB to 50 MiB). Messages above the cap are left on the mail server and reported as sanitized `IMAP_MESSAGE_TOO_LARGE` skips in the sync result, without downloading their body or attachments. Set the cap before an account's first sync: skipped UIDs are advanced so changing the cap later applies to future messages and does not backfill previously skipped mail.
-
-## Privacy model
-
-aMail blocks remote content until you explicitly choose to load it. The default launch script includes an outbound Tor/Privoxy path; the message HTML points only to a local aMail endpoint, which fetches approved `http(s)` media through that proxy. Known tracking pixels remain blocked even when ordinary images are loaded. URLs targeting loopback, private, link-local, multicast, and cloud-metadata address ranges are rejected. If the proxy is absent, remote content fails closed rather than falling back to the VM's direct network connection.
-
-This protects your browser IP and stops open-tracking pixels by default. It does not make the mail provider, your VM, or an external proxy operator unaware of activity. Use a trustworthy network egress path and keep the host patched.
-
-## Operations
-
-- aMail only creates the `gigamail` Compose project, its own network, and named `gigamail-data` volume. It does not modify other Docker containers.
-- Back up the `gigamail-data` volume and your `.env` file together. Losing the encryption key makes saved account credentials unrecoverable by design.
-- While a mailbox tab is focused, aMail checks every connected inbox about every 15 seconds, and again immediately when the tab returns to the foreground. `SYNC_INTERVAL_MINUTES` (5 in `.env.example`) is the unattended fallback.
-- Keep the service bound to localhost unless you put it behind TLS and an authentication-aware reverse proxy.
-- Use `docker compose logs -f gigamail` to diagnose connections and `docker compose pull && docker compose up -d` to update images.
-
-## MCP connector
-
-aMail exposes a Cursor-compatible **Streamable HTTP** MCP endpoint on the same Express app as the REST API:
-
-| | |
-| --- | --- |
-| URL | `https://<host>/mcp` (for example `https://mail.xer0.io/mcp`) |
-| Transport | Streamable HTTP (`POST /mcp`) |
-| Auth | Same gate as `/api`: `Authorization: Bearer <GIGAMAIL_ACCESS_TOKEN>` (or the existing `gigamail_session` cookie) |
-
-Unauthenticated requests receive `401` with `AUTH_REQUIRED`. Tools call the same repositories and `mailService` as the REST API; stored IMAP/SMTP credentials are never returned.
-
-### Cursor / remote MCP config
-
-In Cursor: **Settings → Tools & Integrations → MCP**, or add to `~/.cursor/mcp.json` / `.cursor/mcp.json`:
+Every connected inbox is reachable through one MCP endpoint. Authenticate with `Authorization: Bearer <AMAIL_ACCESS_TOKEN>` (or the browser session cookie).
 
 ```json
 {
   "mcpServers": {
-    "gigamail": {
-      "url": "https://mail.xer0.io/mcp",
-      "headers": {
-        "Authorization": "Bearer ${env:GIGAMAIL_ACCESS_TOKEN}"
-      }
+    "amail": {
+      "url": "https://mail.example.com/mcp",
+      "headers": { "Authorization": "Bearer ${env:AMAIL_ACCESS_TOKEN}" }
     }
   }
 }
 ```
 
-Replace the URL with your deployment host. Prefer `${env:GIGAMAIL_ACCESS_TOKEN}` so the token is not committed.
-
-### Tools
-
 | Tool | Purpose |
 | --- | --- |
-| `list_accounts` | Connected accounts (id, email, provider, sync status) |
-| `list_providers` | Provider presets / discovery for onboarding |
-| `list_messages` | List/search conversations (`folder`, `accountId`, `category`, `q`, `page`, `pageSize`). `q` honors `from:`, `to:`, `subject:`, `has:attachment`, dates, `is:`, and `in:` |
-| `get_message` / `get_thread` | Fetch one message or a full thread |
-| `send_message` | Compose/send via SMTP |
-| `message_action` | `read` / `unread` / `star` / `unstar` / `archive` / `unarchive` / `trash` / `untrash` / `spam` / `unspam` / `snooze` |
-| `sync_mail` | Sync one account or all |
-| `test_account` / `add_account` / `update_account` / `delete_account` | Account lifecycle (credentials accepted for connect/save only; never echoed) |
+| `list_accounts`, `list_providers` | Connected accounts and provider presets |
+| `list_messages` | List/search conversations. `q` honours `from:`, `to:`, `subject:`, `has:attachment`, `after:`/`before:`, `is:unread`, `is:starred`, `is:unanalyzed`, `is:analyzed`, `in:` |
+| `get_message`, `get_thread` | Read one message or a whole thread |
+| `send_message` | Compose and send via the account's SMTP |
+| `message_action` | `read`/`unread`, `star`/`unstar`, `archive`, `trash`, `spam`, `snooze`, **`analyzed`/`unanalyzed`** (with `by: "<agent name>"`) |
+| `list_flags`, `set_flags` | Read or replace the flagged-people list |
+| `sync_mail`, `test_account`, `add_account`, `update_account`, `delete_account` | Account lifecycle; credentials are accepted but never echoed |
 
-## Local development
+The recommended agent loop:
+
+1. `list_messages { q: "is:unanalyzed" }`
+2. `get_thread` for anything that needs context; act (`send_message`, `message_action`, …)
+3. `message_action { action: "analyzed", by: "triage-agent" }`
+
+The same operations exist over REST (`GET /api/messages?q=is%3Aunanalyzed`, `POST /api/messages/:id/analyzed`, `GET/PUT /api/flags`).
+
+## Configuration
+
+All settings are environment variables; see [`.env.example`](.env.example) for the full annotated list. Every `AMAIL_*` variable also accepts the GigaMail-era `GIGAMAIL_*` name.
+
+| Variable | Purpose |
+| --- | --- |
+| `AMAIL_ENCRYPTION_KEY` | **Required.** Encrypts stored IMAP/SMTP credentials |
+| `AMAIL_ACCESS_TOKEN` | **Required.** Gates the UI, REST API, and MCP endpoint |
+| `AMAIL_BIND_ADDRESS`, `AMAIL_PORT` | Where Compose publishes the app (default `127.0.0.1:3080`) |
+| `AMAIL_RP_ID`, `AMAIL_ORIGIN` | Public hostname/origin for passkeys behind a reverse proxy |
+| `AMAIL_OPS_SOURCES` | Comma-separated keywords for your infrastructure digests (default `proxmox,watchtower`; empty disables) |
+| `AMAIL_TRUST_PROXY`, `AMAIL_COOKIE_SECURE` | Reverse-proxy and cookie hardening |
+| `AMAIL_SYNC_*`, `SYNC_INTERVAL_MINUTES` | Initial window, timeouts, size caps, background polling |
+| `REMOTE_CONTENT_PROXY_URL` | Set by `deploy/launch.sh` to route remote images via Tor/Privoxy |
+
+Person flags are stored in the database, not the environment: manage them in **Settings → Flagged people** or via `PUT /api/flags`.
+
+## Upgrading from GigaMail
+
+Nothing to migrate. A GigaMail `.env` works unchanged, an existing `gigamail.sqlite` is opened in place, the old session cookie stays valid, and browser storage keys fall back automatically. Point the `amail-data` volume at your existing named volume (commented example in `docker-compose.yml`) or keep your old `COMPOSE_PROJECT_NAME`. Details in [`deploy/README.md`](deploy/README.md#upgrading-from-gigamail).
+
+## Account notes
+
+- **Gmail / Google Workspace:** full address plus a Google app password (requires 2-Step Verification).
+- **iCloud Mail:** Apple app-specific password; aMail uses the mailbox name for IMAP and the full address for SMTP.
+- **Mail-in-a-Box:** the public `box.` hostname from the TLS certificate (never the LAN IP), IMAPS 993, SMTP 587 with STARTTLS.
+- **Outlook / Microsoft 365:** app password; aMail does not use Microsoft OAuth.
+- **Custom:** separate IMAP/SMTP hosts and ports; non-implicit-TLS connections require STARTTLS before authentication.
+
+Connections are verified in memory before anything is saved. `GET /api/accounts/providers` and `POST /api/accounts/test` expose the same discovery and rate-limited check to agents.
+
+## Search and smart views
+
+Search uses SQLite FTS5 plus Gmail-style operators: `from:`, `to:`, `subject:`, `has:attachment`, `after:`/`before:YYYY-MM-DD`, `newer_than:7d`, `older_than:2w`, `is:unread`, `is:starred`, `is:unanalyzed`, `is:analyzed`, `in:sent`. Explicit searches also surface the quiet ops digests that the default inbox hides.
+
+Smart classification runs locally and is versioned; when rules or `AMAIL_OPS_SOURCES` change, existing mail is reclassified on the next start. `GET /api/messages?category=github_ci` (or `primary`, `logs`, `status`, `ops_error`) filters by view and returns per-view counts.
+
+## Privacy model
+
+aMail never lets the browser fetch remote mail content. Approved images are proxied by the server — through Tor/Privoxy in the default launch mode — and known trackers stay blocked. URLs targeting loopback, private, link-local, multicast, and cloud-metadata ranges are rejected. Without the relay, remote content fails closed rather than using the host's direct connection. IMAP/SMTP traffic itself is not anonymised.
+
+## Keyboard shortcuts
+
+Press `?` for the cheatsheet: `j`/`k` move, `Enter` opens, `u` back, `e` archive, `#` trash, `r` reply, `s` star, `x` select, `/` search, `c` compose.
+
+## Development
 
 ```sh
-npm install
-npm run dev
+npm run dev      # UI + API with reload
+npm test         # node:test server suite + vitest client suite
+npm run check    # production build + syntax check
 ```
 
-The Vite UI runs on `http://localhost:5173` and binds to loopback only; API requests proxy to the loopback server at port 3000. Before submitting changes, run:
+CI (`.github/workflows/ci.yml`) runs tests, the build, a dependency audit, Compose validation, both Docker builds, a live health check, and a boot with a GigaMail-era `.env`. See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
-```sh
-npm run check
-npm test
-```
+## Status and license
 
-## Status
-
-This is a self-hosted mail client, not a mail server. It connects to existing mailboxes over IMAP/SMTP and does not accept inbound SMTP for your domains.
+aMail is a mail client, not a mail server: it connects to mailboxes you already have over IMAP/SMTP. It is released under the [MIT License](LICENSE).

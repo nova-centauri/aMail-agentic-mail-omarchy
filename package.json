@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "description": "aMail (Agentic Mail): a privacy-first, self-hosted multi-account mail client.",
+  "license": "MIT",
+  "homepage": "https://github.com/nova-centauri/aMail#readme",
   "engines": {
     "node": ">=22.0.0"
   },

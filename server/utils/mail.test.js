@@ -27,7 +27,7 @@ test('hosted providers are discovered from email domains and use safe presets', 
 });
 
 test('Mail-in-a-Box accepts one TLS hostname for IMAP and submission', () => {
-  assert.deepEqual(discoverAccountProvider({ email: 'person@example.test', serverHost: 'box.xer5.com' }), {
+  assert.deepEqual(discoverAccountProvider({ email: 'person@example.test', serverHost: 'box.example.test' }), {
     provider: 'mailinabox',
     confidence: 'server-pattern',
     reason: 'Mail-in-a-Box commonly uses a box.* TLS hostname.',
@@ -35,11 +35,11 @@ test('Mail-in-a-Box accepts one TLS hostname for IMAP and submission', () => {
   assert.deepEqual(accountConnection({
     email: 'person@example.test',
     provider: 'mail-in-a-box',
-    serverHost: 'BOX.XER5.COM.',
+    serverHost: 'BOX.EXAMPLE.TEST.',
   }), {
     provider: 'mailinabox',
-    imap: { host: 'box.xer5.com', port: 993, secure: true },
-    smtp: { host: 'box.xer5.com', port: 587, secure: false },
+    imap: { host: 'box.example.test', port: 993, secure: true },
+    smtp: { host: 'box.example.test', port: 587, secure: false },
   });
 });
 

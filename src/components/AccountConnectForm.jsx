@@ -76,6 +76,9 @@ export function AccountConnectForm({
 
   useEffect(() => { onStepChange?.(step, selectedProvider); }, [step, selectedProvider]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { onSavingChange?.(saving); }, [saving]); // eslint-disable-line react-hooks/exhaustive-deps
+  // A host that unmounts the form right after a successful add must not be
+  // left believing a request is still in flight.
+  useEffect(() => () => onSavingChange?.(false), []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (autoFocus) firstProviderRef.current?.focus(); }, [autoFocus]);
 
   const updateEmail = (event) => {

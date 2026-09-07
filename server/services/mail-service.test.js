@@ -82,13 +82,13 @@ test('unsaved settings test verifies IMAP and SMTP without reading repositories'
   const result = await service.testSettings({
     email: 'person@example.test',
     provider: 'mailinabox',
-    serverHost: 'box.xer5.com',
+    serverHost: 'box.example.test',
     credentials: { username: 'person@example.test', password: 'test-password' },
   });
   assert.deepEqual(result, { imap: true, smtp: true });
-  assert.equal(imapOptions.host, 'box.xer5.com');
+  assert.equal(imapOptions.host, 'box.example.test');
   assert.equal(imapOptions.port, 993);
-  assert.equal(smtpOptions.host, 'box.xer5.com');
+  assert.equal(smtpOptions.host, 'box.example.test');
   assert.equal(smtpOptions.port, 587);
   assert.equal(smtpOptions.requireTLS, true);
   assert.equal(imapLogout, true);
@@ -323,10 +323,10 @@ function sendHarness({ provider = 'custom', ImapClient, appendResult, appendErro
     email: 'sender@example.test',
     display_name: 'Sender Name',
     provider,
-    imap_host: provider === 'gmail' ? 'imap.gmail.com' : 'box.xer5.com',
+    imap_host: provider === 'gmail' ? 'imap.gmail.com' : 'box.example.test',
     imap_port: 993,
     imap_secure: 1,
-    smtp_host: provider === 'gmail' ? 'smtp.gmail.com' : 'box.xer5.com',
+    smtp_host: provider === 'gmail' ? 'smtp.gmail.com' : 'box.example.test',
     smtp_port: provider === 'gmail' ? 465 : 587,
     smtp_secure: provider === 'gmail' ? 1 : 0,
     signature: '',
