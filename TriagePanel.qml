@@ -35,6 +35,8 @@ Panel {
   property string toast: ""
   property var pending: ({})   // id -> local overrides until the daemon confirms
   property double nowMs: Date.now()
+  property bool setupOpen: false
+  readonly property bool showSetup: !widget.configured || setupOpen
 
   readonly property var items: filtered(widget.conversations, filter, pending)
   readonly property var current: items.length > 0 ? items[Math.min(cursor, items.length - 1)] : null
@@ -222,11 +224,21 @@ Panel {
   function openInWeb() { widget.openWeb(""); root.close() }
   function compose() { widget.openWeb("/?compose=1"); root.close() }
   function refreshNow() { widget.refresh(); flash("Refreshing…") }
+  function openSetup(step) {
+    root.setupOpen = true
+    onboarding.start(step)
+  }
+  function closeSetup() {
+    root.setupOpen = false
+    Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+  }
   function setFilter(f) { root.filter = f; root.cursor = 0; listView.positionViewAtBeginning() }
 
   onOpenedChanged: if (opened) {
     nowMs = Date.now()
     widget.refresh()
+    if (!widget.configured) openSetup("mode")
+    else if (root.setupOpen) onboarding.start()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   } else {
     root.pending = ({})
@@ -249,8 +261,12 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
+      // Text fields in the wizard must receive typing; the catcher would
+      // otherwise eat every key as a shortcut.
+      blocked: root.showSetup && onboarding.editing
 
       onMoveRequested: function(dx, dy) {
+        if (root.showSetup) return
         if (root.openId !== "") {
           if (dy !== 0) detailFlick.contentY = root.clamp(detailFlick.contentY + dy * Style.space(64), 0, Math.max(0, detailFlick.contentHeight - detailFlick.height))
           if (dx !== 0) root.stepConversation(dx)
@@ -263,14 +279,16 @@ Panel {
         if (dx !== 0) root.cycleFilter(dx)
       }
       onActivateRequested: {
+        if (root.showSetup) return
         if (root.openId !== "") return
         if (root.current) root.showConversation(root.current.id)
       }
-      onReturnRequested: if (root.openId !== "") root.backToList(); else root.close()
-      onCloseRequested: if (root.openId !== "") root.backToList(); else root.close()
-      onDeleteRequested: root.trash()
+      onReturnRequested: if (root.showSetup) { if (widget.configured) root.closeSetup(); else root.close() } else if (root.openId !== "") root.backToList(); else root.close()
+      onCloseRequested: if (root.showSetup) { if (widget.configured) root.closeSetup(); else root.close() } else if (root.openId !== "") root.backToList(); else root.close()
+      onDeleteRequested: if (!root.showSetup) root.trash()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(t) {
+        if (root.showSetup) return
         switch (t) {
           case "j": keyCatcher.moveRequested(0, 1); break
           case "k": keyCatcher.moveRequested(0, -1); break
@@ -317,13 +335,14 @@ Panel {
               PanelActionButton { iconText: "󰑐"; tooltipText: "Refresh (R)"; foreground: root.foreground; fontFamily: root.fontFamily; onClicked: root.refreshNow() }
               PanelActionButton { iconText: "󱞁"; tooltipText: "Compose in aMail (c)"; foreground: root.foreground; fontFamily: root.fontFamily; onClicked: root.compose() }
               PanelActionButton { iconText: "󰖟"; tooltipText: "Open aMail (o)"; foreground: root.foreground; fontFamily: root.fontFamily; onClicked: root.openInWeb() }
+              PanelActionButton { iconText: "󰒓"; tooltipText: "Settings"; foreground: root.foreground; fontFamily: root.fontFamily; onClicked: root.showSetup ? root.closeSetup() : root.openSetup() }
             }
           }
         }
 
         // ---------- filter chips (list mode) ----------
         Row {
-          visible: root.openId === ""
+          visible: root.openId === "" && !root.showSetup
           width: parent.width
           spacing: Style.space(6)
           Button { text: "Unread"; selected: root.filter === "unread"; foreground: root.foreground; accent: root.accent; fontFamily: root.fontFamily; fontSize: Style.font.bodySmall; onClicked: root.setFilter("unread") }
@@ -341,7 +360,7 @@ Panel {
 
         // ---------- detail header (thread mode) ----------
         Row {
-          visible: root.openId !== ""
+          visible: root.openId !== "" && !root.showSetup
           width: parent.width
           spacing: Style.space(6)
           Button { iconText: "󰁍"; text: "Back"; foreground: root.foreground; accent: root.accent; fontFamily: root.fontFamily; fontSize: Style.font.bodySmall; onClicked: root.backToList() }
@@ -360,10 +379,24 @@ Panel {
           width: parent.width
           height: column.height - y - footer.height - column.spacing * 2
 
+          Onboarding {
+            id: onboarding
+            visible: root.showSetup
+            anchors.fill: parent
+            widget: root.widget
+            foreground: root.foreground
+            accent: root.accent
+            urgent: root.urgent
+            fontFamily: root.fontFamily
+            canCancel: widget.configured
+            onFinished: root.closeSetup()
+            onCancelled: root.closeSetup()
+          }
+
           // list
           ListView {
             id: listView
-            visible: root.openId === ""
+            visible: root.openId === "" && !root.showSetup
             anchors.fill: parent
             clip: true
             model: root.items
@@ -495,7 +528,7 @@ Panel {
           // thread detail
           Flickable {
             id: detailFlick
-            visible: root.openId !== ""
+            visible: root.openId !== "" && !root.showSetup
             anchors.fill: parent
             clip: true
             contentWidth: width
@@ -595,6 +628,7 @@ Panel {
             anchors.verticalCenter: parent.verticalCenter
             width: parent.width
             text: root.toast !== "" ? root.toast
+              : root.showSetup ? (widget.configured ? "Esc closes settings" : "aMail setup · Esc closes")
               : (root.openId !== "" ? "u back · a analyzed · e archive · r read · s star · # trash · ←/→ next"
                                    : "j/k move · Enter open · a analyzed · e archive · r read · o web · ? help")
             color: root.toast !== "" ? root.foreground : root.faint

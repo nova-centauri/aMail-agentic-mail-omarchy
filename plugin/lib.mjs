@@ -103,12 +103,20 @@ export function createApi({ url, token, timeoutMs = 15_000 }) {
     const timer = setTimeout(() => controller.abort(new Error(`aMail request timed out after ${timeout}ms`)), timeout);
     if (signal) signal.addEventListener('abort', () => controller.abort(signal.reason), { once: true });
     try {
-      const response = await fetch(`${base}${pathname}`, {
-        method,
-        headers: body === undefined ? headers : { ...headers, 'Content-Type': 'application/json' },
-        body: body === undefined ? undefined : JSON.stringify(body),
-        signal: controller.signal,
-      });
+      let response;
+      try {
+        response = await fetch(`${base}${pathname}`, {
+          method,
+          headers: body === undefined ? headers : { ...headers, 'Content-Type': 'application/json' },
+          body: body === undefined ? undefined : JSON.stringify(body),
+          signal: controller.signal,
+        });
+      } catch (error) {
+        // undici's "fetch failed" hides the useful part in `cause`.
+        const cause = error?.cause;
+        const detail = cause?.code || cause?.message || error?.message || String(error);
+        throw new Error(`Could not reach ${base}: ${detail}`);
+      }
       const text = await response.text();
       let data = null;
       try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
