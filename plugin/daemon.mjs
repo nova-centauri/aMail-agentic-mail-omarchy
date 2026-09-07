@@ -322,7 +322,7 @@ function sleep(ms) {
 // ---------------------------------------------------------------- main
 async function main() {
   if (!config.url) {
-    lastError = 'aMail is not configured. Run: amail-plugin connect <url>';
+    lastError = 'Not set up yet — click the aMail icon to begin (or run: amail-plugin connect <url>)';
     transport = 'unconfigured';
     writeState();
     // Stay alive but idle; the widget shows the hint. Re-check occasionally so
@@ -334,7 +334,7 @@ async function main() {
     return;
   }
   if (!token) {
-    lastError = 'No access token. Run: amail-plugin connect <url>';
+    lastError = 'No access token yet — click the aMail icon to finish setup';
     transport = 'unconfigured';
     writeState();
     setInterval(() => { if (loadToken(loadConfig())) process.exit(75); }, 5_000);

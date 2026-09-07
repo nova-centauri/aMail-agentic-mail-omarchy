@@ -161,7 +161,7 @@ BarWidget {
     text: "󰇮" + ((root.hasWork || root.showZero) ? " " + root.badgeText : "")
     active: root.unread > 0
     dimmed: !root.online
-    tooltipText: !root.configured ? "aMail: not configured — run amail-plugin connect <url>"
+    tooltipText: !root.configured ? "aMail: click to set up"
       : !root.online ? "aMail: offline" + (root.lastError !== "" ? " — " + root.lastError : "")
       : root.unread + " unread · " + root.unanalyzed + " not yet analyzed · " + (root.transport === "push" ? "push" : root.transport)
     onPressed: function(buttonCode) {
