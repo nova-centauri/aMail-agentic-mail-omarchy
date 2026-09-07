@@ -149,7 +149,7 @@ BarWidget {
         root.daemonLog = String(line).slice(0, 400)
         if (line.indexOf("no JavaScript runtime") >= 0) {
           root.online = false
-          root.lastError = "install node (sudo pacman -S nodejs) or bun, then restart the shell"
+          root.lastError = "no JavaScript runtime found: install nodejs (or bun) from your package manager, then restart the shell"
         }
       }
     }

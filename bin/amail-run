@@ -24,7 +24,7 @@ if [ -z "$runtime" ] && [ "$kind" != "server" ]; then
   done
 fi
 if [ -z "$runtime" ]; then
-  echo '{"ok":false,"error":"no JavaScript runtime found: install node (sudo pacman -S nodejs) or bun"}' >&2
+  echo '{"ok":false,"error":"no JavaScript runtime found: install nodejs (or bun) from your package manager"}' >&2
   exit 69
 fi
 exec "$runtime" "$script" "$@"

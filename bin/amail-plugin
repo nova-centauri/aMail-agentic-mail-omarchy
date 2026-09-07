@@ -85,7 +85,7 @@ ensure_node() {
   for c in node "$HOME/.local/share/mise/shims/node" /usr/bin/node; do
     if command -v "$c" >/dev/null 2>&1; then node="$(command -v "$c")"; break; fi
   done
-  [ -n "$node" ] || die "server mode needs node ≥ 22 (sudo pacman -S nodejs npm)"
+  [ -n "$node" ] || die "server mode needs node ≥ 22 and npm: install the nodejs and npm packages from your package manager"
   local major; major="$("$node" -v | sed 's/^v//' | cut -d. -f1)"
   [ "$major" -ge 22 ] || die "server mode needs node ≥ 22, found $("$node" -v)"
   printf '%s' "$node"

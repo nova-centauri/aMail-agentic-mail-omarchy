@@ -122,7 +122,8 @@ rm -rf ~/.config/amail ~/.local/state/amail ~/.local/share/amail   # optional: t
 ## Quick start (Docker)
 
 ```sh
-git clone https://github.com/<you>/amail.git && cd amail
+git clone https://github.com/nova-centauri/aMail-agentic-mail-omarchy.git amail && cd amail
+git checkout --detach "$AMAIL_COMMIT"   # the full 40-character SHA you reviewed; never build a moving branch
 cp .env.example .env
 openssl rand -hex 32   # paste as AMAIL_ENCRYPTION_KEY
 openssl rand -hex 32   # paste as AMAIL_ACCESS_TOKEN
