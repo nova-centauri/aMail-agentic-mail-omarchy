@@ -7,7 +7,7 @@ import { Icon } from './Icon.jsx';
 import { Avatar, IconButton } from './ui.jsx';
 import { CategoryBadge } from './MailList.jsx';
 
-export function ThreadToolbar({ onBack, onAction, isRead }) {
+export function ThreadToolbar({ onBack, onAction, isRead, isAnalyzed = true }) {
   return (
     <div className="thread-toolbar">
       <div className="toolbar-left">
@@ -18,6 +18,8 @@ export function ThreadToolbar({ onBack, onAction, isRead }) {
         <IconButton label="Delete" onClick={() => onAction('trash')}><Icon name="trash" /></IconButton>
         <IconButton label={isRead ? 'Mark as unread' : 'Mark as read'} onClick={() => onAction(isRead ? 'unread' : 'read')}><Icon name={isRead ? 'unread' : 'mail'} /></IconButton>
         <IconButton label="Snooze until tomorrow" onClick={() => onAction('snooze')}><Icon name="snooze" /></IconButton>
+        <span className="toolbar-separator" />
+        <IconButton label={isAnalyzed ? 'Mark as not analyzed' : 'Mark as analyzed by agent'} active={isAnalyzed} onClick={() => onAction(isAnalyzed ? 'unanalyzed' : 'analyzed')} className="analyzed-toggle"><Icon name="sparkles" /></IconButton>
       </div>
     </div>
   );
@@ -119,7 +121,7 @@ export function ThreadView({ thread, activeFolder, onBack, onAction, onLoadRemot
   });
   return (
     <section className="thread-panel" aria-label="Open conversation">
-      <ThreadToolbar onBack={onBack} onAction={(action) => onAction(action, [thread.id])} isRead={!thread.unread} />
+      <ThreadToolbar onBack={onBack} onAction={(action) => onAction(action, [thread.id])} isRead={!thread.unread} isAnalyzed={thread.analyzed !== false} />
       <div className="thread-scroll">
         <div className="thread-heading">
           <div className="thread-heading-main">
@@ -129,6 +131,9 @@ export function ThreadView({ thread, activeFolder, onBack, onAction, onLoadRemot
                 <CategoryBadge thread={thread} showPrimary />
                 {(thread.labels || []).map((label) => <span key={label} className="message-label">{label}</span>)}
                 {activeFolder !== 'inbox' && <span className="message-label neutral-label">{activeFolder}</span>}
+                {thread.analyzed === false
+                  ? <span className="message-label analyzed-label is-pending" title="No agent has analyzed this conversation yet"><Icon name="sparkles" size={12} /> Not yet analyzed</span>
+                  : thread.analyzedBy && <span className="message-label analyzed-label" title={thread.analyzedAt ? `Analyzed ${formatMessageDate(thread.analyzedAt)}` : undefined}><Icon name="sparkles" size={12} /> Analyzed by {thread.analyzedBy}</span>}
               </div>
             </div>
             <p className="category-reason"><Icon name="sparkles" size={13} />{classification.categoryReason}</p>

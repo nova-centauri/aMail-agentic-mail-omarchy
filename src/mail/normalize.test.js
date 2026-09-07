@@ -5,7 +5,7 @@ import { normalizeThread } from './normalize.js';
 describe('smart category metadata', () => {
   it('trusts an explicit API category instead of re-classifying live mail', () => {
     const metadata = smartCategoryMetadata({
-      subject: '[GigaMail] CI failed on main',
+      subject: '[aMail] CI failed on main',
       snippet: 'The test job failed after 2m 18s',
       from: { name: 'GitHub Actions', email: 'notifications@github.com' },
       category: 'primary',
@@ -18,7 +18,7 @@ describe('smart category metadata', () => {
 
   it('infers a category for preview threads that omit server metadata', () => {
     expect(inferSmartCategory({
-      subject: '[GigaMail] CI failed on main',
+      subject: '[aMail] CI failed on main',
       from: { email: 'notifications@github.com' },
     }).category).toBe('github_ci');
   });

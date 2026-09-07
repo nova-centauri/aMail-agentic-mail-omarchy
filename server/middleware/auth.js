@@ -1,3 +1,4 @@
+import { LEGACY_SESSION_COOKIE, SESSION_COOKIE } from '../config.js';
 import { timingSafeMatch } from '../services/crypto.js';
 
 function readCookie(request, name) {
@@ -14,7 +15,9 @@ export function requestHasAccess(request, config) {
   if (!config.accessToken) return true;
   const authorization = request.get('authorization') || '';
   const bearer = authorization.match(/^Bearer\s+(.+)$/i)?.[1];
-  return timingSafeMatch(bearer, config.accessToken) || timingSafeMatch(readCookie(request, 'gigamail_session'), config.accessToken);
+  return timingSafeMatch(bearer, config.accessToken)
+    || timingSafeMatch(readCookie(request, SESSION_COOKIE), config.accessToken)
+    || timingSafeMatch(readCookie(request, LEGACY_SESSION_COOKIE), config.accessToken);
 }
 
 export function accessGate(config) {
@@ -27,7 +30,7 @@ export function sessionCookieOptions(config) {
   return {
     httpOnly: true,
     sameSite: 'strict',
-    secure: config.env === 'production' && process.env.GIGAMAIL_COOKIE_SECURE !== 'false',
+    secure: config.env === 'production' && config.cookieSecure !== false,
     maxAge: 1000 * 60 * 60 * 12,
     path: '/',
   };

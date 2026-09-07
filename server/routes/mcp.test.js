@@ -77,7 +77,7 @@ async function mcpRpc(origin, { token, method, params, id = 1 }) {
 }
 
 test('MCP endpoint requires access token and exposes inbox tools', async (t) => {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gigamail-mcp-'));
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'amail-mcp-'));
   const accessToken = 'test-mcp-access-token';
   const config = {
     dataDir,
@@ -229,7 +229,7 @@ test('MCP endpoint requires access token and exposes inbox tools', async (t) => 
     headers: {
       'Content-Type': 'application/json',
       Accept: 'application/json, text/event-stream',
-      Cookie: `gigamail_session=${encodeURIComponent(accessToken)}`,
+      Cookie: `amail_session=${encodeURIComponent(accessToken)}`,
     },
     body: JSON.stringify({
       jsonrpc: '2.0',

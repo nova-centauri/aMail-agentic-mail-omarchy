@@ -25,26 +25,26 @@ ARG APP_GID=10001
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
     PORT=3000 \
-    GIGAMAIL_DATA_DIR=/data \
-    GIGAMAIL_STATIC_DIR=/app/dist
+    AMAIL_DATA_DIR=/data \
+    AMAIL_STATIC_DIR=/app/dist
 
 WORKDIR /app
 
 # A non-empty, owned directory lets Docker initialize a new named volume with
 # the correct ownership before the non-root process starts.
-RUN groupadd --gid "${APP_GID}" gigamail \
-    && useradd --uid "${APP_UID}" --gid gigamail --no-create-home \
-      --home-dir /nonexistent --shell /usr/sbin/nologin gigamail \
+RUN groupadd --gid "${APP_GID}" amail \
+    && useradd --uid "${APP_UID}" --gid amail --no-create-home \
+      --home-dir /nonexistent --shell /usr/sbin/nologin amail \
     && mkdir -p /data \
     && touch /data/.volume-owner \
-    && chown -R gigamail:gigamail /data
+    && chown -R amail:amail /data
 
-COPY --chown=gigamail:gigamail --from=build /app/package.json /app/package-lock.json ./
-COPY --chown=gigamail:gigamail --from=build /app/node_modules ./node_modules
-COPY --chown=gigamail:gigamail --from=build /app/dist ./dist
-COPY --chown=gigamail:gigamail --from=build /app/server ./server
+COPY --chown=amail:amail --from=build /app/package.json /app/package-lock.json ./
+COPY --chown=amail:amail --from=build /app/node_modules ./node_modules
+COPY --chown=amail:amail --from=build /app/dist ./dist
+COPY --chown=amail:amail --from=build /app/server ./server
 
-USER gigamail
+USER amail
 
 EXPOSE 3000
 

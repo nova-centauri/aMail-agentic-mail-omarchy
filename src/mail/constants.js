@@ -22,16 +22,19 @@ export const SMART_CATEGORIES = [
   { id: 'github_ci', label: 'GitHub CI', shortLabel: 'GitHub CI', icon: 'branch', description: 'Pull requests, checks, builds, and workflow runs' },
   { id: 'logs', label: 'Logs', shortLabel: 'Logs', icon: 'terminal', description: 'Automated logs, digests, and machine output' },
   { id: 'status', label: 'Status updates', shortLabel: 'Status', icon: 'activity', description: 'Incidents, uptime, deploys, and service health' },
-  { id: 'ops_error', label: 'Ops errors', shortLabel: 'Ops errors', icon: 'alert', description: 'Failures from Workboard, Proxmox, Watchtower, and xer0/msl backups. Successful digests stay hidden.' },
+  { id: 'ops_error', label: 'Ops errors', shortLabel: 'Ops errors', icon: 'alert', description: 'Failures from your infrastructure digests (Proxmox, Watchtower, backup jobs, and any AMAIL_OPS_SOURCES you configure). Successful digests stay hidden.' },
 ];
 
-export const PERSON_FLAGS = [
-  { id: 'phil', label: 'Phil', shortLabel: 'Phil', emails: ['phil@midstatelitho.com', 'phil@midstaelitho.com'], color: '#0b57d0', description: 'Mail involving Phil at Midstate Litho' },
-  { id: 'sarah', label: 'Sarah', shortLabel: 'Sarah', emails: ['sarah@midstatelitho.com'], color: '#c2185b', description: 'Mail involving Sarah at Midstate Litho' },
-  { id: 'mark', label: 'Mark Culley', shortLabel: 'Mark', emails: ['mark_culley@sdmc.com'], color: '#00897b', description: 'Mail involving Mark Culley' },
-  { id: 'support', label: 'Midstate Support', shortLabel: 'Support', emails: ['support@midstatelitho.com', 'support@midstaetlitho.com'], color: '#e8710a', description: 'Mail involving Midstate Litho support' },
-  { id: 'sales', label: 'Midstate Sales', shortLabel: 'Sales', emails: ['sales@midstatelitho.com'], color: '#6c4fc7', description: 'Mail involving Midstate Litho sales' },
+/**
+ * Person flags are configured per installation (Settings → Flagged people, or
+ * PUT /api/flags) and loaded from the server. This is only the preview set
+ * shown before any account is connected.
+ */
+export const DEMO_PERSON_FLAGS = [
+  { id: 'priya', label: 'Priya', shortLabel: 'Priya', emails: ['priya@printworks.example'], color: '#0b57d0', description: 'Mail involving Priya' },
 ];
+
+export const FLAG_COLORS = ['#0b57d0', '#c2185b', '#00897b', '#e8710a', '#6c4fc7', '#455a64', '#8e24aa', '#188038'];
 
 export const CATEGORY_ALIASES = {
   all: 'all',
@@ -54,7 +57,6 @@ export const CATEGORY_ALIASES = {
   ops_error: 'ops_error',
   'ops-error': 'ops_error',
   ops_errors: 'ops_error',
-  workboard: 'ops_error',
   proxmox: 'ops_error',
   watchtower: 'ops_error',
 };
@@ -101,13 +103,13 @@ export const PROVIDER_PRESETS = {
     mark: 'M',
     color: '#6c4fc7',
     provider: 'mailinabox',
-    imapHost: 'box.xer5.com',
+    imapHost: '',
     imapPort: '993',
-    smtpHost: 'box.xer5.com',
+    smtpHost: '',
     smtpPort: '587',
     title: 'Connect Mail-in-a-Box',
     passwordTitle: 'Use the mailbox password',
-    passwordHint: 'Use the full mailbox address and its Mail-in-a-Box mailbox password. aMail connects to box.xer5.com with IMAP TLS and SMTP STARTTLS.',
+    passwordHint: 'Enter the public hostname of your box (usually box.yourdomain.com, as shown on its TLS certificate), the full mailbox address, and its mailbox password. aMail uses IMAP TLS on 993 and SMTP STARTTLS on 587.',
   },
   outlook: {
     id: 'outlook',

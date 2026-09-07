@@ -8,7 +8,7 @@ const decode = (value) => Buffer.from(value, 'base64url');
 function requireKey(key) {
   if (!key || key.length !== 32) {
     throw new ServiceUnavailableError(
-      'Credential encryption is unavailable. Set GIGAMAIL_ENCRYPTION_KEY before adding mail accounts.',
+      'Credential encryption is unavailable. Set AMAIL_ENCRYPTION_KEY before adding mail accounts.',
       'CREDENTIAL_ENCRYPTION_UNAVAILABLE',
     );
   }
@@ -36,7 +36,7 @@ export function decryptJson(payload, key) {
     return JSON.parse(plaintext.toString('utf8'));
   } catch (error) {
     throw new ServiceUnavailableError(
-      'Stored account credentials cannot be decrypted. Confirm GIGAMAIL_ENCRYPTION_KEY has not changed.',
+      'Stored account credentials cannot be decrypted. Confirm AMAIL_ENCRYPTION_KEY has not changed.',
       'CREDENTIAL_DECRYPTION_FAILED',
     );
   }

@@ -7,11 +7,11 @@ import { createDatabase, createRepositories } from '../db.js';
 import { createPasskeyService, webauthnContext } from './passkeys.js';
 
 test('passkey registration and login persist credentials without echoing public keys', async (t) => {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gigamail-passkey-'));
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'amail-passkey-'));
   const config = {
     dataDir,
     dbPath: path.join(dataDir, 'mail.sqlite'),
-    webauthnRpName: 'GigaMail',
+    webauthnRpName: 'aMail',
     webauthnRpId: 'localhost',
     webauthnOrigins: ['http://localhost:3080'],
   };
@@ -82,21 +82,21 @@ test('passkey registration and login persist credentials without echoing public 
 test('pinned WebAuthn config ignores the internal Host seen behind a reverse proxy', () => {
   const request = {
     get(name) {
-      if (name === 'host') return '10.0.0.15:3080';
+      if (name === 'host') return '192.0.2.15:3080';
       if (name === 'x-forwarded-proto') return 'http';
       return '';
     },
   };
-  const derived = webauthnContext(request, { webauthnRpId: '', webauthnOrigins: [], webauthnRpName: 'GigaMail' });
-  assert.equal(derived.rpID, '10.0.0.15');
-  assert.equal(derived.origin, 'http://10.0.0.15:3080');
+  const derived = webauthnContext(request, { webauthnRpId: '', webauthnOrigins: [], webauthnRpName: 'aMail' });
+  assert.equal(derived.rpID, '192.0.2.15');
+  assert.equal(derived.origin, 'http://192.0.2.15:3080');
 
   const pinned = webauthnContext(request, {
-    webauthnRpId: 'mail.xer0.io',
-    webauthnOrigins: ['https://mail.xer0.io'],
-    webauthnRpName: 'GigaMail',
+    webauthnRpId: 'mail.example.test',
+    webauthnOrigins: ['https://mail.example.test'],
+    webauthnRpName: 'aMail',
   });
-  assert.equal(pinned.rpID, 'mail.xer0.io');
-  assert.equal(pinned.origin, 'https://mail.xer0.io');
-  assert.deepEqual(pinned.origins, ['https://mail.xer0.io']);
+  assert.equal(pinned.rpID, 'mail.example.test');
+  assert.equal(pinned.origin, 'https://mail.example.test');
+  assert.deepEqual(pinned.origins, ['https://mail.example.test']);
 });

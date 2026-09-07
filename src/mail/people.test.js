@@ -25,7 +25,7 @@ describe('recipient parsing', () => {
 describe('known people', () => {
   it('collects unique mailbox contacts and ranks suggestions', () => {
     const people = collectKnownPeople(
-      [{ name: 'Nova', email: 'nova@centauri.dev' }],
+      [{ name: 'Sam', email: 'sam@rivera.example' }],
       [{
         from: { name: 'Maya Chen', email: 'maya@studio.com' },
         to: ['Jordan Lee <jordan@studio.com>'],
@@ -36,9 +36,9 @@ describe('known people', () => {
       'avery@ops.example',
       'jordan@studio.com',
       'maya@studio.com',
-      'nova@centauri.dev',
+      'sam@rivera.example',
     ]);
-    expect(suggestRecipients(people, 'may', [{ email: 'nova@centauri.dev' }]).map((item) => item.email)).toEqual([
+    expect(suggestRecipients(people, 'may', [{ email: 'sam@rivera.example' }]).map((item) => item.email)).toEqual([
       'maya@studio.com',
     ]);
   });

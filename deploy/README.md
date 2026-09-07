@@ -3,28 +3,27 @@
 This Compose bundle is isolated from other Docker workloads: it uses its own
 project-scoped containers, networks, and named volumes, never mounts the
 Docker socket, and never uses `down`, `prune`, or `--remove-orphans` in its
-launch helper. It cannot guarantee that an administrator with Docker access
-will never affect another container, but its normal operations are scoped to
-this project.
+launch helper. Its normal operations are scoped to this project.
 
 ## First launch
 
-On the VM, install Docker Compose 2.33.1 or newer, place this repository in a
-directory owned by the deployment user, then create the private runtime
+On the host, install Docker Compose 2.33.1 or newer, place this repository in
+a directory owned by the deployment user, then create the private runtime
 configuration:
 
 ```sh
-cd /path/to/GigaMail
+cd /path/to/amail
 cp .env.example .env
 chmod 600 .env
 openssl rand -hex 32
 ```
 
-Put a distinct generated value into each of `GIGAMAIL_ENCRYPTION_KEY` and
-`GIGAMAIL_ACCESS_TOKEN`. The encryption key protects the saved email-account
+Put a distinct generated value into each of `AMAIL_ENCRYPTION_KEY` and
+`AMAIL_ACCESS_TOKEN`. The encryption key protects the saved email-account
 credentials in the SQLite database. Losing it makes those credentials
 unreadable; expose it only through the protected `.env` file or an equivalent
-secret manager.
+secret manager. The access token is what you (and your agents) present to log
+in, so keep it in a password manager.
 
 Start the privacy-preserving configuration (the recommended default):
 
@@ -34,71 +33,91 @@ docker compose ps
 ```
 
 The first command validates the resolved Compose configuration and then builds
-and starts only aMail plus its internal Tor/Privoxy proxy. Application data lives in the named
-`gigamail-data` volume (prefixed by `COMPOSE_PROJECT_NAME`) rather than in the
-repository or any host bind mount.
+and starts aMail plus its internal Tor/Privoxy proxy. Application data lives in
+the named `amail-data` volume (prefixed by `COMPOSE_PROJECT_NAME`) rather than
+in the repository or any host bind mount.
+
+Open `http://127.0.0.1:3080`, sign in with the access token, and the first-run
+wizard walks you through connecting mailboxes and pointing an agent at the MCP
+endpoint.
 
 The supplied `.env.example` polls enabled accounts every five minutes without
-keeping twelve long-lived IMAP IDLE sockets open. That interval is the
-unattended fallback: a focused mailbox tab checks every inbox immediately when
-it becomes visible and then about every 15 seconds while it stays in use.
-Set `SYNC_INTERVAL_MINUTES=0` only if you want no server-side fallback.
+keeping long-lived IMAP IDLE sockets open. That interval is the unattended
+fallback: a focused mailbox tab checks every inbox immediately when it becomes
+visible and then about every 15 seconds while it stays in use. Set
+`SYNC_INTERVAL_MINUTES=0` only if you want no server-side fallback.
 
-On its first pass, aMail imports the newest `GIGAMAIL_SYNC_BATCH_SIZE`
-messages from each supported folder (200 by default). This is a recent-mail
-client rather than a full historical migration tool; increase the value (up to
-1000) before connecting an account if you need a larger initial window.
+On its first pass, aMail imports the newest `AMAIL_SYNC_BATCH_SIZE` messages
+from each supported folder (200 by default). This is a recent-mail client
+rather than a full historical migration tool; increase the value (up to 1000)
+before connecting an account if you need a larger initial window.
 
-## Access without opening a VM port
+## Upgrading from GigaMail
 
-By default aMail binds to `127.0.0.1:3080` on the VM, not the LAN or
-internet. From the workstation, create a tunnel:
+aMail is the open-source continuation of GigaMail and is a drop-in upgrade:
+
+- Every `GIGAMAIL_*` variable is still read when the matching `AMAIL_*`
+  variable is unset, so an existing `.env` works unchanged.
+- An existing `gigamail.sqlite` is opened in place; no export/import step.
+- The old `gigamail_session` cookie stays valid until it expires.
+- Keep your data by pointing the `amail-data` volume at the old named volume
+  (see the commented `external:` block in `docker-compose.yml`), or keep
+  `COMPOSE_PROJECT_NAME` and the old volume name in your `.env`.
+
+## Access without opening a port
+
+By default aMail binds to `127.0.0.1:3080` on the host, not the LAN or
+internet. From your workstation, create a tunnel:
 
 ```sh
-ssh -N -L 3080:127.0.0.1:3080 mitsubishi@10.0.0.15
+ssh -N -L 3080:127.0.0.1:3080 user@your-server
 ```
 
 Then open `http://127.0.0.1:3080` locally and authenticate using
-`GIGAMAIL_ACCESS_TOKEN`. Keep that token secret: this application has access
-to stored mail-provider credentials. The UI keeps the token only for the
-current browser session and sends it as a Bearer token, so the secure cookie
-setting can remain enabled even when the SSH tunnel itself uses local HTTP.
+`AMAIL_ACCESS_TOKEN`. Keep that token secret: this application has access to
+stored mail-provider credentials. The UI keeps the token only for the current
+browser session and sends it as a Bearer token, so `AMAIL_COOKIE_SECURE` can
+remain enabled even when the SSH tunnel itself uses local HTTP.
 
-For a reverse proxy, leave the aMail port loopback-only and run the proxy
-as a separately authenticated, TLS-terminating service on the same host.
-Only set `GIGAMAIL_TRUST_PROXY=true` when that proxy is local and strips any
+For a reverse proxy, leave the aMail port loopback-only and run the proxy as a
+separately authenticated, TLS-terminating service on the same host. Only set
+`AMAIL_TRUST_PROXY=true` when that proxy is local and strips any
 client-supplied forwarding headers; do not publish aMail directly.
 
-## Nginx Proxy Manager
+## Behind a reverse proxy (Caddy, Nginx, Nginx Proxy Manager, Traefik)
 
-For a domain served by an existing Nginx Proxy Manager instance, set the
-application to listen only on the VM's private address, then restart the
-aMail project:
+If the proxy runs on another host, bind aMail to this machine's private
+address instead of loopback and restart the project:
 
 ```sh
 # .env
-GIGAMAIL_BIND_ADDRESS=10.0.0.15
-GIGAMAIL_PORT=3080
+AMAIL_BIND_ADDRESS=192.168.1.20
+AMAIL_PORT=3080
 ```
 
-In Nginx Proxy Manager, use `http` as the upstream scheme with
-`10.0.0.15` and port `3080`. Configure the public host (for example
-`mail.xer0.io`) with a valid TLS certificate and force HTTPS before sending
-traffic upstream. Do not make a public HTTP-only route. Keep
-`GIGAMAIL_ACCESS_TOKEN` set: it is the application-level gate for every
-mailbox API request. An NPM access list is a useful additional layer.
+Configure the public host (for example `mail.example.com`) with a valid TLS
+certificate and force HTTPS before sending traffic upstream over plain `http`
+to `192.168.1.20:3080`. Do not make a public HTTP-only route. Keep
+`AMAIL_ACCESS_TOKEN` set: it is the application-level gate for every mailbox
+API request. A proxy-level access list or SSO is a useful additional layer.
 
-`GIGAMAIL_TRUST_PROXY` can remain `false` for this configuration because
-aMail uses Bearer-token authentication and does not need forwarded client
-addresses. If the proxy is on another LAN host, any LAN device able to reach
-`10.0.0.15:3080` can reach the login screen; it still cannot read mail without
-the high-entropy aMail access token.
+Passkeys need to know the public origin, because the container only sees the
+proxy's internal `Host`. Pin it:
+
+```sh
+# .env
+AMAIL_RP_ID=mail.example.com
+AMAIL_ORIGIN=https://mail.example.com
+```
+
+`AMAIL_TRUST_PROXY` can remain `false` for this configuration because aMail
+uses Bearer-token authentication and does not need forwarded client addresses.
 
 ## Optional Tor/Privoxy remote-content path
 
 The default `deploy/launch.sh` mode routes remote content through an internal
-Tor/Privoxy service. aMail fetches sanitized remote content server-side, so
-a sender does not learn the browser's IP address or the VM's public IP. To
+Tor/Privoxy service. aMail fetches sanitized remote content server-side, so a
+sender does not learn the browser's IP address or the host's public IP. To
 start that configuration explicitly:
 
 ```sh
@@ -108,147 +127,54 @@ docker compose --profile privacy ps
 
 This starts `tor-proxy` and passes
 `REMOTE_CONTENT_PROXY_URL=http://tor-proxy:8118` only to that launch. Neither
-its SOCKS nor HTTP proxy port is published to the Docker host. aMail can
-reach Privoxy over an internal network; Tor alone has a separate egress
-network, selected explicitly as Tor's default gateway. aMail's separate
-provider network is likewise its explicit default route for IMAP/SMTP. If the
-proxy is unavailable, remote-content requests fail closed rather than silently
-going direct.
+its SOCKS nor HTTP proxy port is published to the Docker host. aMail can reach
+Privoxy over an internal network; Tor alone has a separate egress network,
+selected explicitly as Tor's default gateway. If the proxy is unavailable,
+remote-content requests fail closed rather than silently going direct.
 
 Tor is a privacy aid, not a complete anonymity system. It does not anonymize
 IMAP/SMTP traffic, and remote images can still reveal message-specific data
-once explicitly loaded. Keep tracker blocking enabled, avoid opening unknown
-content unnecessarily, and expect some image hosts to reject Tor exits.
+once explicitly loaded. Keep tracker blocking enabled and expect some image
+hosts to reject Tor exits.
 
-If you run `sh deploy/launch.sh direct`, aMail starts without Tor/Privoxy,
-but production builds keep remote content blocked. They do **not** fall back to
+If you run `sh deploy/launch.sh direct`, aMail starts without Tor/Privoxy, but
+production builds keep remote content blocked. They do **not** fall back to
 direct remote fetching, so a stopped or omitted proxy cannot accidentally
-expose the VM's public IP. Direct mode is useful when you want mail access
-while keeping external message content disabled.
+expose the host's public IP.
 
 ## Routine operations
 
 ```sh
-docker compose logs --follow gigamail
+docker compose logs --follow amail
 docker compose ps
-docker compose exec gigamail node -e "fetch('http://127.0.0.1:3000/api/health').then(r => r.text()).then(console.log)"
+docker compose exec amail node -e "fetch('http://127.0.0.1:3000/api/health').then(r => r.text()).then(console.log)"
 ```
 
-To update, pull or copy the new source, review `.env` changes, then rerun the
-same `deploy/launch.sh` command. Do not delete the `gigamail-data` volume
-unless intentionally discarding all accounts, cached mail metadata, and
-settings.
+To update, pull the new source, review `.env.example` for new settings, then
+rerun the same `deploy/launch.sh` command. Set `AMAIL_FORCE_RECREATE=1` to
+recreate the application container without restarting a healthy Tor relay.
+Database migrations are backward-compatible and run automatically at startup.
 
-## Continuous deployment from `main`
+Before upgrading, take an online SQLite backup from inside the volume:
 
-The repository includes `.github/workflows/ci-deploy.yml`. Pull requests run
-the Node tests, production build, dependency audit, Compose validation, both
-Docker builds, a live application health check, and an unauthenticated API
-check. A push to `main` must pass the same checks before the production job is
-allowed to run.
+```sh
+docker compose exec amail node -e "
+  const Database = require('better-sqlite3');
+  const fs = require('node:fs');
+  const src = fs.existsSync('/data/amail.sqlite') ? '/data/amail.sqlite' : '/data/gigamail.sqlite';
+  new Database(src, { readonly: true }).backup('/data/backup-' + Date.now() + '.sqlite').then(() => console.log('ok'));
+"
+```
 
-The VM has a private `10.0.0.15` address, so a GitHub-hosted runner cannot
-connect to it directly. Install a dedicated GitHub Actions self-hosted runner
-on the VM instead of publishing SSH or adding a long-lived deployment key:
+Do not delete the `amail-data` volume unless intentionally discarding all
+accounts, cached mail metadata, and settings.
 
-1. In the GitHub repository, open **Settings → Actions → Runners → New
-   self-hosted runner** and select Linux.
-2. Run GitHub's generated install and configuration commands as
-   `mitsubishi`. Add the custom label `gigamail-prod` when configuring it.
-   Use a runner dedicated to this repository, not a shared organization
-   runner.
-3. Install the runner as a service using the `svc.sh` commands GitHub displays.
-4. Confirm the service user can run the deployment prerequisites without
-   `sudo`:
+## Continuous integration
 
-   ```sh
-   PRODUCTION_REPO=/path/to/GigaMail
-   git --version
-   docker version
-   docker compose version # must be 2.33.1 or newer for gateway priority
-   flock --version
-   test -d "$PRODUCTION_REPO/.git"
-   test "$(stat -c '%a' "$PRODUCTION_REPO/.env")" = 600
-   ```
-
-The production job uses the GitHub environment named `production` and is
-intentionally triggerable only by a push to `main`; branch-selectable manual
-dispatch is disabled because it would let branch-controlled code reach the
-Docker-capable runner. In **Settings → Environments → production**, restrict
-deployment branches to `main`. In branch protection for `main`, require the
-**Test and validate containers** check and disallow bypasses for ordinary
-merges.
-
-No GitHub deployment secrets or long-lived repository credentials are
-required. The production job locates exactly one persistent clone owned by
-the runner user which already contains the protected `.env` and the expected
-aMail deployment files; Actions workspaces are explicitly excluded. It
-first uses the working-directory label on the existing aMail Compose
-container. If no valid container-managed checkout exists, it searches the
-runner user's home directory and requires that clone's `origin` to be this
-GitHub repository. If the persistent clone lives elsewhere and there is no
-existing container, set the non-secret `PRODUCTION_REPO` variable on the
-GitHub `production` environment to its absolute path.
-
-The first CI-managed rollout can also repair a stale Compose working-directory
-label whose directory is missing or is no longer a valid clone. The bootstrap
-is allowed only below the runner user's home, only when exactly one running
-aMail container passes the authentication, encryption, and privacy health
-gates, only when its Compose project/config labels and `/data` named-volume
-labels agree, and only for a runner-owned parent directory. It creates a full
-local clone from the tested Actions workspace, pins `origin` to this
-repository, and uses the commit immediately before CI/CD was introduced as the
-initial source rollback point when the old application does not expose a
-release SHA. It also retains immutable tags for the exact live application and
-Tor images so the first failed rollout can restore the known-good runtime
-without rebuilding it.
-
-If an old deployment directory still exists, it is moved to a timestamped
-`.pre-cicd-*` sibling instead of being deleted. Its mode-`600` `.env` is copied
-into the new checkout; if no file remains, only an explicit allowlist of
-configuration values with dotenv-safe characters is recovered from the healthy
-container without printing them to the Actions log. The resolved Compose
-configuration is compared byte-for-byte with the live container before it is
-accepted. A failed bootstrap moves its partial clone aside and restores the
-prior directory, reporting a critical error if either atomic rename fails.
-Once the new deployment is verified and any preserved directory is no longer
-needed, an operator can remove that backup manually.
-
-The deploy script then imports the exact tested Git commit from the
-already-authenticated Actions workspace into that clone, never an untested
-working tree. The protected `.env` remains only on the VM, and the runner
-service must run as `mitsubishi` so that it can read the repository and invoke
-Docker. Never configure this production runner to execute pull-request jobs
-from forks. The supplied workflow schedules only the main-push deployment job
-on it; all pull-request code runs on GitHub-hosted runners.
-
-On a successful push, `deploy/production-deploy.sh`:
-
-- locks deployment on GitHub and with a stable VM lock held across checkout
-  preparation and deployment, then deploys the exact tested commit;
-- refuses tracked or untracked production-source changes, duplicate secret
-  declarations, or an `.env` whose mode is not `600`;
-- creates an online SQLite backup in the named data volume, retaining five;
-- checks out the exact commit that passed CI and force-recreates both project
-  containers without touching another Compose project;
-- waits up to five minutes for aMail health and a local Tor control-port
-  check proving that the privacy relay reached 100% bootstrap; and
-- restores the last known-good commit and recreates its containers if health
-  fails; the first CI-managed rollout restores the retained exact pre-CI images
-  instead of relying on a source rebuild.
-
-Rollback intentionally does not restore the database automatically: doing so
-could discard mail received after the pre-deploy snapshot. Database migrations
-must therefore remain backward-compatible. The retained SQLite snapshot is a
-manual disaster-recovery point if an operator determines that losing the
-post-snapshot writes is preferable to an incompatible database.
-
-After the VM reports healthy, a separate GitHub-hosted job verifies
-`https://mail.xer0.io/api/health` and requires its release SHA to equal the
-commit that passed CI. A failure of that external check reports a failed
-workflow but does not roll back a healthy internal deployment, because DNS,
-TLS, or Nginx Proxy Manager can fail independently of the application.
-
-The most recent five pre-deploy database snapshots live at
-`/data/deploy-backups` inside the `gigamail-data` volume. The successful commit
-is recorded in `.git/gigamail-last-successful-sha` in the production checkout.
+`.github/workflows/ci.yml` runs on pull requests and pushes to `main`: the Node
+tests, production build, dependency audit, Compose validation, both Docker
+builds, a live health check of the started image, an unauthenticated API
+check, and a boot with a GigaMail-era `.env` to prove the compatibility
+fallbacks. It deploys nothing; how a tested `main` reaches your server is up
+to you (a self-hosted runner, a cron `git pull && sh deploy/launch.sh`, or
+Watchtower against your own registry all work).

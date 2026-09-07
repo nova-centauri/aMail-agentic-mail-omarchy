@@ -7,7 +7,7 @@ const drafts = [
   {
     id: 'd1',
     draftId: 'd1',
-    to: [{ name: 'Phil', email: 'phil@midstaelitho.com' }],
+    to: [{ name: 'Priya', email: 'priya@printworks.example' }],
     subject: 'Press window',
     updatedAt: new Date().toISOString(),
   },
@@ -38,15 +38,15 @@ describe('FreshDraftsCard', () => {
     );
 
     expect(screen.getByRole('region', { name: 'Fresh drafts' })).toBeInTheDocument();
-    expect(screen.getByText('Phil')).toBeInTheDocument();
+    expect(screen.getByText('Priya')).toBeInTheDocument();
     expect(screen.getByText('Press window')).toBeInTheDocument();
     expect(screen.getByText('Maya Chen')).toBeInTheDocument();
     expect(screen.getByText('Design follow-up')).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: /open draft to phil/i }));
+    await user.click(screen.getByRole('button', { name: /open draft to priya/i }));
     expect(onOpen).toHaveBeenCalledWith(drafts[0]);
 
-    await user.click(screen.getByRole('button', { name: /dismiss draft to phil/i }));
+    await user.click(screen.getByRole('button', { name: /dismiss draft to priya/i }));
     expect(onDismiss).toHaveBeenCalledWith(drafts[0]);
     expect(onOpen).toHaveBeenCalledTimes(1);
 

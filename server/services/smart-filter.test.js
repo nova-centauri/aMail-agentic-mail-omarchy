@@ -9,13 +9,14 @@ import {
   SMART_CATEGORY_SLUGS,
   SMART_FILTER_VERSION,
   classifyMessage,
-  isPersonFlag,
-  messageMatchesPersonFlag,
+  configureSmartFilter,
   normalizeEmailAddress,
+  smartFilterFingerprint,
 } from './smart-filter.js';
+import { messageMatchesPersonFlag, normalizePersonFlags } from './person-flags.js';
 
 const makeTempDatabase = () => {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gigamail-smart-filter-'));
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'amail-smart-filter-'));
   return { dataDir, dbPath: path.join(dataDir, 'mail.sqlite') };
 };
 
@@ -66,19 +67,10 @@ test('smart filtering is deterministic, explainable, and gives GitHub precedence
       rule: 'ops_error.proxmox',
     },
     {
-      message: { from_email: 'jobs@workboard.com', subject: 'Workboard daily digest' },
-      category: 'ops_quiet',
-      rule: 'ops_quiet.workboard',
-    },
-    {
-      message: { from_email: 'backup@xer0.io', subject: 'xer0/msl backup completed successfully' },
-      category: 'ops_quiet',
-      rule: 'ops_quiet.xer0_msl_backup',
-    },
-    {
-      message: { from_email: 'backup@xer0.io', subject: 'MSL backup failed: exit code 1' },
-      category: 'ops_error',
-      rule: 'ops_error.xer0_msl_backup',
+      // Not a configured ops source: ordinary keyword rules apply instead.
+      message: { from_email: 'jobs@example-digest.test', subject: 'Daily digest' },
+      category: 'primary',
+      rule: 'primary.default',
     },
   ];
 
@@ -95,23 +87,40 @@ test('smart filtering is deterministic, explainable, and gives GitHub precedence
   }
 });
 
-test('person flags match Midstate addresses including known domain typos', () => {
-  assert.equal(normalizeEmailAddress('Phil <phil@midstaelitho.com>'), 'phil@midstatelitho.com');
-  assert.equal(normalizeEmailAddress('support@midstaetlitho.com'), 'support@midstatelitho.com');
-  assert.ok(isPersonFlag('phil'));
-  assert.ok(messageMatchesPersonFlag({
-    from_email: 'phil@midstaelitho.com',
-    to_json: '[{"email":"nova@example.com"}]',
-  }, 'phil'));
-  assert.ok(messageMatchesPersonFlag({
-    from_email: 'boss@example.com',
-    to: [{ email: 'sarah@midstatelitho.com' }],
-  }, 'sarah'));
-  assert.ok(messageMatchesPersonFlag({
-    from_email: 'client@example.com',
-    cc: [{ email: 'mark_culley@sdmc.com' }],
-  }, 'mark'));
-  assert.equal(messageMatchesPersonFlag({ from_email: 'stranger@example.com' }, 'sales'), false);
+test('ops-digest sources are operator-configurable and change the rule fingerprint', (t) => {
+  const defaultFingerprint = smartFilterFingerprint();
+  t.after(() => configureSmartFilter({ opsSources: ['proxmox', 'watchtower'] }));
+
+  configureSmartFilter({ opsSources: ['nightly-backup'] });
+  assert.notEqual(smartFilterFingerprint(), defaultFingerprint);
+  assert.equal(classifyMessage({ from_email: 'root@proxmox.local', subject: 'Proxmox backup failed on pve-1' }).category, 'logs');
+  const quiet = classifyMessage({ from_email: 'cron@example.test', subject: 'nightly-backup completed successfully' });
+  assert.equal(quiet.category, 'ops_quiet');
+  assert.equal(quiet.rule, 'ops_quiet.nightly_backup');
+  const failed = classifyMessage({ from_email: 'cron@example.test', subject: 'nightly-backup failed: exit code 1' });
+  assert.equal(failed.category, 'ops_error');
+
+  configureSmartFilter({ opsSources: [] });
+  assert.equal(classifyMessage({ from_email: 'watchtower@home.lab', subject: 'Watchtower update report: all containers up to date' }).category, 'primary');
+});
+
+test('person flags are validated, canonicalized, and match any address role', () => {
+  assert.equal(normalizeEmailAddress('Ada <Ada@Example.test>'), 'ada@example.test');
+  const flags = normalizePersonFlags([
+    { label: 'Ada Lovelace', emails: ['ada@example.test', 'Ada.L@example.test'] },
+    { id: 'Support Desk', label: 'Support', emails: 'support@example.test, help@example.test' },
+  ]);
+  assert.equal(flags[0].id, 'ada-lovelace');
+  assert.deepEqual(flags[0].emails, ['ada@example.test', 'ada.l@example.test']);
+  assert.equal(flags[1].id, 'support-desk');
+  assert.deepEqual(flags[1].emails, ['support@example.test', 'help@example.test']);
+  assert.ok(messageMatchesPersonFlag({ from_email: 'ada@example.test', to_json: '[{"email":"me@example.test"}]' }, flags[0]));
+  assert.ok(messageMatchesPersonFlag({ from_email: 'boss@example.test', to: [{ email: 'help@example.test' }] }, flags[1]));
+  assert.ok(messageMatchesPersonFlag({ from_email: 'client@example.test', cc: [{ email: 'Ada.L@example.test' }] }, flags[0]));
+  assert.equal(messageMatchesPersonFlag({ from_email: 'stranger@example.test' }, flags[1]), false);
+  assert.throws(() => normalizePersonFlags([{ label: 'No addresses', emails: [] }]), /at least one email/);
+  assert.throws(() => normalizePersonFlags([{ label: 'Bad', emails: ['not-an-email'] }]), /not a valid email/);
+  assert.throws(() => normalizePersonFlags([{ label: 'Dup', emails: ['a@example.test'] }, { label: 'dup', emails: ['b@example.test'] }]), /unique/);
 });
 
 test('existing databases gain category columns and old messages are classified on startup', (t) => {

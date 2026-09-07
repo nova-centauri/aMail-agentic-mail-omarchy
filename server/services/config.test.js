@@ -1,39 +1,69 @@
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import test from 'node:test';
-import { loadConfig } from '../config.js';
+import { loadConfig, parseOpsSources, readEnv, resolveDbPath } from '../config.js';
 
 const MIB = 1024 * 1024;
 
 test('IMAP message download cap has a safe default and bounded configuration range', () => {
   assert.equal(loadConfig({}).syncMaxMessageBytes, 10 * MIB);
-  assert.equal(loadConfig({ GIGAMAIL_SYNC_MAX_MESSAGE_BYTES: String(64 * 1024) }).syncMaxMessageBytes, 64 * 1024);
-  assert.equal(loadConfig({ GIGAMAIL_SYNC_MAX_MESSAGE_BYTES: String(50 * MIB) }).syncMaxMessageBytes, 50 * MIB);
+  assert.equal(loadConfig({ AMAIL_SYNC_MAX_MESSAGE_BYTES: String(64 * 1024) }).syncMaxMessageBytes, 64 * 1024);
+  assert.equal(loadConfig({ AMAIL_SYNC_MAX_MESSAGE_BYTES: String(50 * MIB) }).syncMaxMessageBytes, 50 * MIB);
 
   for (const invalid of ['not-a-number', String(64 * 1024 - 1), String(50 * MIB + 1)]) {
-    assert.equal(loadConfig({ GIGAMAIL_SYNC_MAX_MESSAGE_BYTES: invalid }).syncMaxMessageBytes, 10 * MIB);
+    assert.equal(loadConfig({ AMAIL_SYNC_MAX_MESSAGE_BYTES: invalid }).syncMaxMessageBytes, 10 * MIB);
   }
 });
 
 test('release SHA is exposed only when it is a full commit identifier', () => {
   const release = 'ABCDEF0123456789ABCDEF0123456789ABCDEF01';
   assert.equal(loadConfig({}).releaseSha, null);
-  assert.equal(loadConfig({ GIGAMAIL_RELEASE_SHA: 'abc123' }).releaseSha, null);
-  assert.equal(loadConfig({ GIGAMAIL_RELEASE_SHA: release }).releaseSha, release.toLowerCase());
+  assert.equal(loadConfig({ AMAIL_RELEASE_SHA: 'abc123' }).releaseSha, null);
+  assert.equal(loadConfig({ AMAIL_RELEASE_SHA: release }).releaseSha, release.toLowerCase());
 });
 
-test('WebAuthn origin and RP ID are read from explicit configuration', () => {
+test('GigaMail-era GIGAMAIL_* variables keep working as a fallback', () => {
+  assert.equal(readEnv({ GIGAMAIL_ACCESS_TOKEN: 'legacy' }, 'ACCESS_TOKEN'), 'legacy');
+  assert.equal(readEnv({ GIGAMAIL_ACCESS_TOKEN: 'legacy', AMAIL_ACCESS_TOKEN: 'modern' }, 'ACCESS_TOKEN'), 'modern');
+  assert.equal(readEnv({ AMAIL_ACCESS_TOKEN: '' }, 'ACCESS_TOKEN', 'fallback'), 'fallback');
+  assert.equal(loadConfig({ GIGAMAIL_ACCESS_TOKEN: 'legacy-token' }).accessToken, 'legacy-token');
+  assert.equal(loadConfig({ GIGAMAIL_TRUST_PROXY: 'true' }).trustProxy, true);
+  assert.equal(loadConfig({ SYNC_INTERVAL_MINUTES: '7' }).syncIntervalMinutes, 7);
+  assert.equal(loadConfig({ AMAIL_SYNC_INTERVAL_MINUTES: '3', SYNC_INTERVAL_MINUTES: '7' }).syncIntervalMinutes, 3);
+});
+
+test('the database path prefers amail.sqlite but keeps using an existing GigaMail database', () => {
+  const dataDir = '/data';
+  const files = new Set();
+  const exists = (file) => files.has(file);
+  assert.equal(resolveDbPath(dataDir, { exists }), path.join(dataDir, 'amail.sqlite'));
+  files.add(path.join(dataDir, 'gigamail.sqlite'));
+  assert.equal(resolveDbPath(dataDir, { exists }), path.join(dataDir, 'gigamail.sqlite'));
+  files.add(path.join(dataDir, 'amail.sqlite'));
+  assert.equal(resolveDbPath(dataDir, { exists }), path.join(dataDir, 'amail.sqlite'));
+});
+
+test('WebAuthn origin and RP ID come only from explicit configuration', () => {
   assert.equal(loadConfig({}).webauthnRpId, '');
   assert.deepEqual(loadConfig({}).webauthnOrigins, []);
-  assert.equal(loadConfig({ NODE_ENV: 'production' }).webauthnRpId, 'mail.xer0.io');
-  assert.deepEqual(loadConfig({ NODE_ENV: 'production' }).webauthnOrigins, ['https://mail.xer0.io']);
-  assert.equal(loadConfig({ NODE_ENV: 'production', GIGAMAIL_RP_ID: '', GIGAMAIL_ORIGIN: '' }).webauthnRpId, 'mail.xer0.io');
-  assert.equal(loadConfig({ GIGAMAIL_RP_ID: 'mail.xer0.io', GIGAMAIL_ORIGIN: 'https://mail.xer0.io' }).webauthnRpId, 'mail.xer0.io');
+  assert.equal(loadConfig({ NODE_ENV: 'production' }).webauthnRpId, '');
+  assert.deepEqual(loadConfig({ NODE_ENV: 'production' }).webauthnOrigins, []);
   assert.equal(
-    loadConfig({ NODE_ENV: 'production', GIGAMAIL_RP_ID: 'mail.example.test', GIGAMAIL_ORIGIN: 'https://mail.example.test' }).webauthnRpId,
+    loadConfig({ NODE_ENV: 'production', AMAIL_RP_ID: 'mail.example.test', AMAIL_ORIGIN: 'https://mail.example.test' }).webauthnRpId,
     'mail.example.test',
   );
+  assert.equal(loadConfig({ GIGAMAIL_RP_ID: 'mail.example.test' }).webauthnRpId, 'mail.example.test');
   assert.deepEqual(
-    loadConfig({ GIGAMAIL_ORIGIN: 'https://mail.xer0.io,http://localhost:5173' }).webauthnOrigins,
-    ['https://mail.xer0.io', 'http://localhost:5173'],
+    loadConfig({ AMAIL_ORIGIN: 'https://mail.example.test,http://localhost:5173' }).webauthnOrigins,
+    ['https://mail.example.test', 'http://localhost:5173'],
   );
+  assert.equal(loadConfig({}).webauthnRpName, 'aMail');
+});
+
+test('ops-digest sources default to common homelab tools and can be replaced or disabled', () => {
+  assert.deepEqual(loadConfig({}).opsSources, ['proxmox', 'watchtower']);
+  assert.deepEqual(parseOpsSources('Proxmox, nightly-backup ,proxmox'), ['proxmox', 'nightly-backup']);
+  assert.deepEqual(parseOpsSources(''), []);
+  assert.deepEqual(loadConfig({ AMAIL_OPS_SOURCES: '' }).opsSources, []);
+  assert.deepEqual(loadConfig({ AMAIL_OPS_SOURCES: 'uptime kuma' }).opsSources, ['uptime kuma']);
 });

@@ -17,6 +17,7 @@ export function ListToolbar({ visibleCount, totalCount, selectedCount, onRefresh
             <IconButton label="Delete" onClick={() => onBulkAction('trash')}><Icon name="trash" /></IconButton>
             <IconButton label="Mark as unread" onClick={() => onBulkAction('unread')}><Icon name="unread" /></IconButton>
             <IconButton label="Snooze until tomorrow" onClick={() => onBulkAction('snooze')}><Icon name="snooze" /></IconButton>
+            <IconButton label="Mark as analyzed by agent" onClick={() => onBulkAction('analyzed')}><Icon name="sparkles" /></IconButton>
           </>
         ) : (
           <IconButton label="Refresh" onClick={onRefresh} disabled={loading} className={loading ? 'is-spinning' : ''}><Icon name="refresh" /></IconButton>
@@ -111,6 +112,9 @@ function ThreadRow({ thread, selected, isCursor, isChecked, onOpen, onCheck, onT
         <span className="row-snippet">{thread.snippet}</span>
       </div>
       <div className="row-meta">
+        {thread.analyzed === false && thread.folder !== 'drafts' && (
+          <span className="analyzed-marker" title="No agent has analyzed this conversation yet" aria-label="Not yet analyzed by an agent"><Icon name="sparkles" size={14} /></span>
+        )}
         {thread.hasAttachments && <Icon name="attachment" size={17} />}
         {thread.messageCount > 1 && <span className="thread-count">{thread.messageCount}</span>}
         <time>{formatListDate(thread.timestamp)}</time>
@@ -121,9 +125,12 @@ function ThreadRow({ thread, selected, isCursor, isChecked, onOpen, onCheck, onT
 
 function EmptyMailbox({ folder, query, category = 'all', onCompose, onClearSearch, onClearCategory, onRefresh }) {
   const categoryDefinition = SMART_CATEGORIES.find((item) => item.id === category);
-  const title = query ? 'No mail matched your search' : categoryDefinition && category !== 'all' ? `No ${categoryDefinition.label.toLowerCase()} here` : folder === 'inbox' ? 'Your inbox is clear' : `Nothing in ${folder}`;
-  const copy = query
-    ? 'Try from:, to:, subject:, has:attachment, or a different search term.'
+  const agentQueue = /^is:unanalyzed$/i.test(String(query || '').trim());
+  const title = agentQueue ? 'Every conversation has been analyzed' : query ? 'No mail matched your search' : categoryDefinition && category !== 'all' ? `No ${categoryDefinition.label.toLowerCase()} here` : folder === 'inbox' ? 'Your inbox is clear' : `Nothing in ${folder}`;
+  const copy = agentQueue
+    ? 'Your agent is caught up. New mail lands here until an agent marks it analyzed.'
+    : query
+    ? 'Try from:, to:, subject:, has:attachment, is:unanalyzed, or a different search term.'
     : categoryDefinition && category !== 'all'
       ? `${categoryDefinition.description}. New matches will appear here automatically.`
     : folder === 'inbox'
@@ -131,7 +138,7 @@ function EmptyMailbox({ folder, query, category = 'all', onCompose, onClearSearc
       : 'Mail moved here will appear when it is available.';
   return (
     <div className="empty-state">
-      <div className="empty-icon"><Icon name={query ? 'search' : folder === 'inbox' ? 'inbox' : 'mail'} size={38} /></div>
+      <div className="empty-icon"><Icon name={agentQueue ? 'sparkles' : query ? 'search' : folder === 'inbox' ? 'inbox' : 'mail'} size={38} /></div>
       <h2>{title}</h2>
       <p>{copy}</p>
       <div className="empty-actions">

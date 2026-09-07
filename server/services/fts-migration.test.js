@@ -39,8 +39,8 @@ function messageInput({ accountId, threadId, uid, subject, textBody, timestamp }
 }
 
 test('reopening a pre-FTS mailbox indexes search in batches and keeps SQLite temp on the data volume', (t) => {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gigamail-fts-migrate-'));
-  const config = { dataDir, dbPath: path.join(dataDir, 'gigamail.sqlite') };
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'amail-fts-migrate-'));
+  const config = { dataDir, dbPath: path.join(dataDir, 'amail.sqlite') };
   const seed = createDatabase(config);
   const repos = createRepositories(seed);
   const account = repos.accounts.create({

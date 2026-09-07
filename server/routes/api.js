@@ -8,10 +8,8 @@ import {
   serializeAccountInput,
 } from '../services/account-input.js';
 import { listConversations, parseNumber } from '../services/inbox.js';
-import {
-  HIDDEN_DEFAULT_CATEGORIES,
-  PERSON_FLAGS,
-} from '../services/smart-filter.js';
+import { HIDDEN_DEFAULT_CATEGORIES, configuredOpsSources } from '../services/smart-filter.js';
+import { loadPersonFlags, publicPersonFlag, savePersonFlags } from '../services/person-flags.js';
 import {
   DEFAULT_ACCOUNT_COLOR,
   discoverAccountProvider,
@@ -21,6 +19,7 @@ import { normalizeComposeAttachments } from '../services/compose-attachments.js'
 import { sanitizeComposeHtml } from '../utils/signature.js';
 import { AppError, ConflictError, NotFoundError, ServiceUnavailableError, ValidationError } from '../errors.js';
 import { accessGate, requestHasAccess, sessionCookieClearOptions, sessionCookieOptions } from '../middleware/auth.js';
+import { LEGACY_SESSION_COOKIE, SESSION_COOKIE } from '../config.js';
 
 function initials(value) {
   return String(value || '?').split(/[\s@._-]+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join('').toUpperCase() || '?';
@@ -123,12 +122,13 @@ export function registerApi(app, { config, repos, mailService, remoteContent, pa
     if (!timingSafeMatch(request.body?.accessToken, config.accessToken)) {
       return response.status(401).json({ error: { code: 'AUTH_FAILED', message: 'Invalid access token.' } });
     }
-    response.cookie('gigamail_session', config.accessToken, sessionCookieOptions(config));
+    response.cookie(SESSION_COOKIE, config.accessToken, sessionCookieOptions(config));
     return response.status(204).end();
   });
 
   app.delete('/api/session', (_request, response) => {
-    response.clearCookie('gigamail_session', sessionCookieClearOptions(config));
+    response.clearCookie(SESSION_COOKIE, sessionCookieClearOptions(config));
+    response.clearCookie(LEGACY_SESSION_COOKIE, sessionCookieClearOptions(config));
     response.status(204).end();
   });
 
@@ -150,7 +150,7 @@ export function registerApi(app, { config, repos, mailService, remoteContent, pa
       throw new ServiceUnavailableError('Passkeys are unavailable on this server.');
     }
     await passkeys.login(request, request.body || {});
-    response.cookie('gigamail_session', config.accessToken, sessionCookieOptions(config));
+    response.cookie(SESSION_COOKIE, config.accessToken, sessionCookieOptions(config));
     return response.status(204).end();
   });
 
@@ -306,17 +306,18 @@ export function registerApi(app, { config, repos, mailService, remoteContent, pa
     response.json({ results });
   });
 
+  const flagsPayload = (flags) => ({
+    flags: flags.map(publicPersonFlag),
+    hiddenDefaultCategories: [...HIDDEN_DEFAULT_CATEGORIES],
+    opsSources: configuredOpsSources(),
+  });
   router.get('/flags', (_request, response) => {
-    response.json({
-      flags: PERSON_FLAGS.map((flag) => ({
-        id: flag.id,
-        label: flag.label,
-        shortLabel: flag.shortLabel,
-        description: flag.description,
-        emails: [...flag.emails],
-      })),
-      hiddenDefaultCategories: [...HIDDEN_DEFAULT_CATEGORIES],
-    });
+    response.json(flagsPayload(loadPersonFlags(repos)));
+  });
+  // Replaces the whole list so the UI and agents share one canonical ordering.
+  router.put('/flags', (request, response) => {
+    const input = Array.isArray(request.body) ? request.body : request.body?.flags;
+    response.json(flagsPayload(savePersonFlags(repos, input ?? [])));
   });
 
   router.get('/messages', (request, response) => {
@@ -361,6 +362,19 @@ export function registerApi(app, { config, repos, mailService, remoteContent, pa
   });
   router.post('/messages/:id/trash', async (request, response) => {
     const messages = await updateTargets(repos, mailService, request.params.id, { isTrashed: request.body?.trashed !== false });
+    response.json({ message: messages[0], messages });
+  });
+  // Agent-facing flag. `by` records which agent or person analyzed the message.
+  router.post('/messages/:id/analyzed', async (request, response) => {
+    const analyzed = request.body?.analyzed !== false;
+    const messages = await updateTargets(repos, mailService, request.params.id, {
+      isAnalyzed: analyzed,
+      analyzedBy: analyzed ? String(request.body?.by || request.body?.analyzedBy || '') : '',
+    });
+    response.json({ message: messages[0], messages });
+  });
+  router.post('/messages/:id/unanalyzed', async (request, response) => {
+    const messages = await updateTargets(repos, mailService, request.params.id, { isAnalyzed: false });
     response.json({ message: messages[0], messages });
   });
   router.post('/messages/:id/spam', async (request, response) => {

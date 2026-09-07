@@ -8,7 +8,10 @@ import {
   categoryLabel,
   classifyMessage,
   isSmartCategory,
+  smartFilterFingerprint,
 } from './services/smart-filter.js';
+
+const SMART_FILTER_FINGERPRINT_SETTING = 'smartFilterFingerprint';
 import { ftsDocument } from './services/fts.js';
 
 const json = (value, fallback = []) => {
@@ -80,6 +83,11 @@ function publicMessage(row) {
     isSpam: Boolean(row.is_spam),
     snoozedUntil: row.snoozed_until,
     isSent: Boolean(row.is_sent),
+    // Agent-facing counterpart of read/unread: set when an agent (or person)
+    // has processed this message. Stored locally; never pushed to IMAP.
+    isAnalyzed: Boolean(row.analyzed_at),
+    analyzedAt: row.analyzed_at || null,
+    analyzedBy: row.analyzed_by || null,
     category,
     categoryLabel: categoryLabel(category),
     categoryReason: row.smart_category_reason || 'No automated category signal matched.',
@@ -99,6 +107,8 @@ function publicThread(row) {
     latestAt: row.latest_at,
     messageCount: row.message_count,
     unreadCount: row.unread_count,
+    unanalyzedCount: Number(row.unanalyzed_count) || 0,
+    isAnalyzed: (Number(row.unanalyzed_count) || 0) === 0,
     isStarred: Boolean(row.is_starred),
     labels: json(row.labels_json),
     createdAt: row.created_at,
@@ -168,6 +178,7 @@ function initSchema(db) {
       latest_at TEXT NOT NULL,
       message_count INTEGER NOT NULL DEFAULT 0,
       unread_count INTEGER NOT NULL DEFAULT 0,
+      unanalyzed_count INTEGER NOT NULL DEFAULT 0,
       is_starred INTEGER NOT NULL DEFAULT 0,
       labels_json TEXT NOT NULL DEFAULT '[]',
       created_at TEXT NOT NULL,
@@ -205,6 +216,8 @@ function initSchema(db) {
       is_spam INTEGER NOT NULL DEFAULT 0,
       snoozed_until TEXT,
       is_sent INTEGER NOT NULL DEFAULT 0,
+      analyzed_at TEXT,
+      analyzed_by TEXT NOT NULL DEFAULT '',
       smart_category TEXT NOT NULL DEFAULT 'primary' CHECK (smart_category IN ('primary', 'github_ci', 'logs', 'status', 'ops_error', 'ops_quiet')),
       smart_category_reason TEXT NOT NULL DEFAULT '',
       smart_category_rule TEXT NOT NULL DEFAULT '',
@@ -268,7 +281,17 @@ function initSchema(db) {
   if (!messageColumns.has('smart_category_reason')) db.exec("ALTER TABLE messages ADD COLUMN smart_category_reason TEXT NOT NULL DEFAULT ''");
   if (!messageColumns.has('smart_category_rule')) db.exec("ALTER TABLE messages ADD COLUMN smart_category_rule TEXT NOT NULL DEFAULT ''");
   if (!messageColumns.has('smart_category_version')) db.exec('ALTER TABLE messages ADD COLUMN smart_category_version INTEGER NOT NULL DEFAULT 0');
+  if (!messageColumns.has('analyzed_at')) db.exec('ALTER TABLE messages ADD COLUMN analyzed_at TEXT');
+  if (!messageColumns.has('analyzed_by')) db.exec("ALTER TABLE messages ADD COLUMN analyzed_by TEXT NOT NULL DEFAULT ''");
   db.exec('CREATE INDEX IF NOT EXISTS idx_messages_smart_category ON messages(account_id, smart_category, sent_at DESC)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_messages_analyzed ON messages(account_id, analyzed_at)');
+  const threadColumns = new Set(db.prepare('PRAGMA table_info(threads)').all().map((column) => column.name));
+  if (!threadColumns.has('unanalyzed_count')) {
+    db.exec('ALTER TABLE threads ADD COLUMN unanalyzed_count INTEGER NOT NULL DEFAULT 0');
+    db.exec(`UPDATE threads SET unanalyzed_count = (
+      SELECT COUNT(*) FROM messages WHERE messages.thread_id = threads.id AND messages.analyzed_at IS NULL
+    )`);
+  }
 
   // SQLite cannot ALTER a CHECK constraint in place. Rebuild the messages table
   // when an older smart_category check would reject ops_error / ops_quiet.
@@ -308,6 +331,8 @@ function initSchema(db) {
           is_spam INTEGER NOT NULL DEFAULT 0,
           snoozed_until TEXT,
           is_sent INTEGER NOT NULL DEFAULT 0,
+          analyzed_at TEXT,
+          analyzed_by TEXT NOT NULL DEFAULT '',
           smart_category TEXT NOT NULL DEFAULT 'primary' CHECK (smart_category IN ('primary', 'github_ci', 'logs', 'status', 'ops_error', 'ops_quiet')),
           smart_category_reason TEXT NOT NULL DEFAULT '',
           smart_category_rule TEXT NOT NULL DEFAULT '',
@@ -321,6 +346,7 @@ function initSchema(db) {
           subject, from_name, from_email, to_json, cc_json, bcc_json, reply_to_json,
           sent_at, received_at, html_body, text_body, snippet, attachments_json, labels_json,
           is_read, is_starred, is_archived, is_trashed, is_spam, snoozed_until, is_sent,
+          analyzed_at, analyzed_by,
           smart_category, smart_category_reason, smart_category_rule, smart_category_version,
           created_at, updated_at
         )
@@ -329,6 +355,7 @@ function initSchema(db) {
           subject, from_name, from_email, to_json, cc_json, bcc_json, reply_to_json,
           sent_at, received_at, html_body, text_body, snippet, attachments_json, labels_json,
           is_read, is_starred, is_archived, is_trashed, is_spam, snoozed_until, is_sent,
+          analyzed_at, analyzed_by,
           CASE
             WHEN smart_category IN ('primary', 'github_ci', 'logs', 'status', 'ops_error', 'ops_quiet') THEN smart_category
             ELSE 'primary'
@@ -342,19 +369,27 @@ function initSchema(db) {
         CREATE INDEX IF NOT EXISTS idx_messages_folder ON messages(account_id, mailbox, is_archived, is_trashed, sent_at DESC);
         CREATE INDEX IF NOT EXISTS idx_messages_rfc_id ON messages(account_id, rfc_message_id);
         CREATE INDEX IF NOT EXISTS idx_messages_smart_category ON messages(account_id, smart_category, sent_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_messages_analyzed ON messages(account_id, analyzed_at);
       `);
     });
     rebuildMessages();
     db.pragma('foreign_keys = ON');
   }
 
-  const staleMessages = db.prepare(`SELECT id, subject, from_name, from_email, labels_json, snippet, text_body
-    FROM messages
-    WHERE smart_category_version <> ?
-      OR smart_category_reason = ''
-      OR smart_category_rule = ''
-      OR smart_category NOT IN (${SMART_CATEGORY_SLUGS.map(() => '?').join(', ')})`)
-    .all(SMART_FILTER_VERSION, ...SMART_CATEGORY_SLUGS);
+  // Rules are partly operator-configured (ops-digest sources), so a changed
+  // fingerprint reclassifies everything rather than only version-stale rows.
+  const fingerprint = smartFilterFingerprint();
+  const storedFingerprint = db.prepare('SELECT value_json FROM settings WHERE key = ?').get(SMART_FILTER_FINGERPRINT_SETTING);
+  const rulesChanged = json(storedFingerprint?.value_json, null) !== fingerprint;
+  const staleMessages = rulesChanged
+    ? db.prepare('SELECT id, subject, from_name, from_email, labels_json, snippet, text_body FROM messages').all()
+    : db.prepare(`SELECT id, subject, from_name, from_email, labels_json, snippet, text_body
+      FROM messages
+      WHERE smart_category_version <> ?
+        OR smart_category_reason = ''
+        OR smart_category_rule = ''
+        OR smart_category NOT IN (${SMART_CATEGORY_SLUGS.map(() => '?').join(', ')})`)
+      .all(SMART_FILTER_VERSION, ...SMART_CATEGORY_SLUGS);
   if (staleMessages.length) {
     const updateCategory = db.prepare(`UPDATE messages SET
       smart_category = @smart_category,
@@ -374,6 +409,11 @@ function initSchema(db) {
         });
       }
     })(staleMessages);
+  }
+  if (rulesChanged) {
+    db.prepare(`INSERT INTO settings (key, value_json, updated_at) VALUES (?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`)
+      .run(SMART_FILTER_FINGERPRINT_SETTING, JSON.stringify(fingerprint), now());
   }
 
   db.exec(`
@@ -487,14 +527,15 @@ export function createRepositories(db) {
       ORDER BY latest_at DESC LIMIT @limit OFFSET @offset`),
     threadInsert: db.prepare(`INSERT INTO threads (
       id, account_id, subject, normalized_subject, participants_json, snippet, latest_at,
-      message_count, unread_count, is_starred, labels_json, created_at, updated_at
+      message_count, unread_count, unanalyzed_count, is_starred, labels_json, created_at, updated_at
     ) VALUES (
       @id, @account_id, @subject, @normalized_subject, @participants_json, @snippet, @latest_at,
-      @message_count, @unread_count, @is_starred, @labels_json, @created_at, @updated_at
+      @message_count, @unread_count, @unanalyzed_count, @is_starred, @labels_json, @created_at, @updated_at
     )`),
     threadUpdateSummary: db.prepare(`UPDATE threads SET
       subject = @subject, participants_json = @participants_json, snippet = @snippet,
       latest_at = @latest_at, message_count = @message_count, unread_count = @unread_count,
+      unanalyzed_count = @unanalyzed_count,
       is_starred = @is_starred, labels_json = @labels_json, updated_at = @updated_at
       WHERE id = @id`),
     messageById: db.prepare('SELECT * FROM messages WHERE id = ?'),
@@ -591,7 +632,19 @@ export function createRepositories(db) {
           GROUP BY thread_id
         )
       ) AS snoozed,
-      (SELECT COUNT(*) FROM drafts WHERE account_id = @accountId) AS drafts
+      (SELECT COUNT(*) FROM drafts WHERE account_id = @accountId) AS drafts,
+      (
+        SELECT COUNT(*) FROM (
+          SELECT thread_id FROM messages
+          WHERE account_id = @accountId
+            AND mailbox = 'INBOX'
+            AND is_archived = 0 AND is_trashed = 0 AND is_spam = 0
+            AND analyzed_at IS NULL
+            AND (snoozed_until IS NULL OR snoozed_until <= @now)
+            AND smart_category <> 'ops_quiet'
+          GROUP BY thread_id
+        )
+      ) AS unanalyzed
     `),
     messageInsert: db.prepare(`INSERT INTO messages (
       id, account_id, thread_id, mailbox, uid, rfc_message_id, in_reply_to, references_json,
@@ -629,6 +682,8 @@ export function createRepositories(db) {
       is_trashed = COALESCE(@is_trashed, is_trashed),
       is_spam = COALESCE(@is_spam, is_spam),
       snoozed_until = COALESCE(@snoozed_until, snoozed_until),
+      analyzed_at = CASE WHEN @analyzed_change = 1 THEN @analyzed_at ELSE analyzed_at END,
+      analyzed_by = CASE WHEN @analyzed_change = 1 THEN @analyzed_by ELSE analyzed_by END,
       updated_at = @updated_at
       WHERE id = @id`),
     syncState: db.prepare('SELECT * FROM sync_state WHERE account_id = ? AND mailbox = ?'),
@@ -722,6 +777,7 @@ export function createRepositories(db) {
       latest_at: newest.sent_at || newest.received_at || newest.created_at,
       message_count: messages.length,
       unread_count: messages.filter((message) => !message.is_read).length,
+      unanalyzed_count: messages.filter((message) => !message.analyzed_at).length,
       is_starred: messages.some((message) => message.is_starred) ? 1 : 0,
       labels_json: stringify(labels),
       updated_at: now(),
@@ -794,6 +850,7 @@ export function createRepositories(db) {
           starred: Number(row.starred) || 0,
           snoozed: Number(row.snoozed) || 0,
           drafts: Number(row.drafts) || 0,
+          unanalyzed: Number(row.unanalyzed) || 0,
         };
       },
       forThread: (threadId) => queries.messagesByThread.all(threadId).map(publicMessage),
@@ -845,6 +902,9 @@ export function createRepositories(db) {
           is_trashed: state.isTrashed === undefined ? null : Number(Boolean(state.isTrashed)),
           is_spam: state.isSpam === undefined ? null : Number(Boolean(state.isSpam)),
           snoozed_until: state.snoozedUntil === undefined ? null : state.snoozedUntil,
+          analyzed_change: state.isAnalyzed === undefined ? 0 : 1,
+          analyzed_at: state.isAnalyzed ? (state.analyzedAt || now()) : null,
+          analyzed_by: state.isAnalyzed ? String(state.analyzedBy || '').slice(0, 120) : '',
         });
         recomputeThread(row.thread_id);
         return publicMessage(queries.messageById.get(id));
@@ -904,6 +964,7 @@ export function createRepositories(db) {
           snippet: '',
           message_count: 0,
           unread_count: 0,
+          unanalyzed_count: 0,
           is_starred: 0,
           labels_json: '[]',
           created_at: timestamp,

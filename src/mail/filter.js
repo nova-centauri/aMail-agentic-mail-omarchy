@@ -1,12 +1,18 @@
-import { PERSON_FLAGS, SMART_CATEGORIES } from './constants.js';
+import { SMART_CATEGORIES } from './constants.js';
 import { smartCategoryMetadata } from './classify.js';
 import { conversationMatchesMailboxQuery, mailboxQueryIsActive, parseMailboxQuery } from './search-query.js';
 import { normalizePersonFlagEmail, recipientArray } from './people.js';
 
-export function conversationMatchesPersonFlag(thread, flagId) {
-  const flag = PERSON_FLAGS.find((item) => item.id === flagId);
+export function findPersonFlag(flags = [], flagId) {
+  if (!flagId) return null;
+  if (typeof flagId === 'object') return flagId;
+  return flags.find((item) => item.id === flagId) || null;
+}
+
+export function conversationMatchesPersonFlag(thread, flagOrId, flags = []) {
+  const flag = findPersonFlag(flags, flagOrId);
   if (!flag) return false;
-  const wanted = new Set(flag.emails.map(normalizePersonFlagEmail));
+  const wanted = new Set((flag.emails || []).map(normalizePersonFlagEmail));
   const people = [
     thread.from,
     ...(thread.participants || []),
@@ -39,15 +45,17 @@ export function filterVisibleThreads(threads, {
   activeFolder = 'inbox',
   activeCategory = 'all',
   activePersonFlag = null,
+  personFlags = [],
   query = '',
 } = {}) {
   const parsed = parseMailboxQuery(query);
   const searchActive = mailboxQueryIsActive(parsed);
   const folder = parsed.folder || activeFolder;
+  const flag = findPersonFlag(personFlags, activePersonFlag);
   return threads.filter((thread) => {
     const inFolder = folder === 'all' || thread.folder === folder || (folder === 'starred' && thread.starred) || (folder === 'drafts' && thread.folder === 'drafts');
     if (!inFolder) return false;
-    if (activePersonFlag && !conversationMatchesPersonFlag(thread, activePersonFlag)) return false;
+    if (activePersonFlag && !conversationMatchesPersonFlag(thread, flag)) return false;
     if (!activePersonFlag && folder === 'inbox' && activeCategory !== 'all' && smartCategoryMetadata(thread).category !== activeCategory) return false;
     if (!searchActive && !activePersonFlag && (activeCategory === 'all' || activeCategory === 'primary') && smartCategoryMetadata(thread).category === 'ops_quiet') return false;
     if (!searchActive) return true;

@@ -1,13 +1,9 @@
 import {
-  getPersonFlag,
-  HIDDEN_DEFAULT_CATEGORIES,
   isHiddenDefaultCategory,
-  isPersonFlag,
   isSmartCategory,
-  messageMatchesPersonFlag,
-  PERSON_FLAGS,
   SMART_CATEGORY_SLUGS,
 } from './smart-filter.js';
+import { getPersonFlag, loadPersonFlags, messageMatchesPersonFlag, publicPersonFlag } from './person-flags.js';
 import { toFtsMatchQuery } from './fts.js';
 import {
   conversationMatchesMailboxQuery,
@@ -41,11 +37,15 @@ export const normalizeCategory = (value) => {
   return category;
 };
 
-export const normalizePersonFlag = (value) => {
-  const flag = String(value || '').trim().toLowerCase();
-  if (!flag) return '';
-  if (!isPersonFlag(flag)) {
-    throw new ValidationError(`Unknown person flag. Choose one of: ${PERSON_FLAGS.map((item) => item.id).join(', ')}.`);
+export const normalizePersonFlag = (value, flags = []) => {
+  const flagId = String(value || '').trim().toLowerCase();
+  if (!flagId) return null;
+  const flag = getPersonFlag(flags, flagId);
+  if (!flag) {
+    const choices = flags.map((item) => item.id).join(', ');
+    throw new ValidationError(choices
+      ? `Unknown person flag. Choose one of: ${choices}.`
+      : 'No person flags are configured. Add one in Settings or with PUT /api/flags.');
   }
   return flag;
 };
@@ -56,9 +56,9 @@ const emptyCategoryCounts = () => Object.fromEntries(
     .map((category) => [category, 0]),
 );
 
-const conversationTouchesPersonFlag = (conversationMessages, flagId) => conversationMessages.some((message) => messageMatchesPersonFlag(message, flagId));
+const conversationTouchesPersonFlag = (conversationMessages, flag) => conversationMessages.some((message) => messageMatchesPersonFlag(message, flag));
 
-const emptyFolderCounts = () => ({ inbox: 0, starred: 0, snoozed: 0, drafts: 0 });
+const emptyFolderCounts = () => ({ inbox: 0, starred: 0, snoozed: 0, drafts: 0, unanalyzed: 0 });
 
 export const sumFolderCounts = (accounts, repos) => accounts.reduce((totals, account) => {
   const counts = repos.messages.folderCounts(account.id);
@@ -67,6 +67,7 @@ export const sumFolderCounts = (accounts, repos) => accounts.reduce((totals, acc
     starred: totals.starred + counts.starred,
     snoozed: totals.snoozed + counts.snoozed,
     drafts: totals.drafts + counts.drafts,
+    unanalyzed: totals.unanalyzed + (counts.unanalyzed || 0),
   };
 }, emptyFolderCounts());
 
@@ -101,6 +102,8 @@ export function draftListItem(draft, account) {
     isTrashed: false,
     isSpam: false,
     isSent: false,
+    isAnalyzed: true,
+    unanalyzedCount: 0,
     messageCount: 1,
     unreadCount: 0,
     labels: ['Draft'],
@@ -126,7 +129,7 @@ export function listConversations(repos, {
   const parsedQuery = parseMailboxQuery(String(queryInput || '').trim().slice(0, 800));
   const folder = normalizeFolder(parsedQuery.folder || folderInput);
   const category = normalizeCategory(categoryInput);
-  const personFlag = normalizePersonFlag(personFlagInput);
+  const personFlag = normalizePersonFlag(personFlagInput, loadPersonFlags(repos));
   const page = parseNumber(pageInput, 1, 1, 100_000);
   const pageSize = parseNumber(pageSizeInput, 50, 1, 200);
   const query = parsedQuery.raw;
@@ -152,8 +155,8 @@ export function listConversations(repos, {
       pageSize,
       categoryCounts: emptyCategoryCounts(),
       folderCounts: sumFolderCounts(accounts, repos),
-      personFlag: personFlag || null,
-      personFlagMeta: personFlag ? getPersonFlag(personFlag) : null,
+      personFlag: personFlag?.id || null,
+      personFlagMeta: personFlag ? publicPersonFlag(personFlag) : null,
     };
   }
 
@@ -215,11 +218,13 @@ export function listConversations(repos, {
         latestMessageId: latestMessage.id,
         messageCount: thread?.messageCount || 1,
         unreadCount: thread?.unreadCount || 0,
+        unanalyzedCount: thread ? thread.unanalyzedCount : messages.filter((message) => !message.isAnalyzed).length,
         participants: thread?.participants || [latestMessage.from],
         latestAt,
         snippet: latestMessage.snippet,
         hasAttachments: Boolean(latestMessage.attachments?.length) || messages.some((message) => message.attachments?.length),
         isRead: (thread?.unreadCount || 0) === 0,
+        isAnalyzed: thread ? thread.unanalyzedCount === 0 : messages.every((message) => message.isAnalyzed),
         isStarred: thread?.isStarred ?? latestMessage.isStarred,
         _threadMessages: messages,
         ...(folder === 'snoozed' ? { folder: 'snoozed' } : {}),
@@ -243,7 +248,7 @@ export function listConversations(repos, {
     pageSize,
     categoryCounts,
     folderCounts: sumFolderCounts(accounts, repos),
-    personFlag: personFlag || null,
-    personFlagMeta: personFlag ? getPersonFlag(personFlag) : null,
+    personFlag: personFlag?.id || null,
+    personFlagMeta: personFlag ? publicPersonFlag(personFlag) : null,
   };
 }

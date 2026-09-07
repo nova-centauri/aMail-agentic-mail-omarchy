@@ -3,6 +3,8 @@ import * as z from 'zod/v4';
 import { accountTestInput, serializeAccountInput } from '../services/account-input.js';
 import { listConversations, parseNumber } from '../services/inbox.js';
 import { discoverAccountProvider, mailProviderCatalog } from '../utils/mail.js';
+import { loadPersonFlags, publicPersonFlag, savePersonFlags } from '../services/person-flags.js';
+import { configuredOpsSources } from '../services/smart-filter.js';
 import { AppError, ConflictError, NotFoundError, ValidationError } from '../errors.js';
 
 function jsonResult(data) {
@@ -99,9 +101,9 @@ const recipientSchema = z.union([
  * Build a fresh MCP server instance wired to aMail services.
  * Stateless Streamable HTTP creates one of these per request.
  */
-export function createGigaMailMcpServer({ config, repos, mailService, assertProbeAllowed = defaultProbeLimiter }) {
+export function createAmailMcpServer({ config, repos, mailService, assertProbeAllowed = defaultProbeLimiter }) {
   const server = new McpServer({
-    name: 'gigamail',
+    name: 'amail',
     version: '0.1.0',
   }, {
     instructions: 'aMail multi-account inbox tools. Never request or echo IMAP/SMTP passwords; account tools refuse to return stored credentials.',
@@ -132,6 +134,31 @@ export function createGigaMailMcpServer({ config, repos, mailService, assertProb
     };
   }));
 
+  server.registerTool('list_flags', {
+    title: 'List person flags',
+    description: 'Operator-defined people folders (id, label, emails) usable as the `flag` filter in list_messages, plus the configured ops-digest sources.',
+  }, async () => runTool(async () => ({
+    flags: loadPersonFlags(repos).map(publicPersonFlag),
+    opsSources: configuredOpsSources(),
+  })));
+
+  server.registerTool('set_flags', {
+    title: 'Replace person flags',
+    description: 'Replace the full list of person flags. Each flag needs a label and one or more email addresses; ids are derived from the label when omitted.',
+    inputSchema: {
+      flags: z.array(z.object({
+        id: z.string().optional(),
+        label: z.string(),
+        shortLabel: z.string().optional(),
+        description: z.string().optional(),
+        color: z.string().optional().describe('Hex color such as #0b57d0'),
+        emails: z.array(z.string()).min(1),
+      })).max(24),
+    },
+  }, async ({ flags }) => runTool(async () => ({
+    flags: savePersonFlags(repos, flags).map(publicPersonFlag),
+  })));
+
   server.registerTool('list_messages', {
     title: 'List conversations',
     description: 'List or search conversations with folder, accountId, category, q, page, and pageSize.',
@@ -139,10 +166,10 @@ export function createGigaMailMcpServer({ config, repos, mailService, assertProb
       folder: z.string().optional().describe('inbox, starred, snoozed, sent, drafts, all, trash, spam, or archive'),
       accountId: z.string().optional().describe('Limit to one account id'),
       category: z.string().optional().describe('Smart filter: primary, github_ci, logs, status, ops_error'),
-      q: z.string().optional().describe('Search query. Gmail-style operators work: from:, to:, subject:, has:attachment, after:, before:, is:unread, is:starred, in:'),
+      q: z.string().optional().describe('Search query. Gmail-style operators work: from:, to:, subject:, has:attachment, after:, before:, is:unread, is:starred, is:unanalyzed, is:analyzed, in:'),
       page: z.number().int().optional().describe('Page number (1-based)'),
       pageSize: z.number().int().optional().describe('Results per page (1-200)'),
-      flag: z.string().optional().describe('Person flag id'),
+      flag: z.string().optional().describe('Person flag id (see list_flags)'),
     },
   }, async (args) => runTool(async () => listConversations(repos, {
     accountId: args.accountId || null,
@@ -206,18 +233,25 @@ export function createGigaMailMcpServer({ config, repos, mailService, assertProb
 
   server.registerTool('message_action', {
     title: 'Message action',
-    description: 'Apply read/unread/star/unstar/archive/unarchive/trash/untrash/spam/unspam/snooze to a message or thread id.',
+    description: 'Apply read/unread/star/unstar/archive/unarchive/trash/untrash/spam/unspam/snooze/analyzed/unanalyzed to a message or thread id. Use `analyzed` after processing a message so `is:unanalyzed` searches skip it next time.',
     inputSchema: {
       id: z.string().describe('Message id or thread id'),
       action: z.enum([
         'read', 'unread', 'star', 'unstar', 'archive', 'unarchive',
-        'trash', 'untrash', 'spam', 'unspam', 'snooze',
+        'trash', 'untrash', 'spam', 'unspam', 'snooze', 'analyzed', 'unanalyzed',
       ]),
       until: z.string().optional().describe('ISO timestamp for snooze (must be in the future)'),
+      by: z.string().optional().describe('Agent or person name recorded with the analyzed flag'),
     },
-  }, async ({ id, action, until }) => runTool(async () => {
+  }, async ({ id, action, until, by }) => runTool(async () => {
     let state;
     switch (action) {
+      case 'analyzed':
+        state = { isAnalyzed: true, analyzedBy: String(by || '') };
+        break;
+      case 'unanalyzed':
+        state = { isAnalyzed: false };
+        break;
       case 'read':
         state = { isRead: true };
         break;

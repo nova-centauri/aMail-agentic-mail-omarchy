@@ -126,8 +126,5 @@ export function collectKnownPeople(...sources) {
 
 export function normalizePersonFlagEmail(value = '') {
   const match = String(value).trim().toLowerCase().match(/<([^>]+)>/);
-  const email = (match?.[1] || String(value)).trim().toLowerCase();
-  return email
-    .replace(/@midstaelitho\.com$/, '@midstatelitho.com')
-    .replace(/@midstaetlitho\.com$/, '@midstatelitho.com');
+  return (match?.[1] || String(value)).trim().toLowerCase();
 }

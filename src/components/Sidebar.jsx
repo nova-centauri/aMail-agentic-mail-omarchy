@@ -1,10 +1,10 @@
 import { useState } from 'react';
-import { folders, PERSON_FLAGS, UNIFIED_ACCOUNT } from '../mail/constants.js';
+import { folders, UNIFIED_ACCOUNT } from '../mail/constants.js';
 import { demoAccounts } from '../mail/demo.js';
 import { Icon } from './Icon.jsx';
 import { Avatar, IconButton } from './ui.jsx';
 
-export function Sidebar({ compact, mobileOpen, onCloseMobile, activeFolder, setActiveFolder, counts, onCompose, accounts, activeAccount, setActiveAccount, onSelectUnified, onOpenSettings, isDemo, onAddAccount, activePersonFlag, onSelectPersonFlag }) {
+export function Sidebar({ compact, mobileOpen, onCloseMobile, activeFolder, setActiveFolder, counts, onCompose, accounts, activeAccount, setActiveAccount, onSelectUnified, onOpenSettings, isDemo, onAddAccount, activePersonFlag, onSelectPersonFlag, personFlags = [], onManageFlags, agentQueueActive = false, onSelectAgentQueue }) {
   const [showMore, setShowMore] = useState(false);
   const displayAccounts = accounts.length ? accounts : isDemo ? demoAccounts : [];
   const items = showMore
@@ -41,10 +41,28 @@ export function Sidebar({ compact, mobileOpen, onCloseMobile, activeFolder, setA
               <span className="nav-label">{showMore ? 'Less' : 'More'}</span>
             </button>
           </nav>
+          <div className="agent-section">
+            <div className="side-section-heading"><span>Agent</span></div>
+            <nav className="folder-nav" aria-label="Agent queue">
+              <button
+                type="button"
+                onClick={() => { onSelectAgentQueue?.(); onCloseMobile(); }}
+                className={`nav-item agent-queue-nav ${agentQueueActive ? 'is-selected' : ''}`}
+                title={compact ? 'Not yet analyzed' : 'Inbox mail no agent has analyzed yet'}
+              >
+                <Icon name="sparkles" size={20} />
+                <span className="nav-label">Not yet analyzed</span>
+                {counts.unanalyzed > 0 && <span className="nav-count">{counts.unanalyzed}</span>}
+              </button>
+            </nav>
+          </div>
           <div className="flags-section">
-            <div className="side-section-heading"><span>Flagged people</span></div>
+            <div className="side-section-heading">
+              <span>Flagged people</span>
+              <IconButton label="Manage flagged people" onClick={() => { onManageFlags?.(); onCloseMobile(); }}><Icon name="tune" size={17} /></IconButton>
+            </div>
             <nav className="folder-nav flag-nav" aria-label="Flagged people">
-              {PERSON_FLAGS.map((flag) => (
+              {personFlags.map((flag) => (
                 <button
                   type="button"
                   key={flag.id}
@@ -53,9 +71,15 @@ export function Sidebar({ compact, mobileOpen, onCloseMobile, activeFolder, setA
                   title={compact ? flag.label : flag.description}
                 >
                   <span className="label-dot" style={{ background: flag.color }} />
-                  <span className="nav-label">{flag.shortLabel}</span>
+                  <span className="nav-label">{flag.shortLabel || flag.label}</span>
                 </button>
               ))}
+              {!personFlags.length && !compact && (
+                <button type="button" className="nav-item label-nav flag-empty" onClick={() => { onManageFlags?.(); onCloseMobile(); }}>
+                  <Icon name="plus" size={18} />
+                  <span className="nav-label">Flag a person</span>
+                </button>
+              )}
             </nav>
           </div>
           <div className="accounts-section">

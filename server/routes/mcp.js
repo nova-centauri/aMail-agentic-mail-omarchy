@@ -1,6 +1,6 @@
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { accessGate } from '../middleware/auth.js';
-import { createGigaMailMcpServer } from '../mcp/server.js';
+import { createAmailMcpServer } from '../mcp/server.js';
 
 /**
  * Mount a Cursor-compatible Streamable HTTP MCP endpoint at /mcp.
@@ -8,7 +8,7 @@ import { createGigaMailMcpServer } from '../mcp/server.js';
  */
 export function registerMcp(app, { config, repos, mailService, remoteContent }) {
   const handleMcp = async (request, response) => {
-    const server = createGigaMailMcpServer({ config, repos, mailService, remoteContent });
+    const server = createAmailMcpServer({ config, repos, mailService, remoteContent });
     try {
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,

@@ -251,7 +251,7 @@ export function appendSignature({ html = '', text = '', signature = '', includeS
   const rendered = renderSignatureForSend(signature);
   if (!rendered.html && !rendered.text) return { html, text };
   return {
-    html: `${html || ''}<br><br><div data-gigamail-signature="true">${rendered.html}</div>`,
+    html: `${html || ''}<br><br><div data-amail-signature="true">${rendered.html}</div>`,
     text: `${text || ''}${text ? '\n\n' : ''}-- \n${rendered.text}`,
   };
 }

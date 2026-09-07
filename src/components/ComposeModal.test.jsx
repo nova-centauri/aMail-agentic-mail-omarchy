@@ -34,7 +34,7 @@ describe('ComposeModal', () => {
     const source = screen.getByRole('textbox', { name: 'Message HTML' });
     await user.click(source);
     await user.clear(source);
-    await user.paste('<p>See <strong>docs</strong> and <a href="https://mail.xer0.io">mail.xer0.io</a></p>');
+    await user.paste('<p>See <strong>docs</strong> and <a href="https://mail.example.test">mail.example.test</a></p>');
     expect(source.value).toMatch(/docs/);
 
     await user.type(screen.getByLabelText('Recipients'), 'friend@example.test{enter}');
@@ -43,7 +43,7 @@ describe('ComposeModal', () => {
     const payload = onSent.mock.calls[0][0];
     expect(payload.to[0].email).toBe('friend@example.test');
     expect(payload.htmlBody).toMatch(/<strong>docs<\/strong>/);
-    expect(payload.htmlBody).toContain('https://mail.xer0.io');
+    expect(payload.htmlBody).toContain('https://mail.example.test');
     expect(payload.textBody).toMatch(/docs/);
   });
 

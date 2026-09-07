@@ -5,9 +5,9 @@ import { SettingsPanel } from './SettingsPanel.jsx';
 
 const account = {
   id: 'me',
-  name: 'Nova Centauri',
-  email: 'nova@centauri.dev',
-  signature: 'Best,\nNova',
+  name: 'Sam Rivera',
+  email: 'sam@rivera.example',
+  signature: 'Best,\nSam',
   connected: true,
 };
 
@@ -34,6 +34,6 @@ describe('SettingsPanel signature editor', () => {
     expect(screen.getByRole('tab', { name: /visual/i })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('button', { name: /upload html/i })).toBeEnabled();
     await userEvent.click(screen.getByRole('tab', { name: /html/i }));
-    expect(screen.getByRole('textbox', { name: 'Signature HTML' })).toHaveValue('Best,\nNova');
+    expect(screen.getByRole('textbox', { name: 'Signature HTML' })).toHaveValue('Best,\nSam');
   });
 });

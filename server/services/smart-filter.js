@@ -1,3 +1,5 @@
+import { DEFAULT_OPS_SOURCES } from '../config.js';
+
 const CATEGORY_DEFINITIONS = [
   ['primary', 'Primary'],
   ['github_ci', 'GitHub & CI'],
@@ -10,7 +12,7 @@ const CATEGORY_DEFINITIONS = [
 ];
 
 // Bump when classification rules change so startup reclassifies stored mail.
-export const SMART_FILTER_VERSION = 2;
+export const SMART_FILTER_VERSION = 3;
 
 export const SMART_CATEGORIES = Object.freeze(Object.fromEntries(
   CATEGORY_DEFINITIONS.map(([slug, label]) => [slug, Object.freeze({ slug, label })]),
@@ -20,62 +22,6 @@ export const SMART_CATEGORY_SLUGS = Object.freeze(CATEGORY_DEFINITIONS.map(([slu
 
 /** Categories that never appear in the default "All mail" inbox list. */
 export const HIDDEN_DEFAULT_CATEGORIES = Object.freeze(['ops_quiet']);
-
-/**
- * Flagged people folders. Addresses include known typos the operator supplied so
- * real Midstate mail (and common domain misspellings) both match.
- */
-export const PERSON_FLAGS = Object.freeze([
-  Object.freeze({
-    id: 'phil',
-    label: 'Phil',
-    shortLabel: 'Phil',
-    description: 'Mail involving Phil at Midstate Litho',
-    emails: Object.freeze([
-      'phil@midstatelitho.com',
-      'phil@midstaelitho.com',
-    ]),
-  }),
-  Object.freeze({
-    id: 'sarah',
-    label: 'Sarah',
-    shortLabel: 'Sarah',
-    description: 'Mail involving Sarah at Midstate Litho',
-    emails: Object.freeze([
-      'sarah@midstatelitho.com',
-    ]),
-  }),
-  Object.freeze({
-    id: 'mark',
-    label: 'Mark Culley',
-    shortLabel: 'Mark',
-    description: 'Mail involving Mark Culley',
-    emails: Object.freeze([
-      'mark_culley@sdmc.com',
-    ]),
-  }),
-  Object.freeze({
-    id: 'support',
-    label: 'Midstate Support',
-    shortLabel: 'Support',
-    description: 'Mail involving Midstate Litho support',
-    emails: Object.freeze([
-      'support@midstatelitho.com',
-      'support@midstaetlitho.com',
-    ]),
-  }),
-  Object.freeze({
-    id: 'sales',
-    label: 'Midstate Sales',
-    shortLabel: 'Sales',
-    description: 'Mail involving Midstate Litho sales',
-    emails: Object.freeze([
-      'sales@midstatelitho.com',
-    ]),
-  }),
-]);
-
-export const PERSON_FLAG_IDS = Object.freeze(PERSON_FLAGS.map((flag) => flag.id));
 
 const DEFAULT_CLASSIFICATION = Object.freeze({
   category: 'primary',
@@ -111,21 +57,9 @@ const extractEmail = (value) => {
   return (match?.[1] || text).replace(/[>\s].*$/, '');
 };
 
-const MIDSTATE_DOMAIN_ALIASES = new Set([
-  'midstatelitho.com',
-  'midstaelitho.com',
-  'midstaetlitho.com',
-]);
-
-/** Canonicalize addresses so Midstate domain typos collapse together. */
+/** Canonicalize an address or "Name <address>" string to a lowercase address. */
 export function normalizeEmailAddress(value) {
-  const address = extractEmail(value);
-  if (!address.includes('@')) return address;
-  const separator = address.lastIndexOf('@');
-  const local = address.slice(0, separator);
-  const domain = address.slice(separator + 1);
-  if (MIDSTATE_DOMAIN_ALIASES.has(domain)) return `${local}@midstatelitho.com`;
-  return address;
+  return extractEmail(value);
 }
 
 const senderDomain = (email) => {
@@ -185,26 +119,52 @@ const STATUS_DOMAINS = [
   'statuspage.io',
 ];
 
-const OPS_SOURCE_PATTERNS = [
-  { id: 'workboard', test: (hay) => /\bworkboard\b/.test(hay) },
-  { id: 'proxmox', test: (hay) => /\bproxmox\b/.test(hay) || /\bpve(?:[-_.@]|\b)/.test(hay) },
-  { id: 'watchtower', test: (hay) => /\bwatchtower\b/.test(hay) },
-  {
-    id: 'xer0_msl_backup',
-    test: (hay) => (
-      (/\b(?:xer0|msl)\b/.test(hay) && /\bbackup\b/.test(hay))
-      || /\b(?:xer0|msl)[-_.\s]?backup\b/.test(hay)
-      || /\bbackup[-_.\s]?(?:xer0|msl)\b/.test(hay)
-    ),
-  },
-];
+/**
+ * Extra spellings for well-known tools so a keyword such as "proxmox" also
+ * matches the "pve" hostnames its notifications usually come from.
+ */
+const OPS_SOURCE_ALIASES = {
+  proxmox: ['pve'],
+};
+
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+function compileOpsSource(keyword) {
+  const id = keyword.replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'ops';
+  const terms = [keyword, ...(OPS_SOURCE_ALIASES[keyword] || [])].map(escapeRegExp);
+  const pattern = new RegExp(`\\b(?:${terms.join('|')})(?:[-_.@]|\\b)`);
+  return { id, keyword, test: (hay) => pattern.test(hay) };
+}
+
+let opsSourcePatterns = DEFAULT_OPS_SOURCES.map(compileOpsSource);
+
+/**
+ * Replace the ops-digest sources. Called once at startup with the operator's
+ * configuration; the default list keeps unit tests and tooling deterministic.
+ */
+export function configureSmartFilter({ opsSources } = {}) {
+  if (Array.isArray(opsSources)) {
+    opsSourcePatterns = [...new Set(opsSources.map((item) => String(item).trim().toLowerCase()).filter(Boolean))]
+      .map(compileOpsSource);
+  }
+  return smartFilterFingerprint();
+}
+
+/** Stable identifier for the active rule set; a change reclassifies stored mail. */
+export function smartFilterFingerprint() {
+  return `v${SMART_FILTER_VERSION}:${opsSourcePatterns.map((source) => source.keyword).join(',')}`;
+}
+
+export function configuredOpsSources() {
+  return opsSourcePatterns.map((source) => ({ id: source.id, keyword: source.keyword }));
+}
 
 const OPS_ERROR_PATTERN = /\b(?:errors?|failed|failure|fatal|critical|exception|alerting|alerted|unreachable|aborted|abort|panic|traceback|crash(?:ed|ing)?|offline|timed?\s*out|timeout)\b/;
 const OPS_ERROR_NEGATION = /\b(?:0|no|without|zero)\s+errors?\b|\bno\s+failure\b|\bwithout\s+failure\b/;
 const OPS_SUCCESS_PATTERN = /\b(?:success(?:ful(?:ly)?)?|completed successfully|backup completed|ok|healthy|up to date|updated successfully|no updates|nothing to do|all systems operational)\b/;
 
 function detectOpsSource(haystack) {
-  for (const source of OPS_SOURCE_PATTERNS) {
+  for (const source of opsSourcePatterns) {
     if (source.test(haystack)) return source.id;
   }
   return null;
@@ -222,23 +182,6 @@ function isOpsError(subject, preview) {
   if (/\bexit(?:\s+code)?[:\s]+[1-9]\d*\b/.test(text)) return true;
   if (/\b(?:status|state)\s*[:=]\s*(?:error|failed|fail|critical|down)\b/.test(text)) return true;
   return false;
-}
-
-const personFlagEmailSets = new Map(
-  PERSON_FLAGS.map((flag) => [flag.id, new Set(flag.emails.map((email) => normalizeEmailAddress(email)))]),
-);
-
-export function getPersonFlag(flagId) {
-  return PERSON_FLAGS.find((flag) => flag.id === flagId) || null;
-}
-
-export function isPersonFlag(flagId) {
-  return personFlagEmailSets.has(String(flagId || ''));
-}
-
-export function personFlagEmails(flagId) {
-  const set = personFlagEmailSets.get(String(flagId || ''));
-  return set ? [...set] : [];
 }
 
 /**
@@ -290,14 +233,10 @@ export function messageMatchesEmails(message, emails) {
   return candidates.some((candidate) => wanted.has(normalizeEmailAddress(candidate)));
 }
 
-export function messageMatchesPersonFlag(message, flagId) {
-  return messageMatchesEmails(message, personFlagEmails(flagId));
-}
-
 /**
  * Classify a persisted or parsed message using ordered, deterministic rules.
  *
- * The function deliberately uses only metadata already stored by GigaMail. It
+ * The function deliberately uses only metadata already stored by aMail. It
  * performs no network calls and returns the stable rule id and human-readable
  * reason that explain every decision.
  */

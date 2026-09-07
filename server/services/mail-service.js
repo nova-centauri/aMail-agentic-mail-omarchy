@@ -345,7 +345,7 @@ export function createMailService({
   ImapClient = ImapFlow,
   createSmtpTransport = (options) => nodemailer.createTransport(options),
   compileMessage = compileRfc822Message,
-  createMessageId = () => `<${randomUUID()}@gigamail.local>`,
+  createMessageId = () => `<${randomUUID()}@amail.local>`,
 }) {
   const newImapClient = (account, credentials) => new ImapClient(buildImapOptions(account, credentials, config));
   const newSmtpTransport = (account, credentials) => createSmtpTransport(buildSmtpOptions(account, credentials, config));
@@ -975,6 +975,16 @@ export function createMailService({
       return {
         message,
         remoteSync: { attempted: false, status: 'local-only', reason: 'snooze-is-not-portable-imap' },
+      };
+    }
+    // The analyzed flag is aMail's own agent bookkeeping; it has no IMAP
+    // counterpart, so an analyzed-only change never opens a mail connection.
+    const imapRelevant = ['isRead', 'isStarred', 'isArchived', 'isTrashed', 'isSpam']
+      .some((key) => state[key] !== undefined);
+    if (!imapRelevant) {
+      return {
+        message,
+        remoteSync: { attempted: false, status: 'local-only', reason: 'analyzed-flag-is-local' },
       };
     }
     if (!Number.isInteger(message.uid) || message.uid < 1) {

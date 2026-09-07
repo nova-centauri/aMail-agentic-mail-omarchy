@@ -12,9 +12,9 @@ describe('SignatureEditor', () => {
     const source = screen.getByRole('textbox', { name: 'Signature HTML' });
     await userEvent.click(source);
     await userEvent.clear(source);
-    await userEvent.paste('<p><strong>Nova Labs</strong></p>');
+    await userEvent.paste('<p><strong>Rivera Labs</strong></p>');
     expect(onChange).toHaveBeenCalled();
-    expect(onChange.mock.calls.at(-1)[0]).toContain('Nova Labs');
+    expect(onChange.mock.calls.at(-1)[0]).toContain('Rivera Labs');
     await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
     expect(onSave).toHaveBeenCalled();
   });

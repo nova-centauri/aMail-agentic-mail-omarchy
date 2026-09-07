@@ -3,15 +3,15 @@ import { insertMarkdownLink, isSafeLinkHref, plainTextToHtml, quotedComposeHtml 
 
 describe('plainTextToHtml', () => {
   it('turns markdown and bare URLs into safe anchors', () => {
-    const html = plainTextToHtml('See [docs](https://mail.xer0.io/help) and https://example.com/a.');
-    expect(html).toContain('<a href="https://mail.xer0.io/help">docs</a>');
+    const html = plainTextToHtml('See [docs](https://mail.example.test/help) and https://example.com/a.');
+    expect(html).toContain('<a href="https://mail.example.test/help">docs</a>');
     expect(html).toContain('<a href="https://example.com/a">https://example.com/a</a>.');
     expect(html).not.toContain('javascript:');
   });
 
   it('rejects unsafe link targets', () => {
     expect(isSafeLinkHref('javascript:alert(1)')).toBe(false);
-    expect(isSafeLinkHref('https://mail.xer0.io')).toBe(true);
+    expect(isSafeLinkHref('https://mail.example.test')).toBe(true);
     expect(plainTextToHtml('[x](javascript:alert(1))')).toContain('javascript:alert(1)');
     expect(plainTextToHtml('[x](javascript:alert(1))')).not.toContain('<a ');
   });

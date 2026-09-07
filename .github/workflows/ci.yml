@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  NODE_VERSION: "22"
+
+jobs:
+  verify:
+    name: Test and validate containers
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      COMPOSE_PROJECT_NAME: amail-ci-${{ github.run_id }}-${{ github.run_attempt }}
+      AMAIL_BIND_ADDRESS: 127.0.0.1
+      AMAIL_PORT: 3080
+    steps:
+      - name: Check out the tested commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run tests and build checks
+        run: |
+          npm test
+          npm run check
+
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Validate deployment files
+        run: |
+          cp .env.example .env
+          sh -n deploy/launch.sh
+          docker compose --env-file .env --profile privacy config --quiet
+          docker compose --env-file .env --profile privacy config --format json | node -e '
+            let input = "";
+            process.stdin.setEncoding("utf8");
+            process.stdin.on("data", (chunk) => { input += chunk; });
+            process.stdin.on("end", () => {
+              const config = JSON.parse(input);
+              const service = config.services?.amail;
+              const dataMount = service?.volumes?.find((mount) => mount.target === "/data");
+              if (!service || dataMount?.type !== "volume" || dataMount.source !== "amail-data" ||
+                typeof service.environment?.AMAIL_ENCRYPTION_KEY !== "string") process.exit(1);
+            });
+          '
+
+      - name: Build application and privacy images
+        run: docker compose --env-file .env --profile privacy build
+
+      - name: Start the application image
+        run: |
+          REMOTE_CONTENT_PROXY_URL=http://tor-proxy:8118 \
+            docker compose --env-file .env --profile privacy up --detach --no-build --wait --wait-timeout 300
+
+      - name: Exercise health and authentication gates
+        run: |
+          health=$(curl --fail --silent --show-error --max-time 10 http://127.0.0.1:3080/api/health)
+          printf '%s\n' "$health" | grep -q '"status":"ok"'
+          printf '%s\n' "$health" | grep -q '"authProtected":true'
+          printf '%s\n' "$health" | grep -q '"credentialsConfigured":true'
+          printf '%s\n' "$health" | grep -q '"remoteContentProxyConfigured":true'
+          status=$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 10 http://127.0.0.1:3080/api/accounts)
+          test "$status" = "401"
+          # The rebranded stack still boots with a GigaMail-era .env.
+          docker compose --env-file .env --profile privacy down --timeout 15
+          sed -i 's/^AMAIL_/GIGAMAIL_/' .env
+          REMOTE_CONTENT_PROXY_URL=http://tor-proxy:8118 \
+            docker compose --env-file .env --profile privacy up --detach --no-build --wait --wait-timeout 300
+          legacy=$(curl --fail --silent --show-error --max-time 10 http://127.0.0.1:3080/api/health)
+          printf '%s\n' "$legacy" | grep -q '"authProtected":true'
+          printf '%s\n' "$legacy" | grep -q '"credentialsConfigured":true'
+
+      - name: Remove ephemeral CI containers and volumes
+        if: always()
+        run: |
+          if [ -f .env ]; then
+            docker compose --env-file .env --profile privacy down --volumes --timeout 15
+          fi

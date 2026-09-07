@@ -11,7 +11,7 @@ import {
 describe('fresh drafts', () => {
   it('labels the first recipient and remaining count', () => {
     expect(draftRecipientLabel({ to: [] })).toBe('No recipient');
-    expect(draftRecipientLabel({ to: [{ name: 'Phil', email: 'phil@midstaelitho.com' }] })).toBe('Phil');
+    expect(draftRecipientLabel({ to: [{ name: 'Priya', email: 'priya@printworks.example' }] })).toBe('Priya');
     expect(draftRecipientLabel({
       to: [
         { name: 'Maya Chen', email: 'maya@studio.com' },

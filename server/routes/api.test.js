@@ -44,7 +44,7 @@ function messageInput({ accountId, threadId, uid, subject, fromEmail, timestamp 
 }
 
 test('message API filters unified mail by smart category and account creation is connection-atomic', async (t) => {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gigamail-api-'));
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'amail-api-'));
   const config = {
     dataDir,
     dbPath: path.join(dataDir, 'mail.sqlite'),
@@ -62,6 +62,10 @@ test('message API filters unified mail by smart category and account creation is
     async testSettings() {
       if (rejectConnection) throw new ServiceUnavailableError('Sanitized connection failure.', 'IMAP_AUTH_FAILED');
       return { imap: true, smtp: true };
+    },
+    async updateMessageState(id, state) {
+      const updated = repos.messages.setState(id, state);
+      return { ...updated, remoteSync: { attempted: false, status: 'local-only', reason: 'test-double' } };
     },
   };
   const remoteContent = {
@@ -271,24 +275,24 @@ test('message API filters unified mail by smart category and account creation is
     fromEmail: 'root@proxmox.local',
     timestamp: '2026-01-09T00:00:00.000Z',
   }));
-  const philThread = repos.threads.create({
+  const adaThread = repos.threads.create({
     account_id: account.id,
     subject: 'Press schedule for Thursday',
     normalized_subject: 'press schedule for thursday',
     latest_at: '2026-01-10T00:00:00.000Z',
   });
-  const philMessage = {
+  const adaMessage = {
     ...messageInput({
       accountId: account.id,
-      threadId: philThread.id,
+      threadId: adaThread.id,
       uid: 9,
       subject: 'Press schedule for Thursday',
-      fromEmail: 'phil@midstaelitho.com',
+      fromEmail: 'ada@example.test',
       timestamp: '2026-01-10T00:00:00.000Z',
     }),
-    to_json: JSON.stringify([{ name: 'Nova', email: 'owner@example.test' }]),
+    to_json: JSON.stringify([{ name: 'Owner', email: 'owner@example.test' }]),
   };
-  repos.messages.upsert(philMessage);
+  repos.messages.upsert(adaMessage);
 
   const defaultInbox = await (await fetch(`${origin}/api/messages?folder=inbox`)).json();
   assert.equal(defaultInbox.messages.some((item) => /Watchtower/.test(item.subject)), false);
@@ -299,10 +303,56 @@ test('message API filters unified mail by smart category and account creation is
   assert.equal(opsErrors.total, 1);
   assert.equal(opsErrors.messages[0].category, 'ops_error');
 
-  const philFlag = await (await fetch(`${origin}/api/messages?folder=inbox&flag=phil`)).json();
-  assert.equal(philFlag.total, 1);
-  assert.equal(philFlag.messages[0].from.email, 'phil@midstaelitho.com');
-  assert.equal(philFlag.personFlag, 'phil');
+  // Person flags start empty and are configured at runtime.
+  const noFlags = await (await fetch(`${origin}/api/flags`)).json();
+  assert.deepEqual(noFlags.flags, []);
+  assert.deepEqual(noFlags.opsSources.map((source) => source.id), ['proxmox', 'watchtower']);
+  const unknownFlag = await fetch(`${origin}/api/messages?folder=inbox&flag=ada`);
+  assert.equal(unknownFlag.status, 400);
+  const savedFlags = await fetch(`${origin}/api/flags`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ flags: [{ label: 'Ada', emails: ['Ada@example.test'], color: '#0b57d0' }] }),
+  });
+  assert.equal(savedFlags.status, 200);
+  assert.deepEqual((await savedFlags.json()).flags[0], {
+    id: 'ada', label: 'Ada', shortLabel: 'Ada', description: 'Mail involving Ada', color: '#0b57d0', emails: ['ada@example.test'],
+  });
+  const adaFlag = await (await fetch(`${origin}/api/messages?folder=inbox&flag=ada`)).json();
+  assert.equal(adaFlag.total, 1);
+  assert.equal(adaFlag.messages[0].from.email, 'ada@example.test');
+  assert.equal(adaFlag.personFlag, 'ada');
+  assert.equal(adaFlag.personFlagMeta.label, 'Ada');
+
+  // The analyzed flag is the agent's read/unread: local-only, searchable, and
+  // reported per conversation.
+  assert.equal(adaFlag.messages[0].isAnalyzed, false);
+  assert.equal(adaFlag.messages[0].unanalyzedCount, 1);
+  assert.equal(defaultInbox.folderCounts.unanalyzed, 7);
+  const analyzed = await fetch(`${origin}/api/messages/${adaThread.id}/analyzed`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ by: 'triage-agent' }),
+  });
+  assert.equal(analyzed.status, 200);
+  const analyzedBody = await analyzed.json();
+  assert.equal(analyzedBody.message.isAnalyzed, true);
+  assert.equal(analyzedBody.message.analyzedBy, 'triage-agent');
+  assert.ok(analyzedBody.message.analyzedAt);
+  assert.equal(analyzedBody.message.remoteSync.status, 'local-only');
+  const afterAnalyzed = await (await fetch(`${origin}/api/messages?folder=inbox&flag=ada`)).json();
+  assert.equal(afterAnalyzed.messages[0].isAnalyzed, true);
+  assert.equal(afterAnalyzed.folderCounts.unanalyzed, 6);
+  // Explicit search surfaces quiet ops digests too, so an agent asking for
+  // unanalyzed mail sees every remaining conversation (7 = 8 seeded - 1 analyzed).
+  const unanalyzedSearch = await (await fetch(`${origin}/api/messages?folder=inbox&q=${encodeURIComponent('is:unanalyzed')}`)).json();
+  assert.equal(unanalyzedSearch.total, 7);
+  assert.ok(unanalyzedSearch.messages.every((item) => item.isAnalyzed === false));
+  const analyzedSearch = await (await fetch(`${origin}/api/messages?folder=inbox&q=${encodeURIComponent('is:analyzed')}`)).json();
+  assert.equal(analyzedSearch.total, 1);
+  assert.equal(analyzedSearch.messages[0].subject, 'Press schedule for Thursday');
+  await fetch(`${origin}/api/messages/${adaThread.id}/unanalyzed`, { method: 'POST' });
+  assert.equal((await (await fetch(`${origin}/api/messages?folder=inbox`)).json()).folderCounts.unanalyzed, 7);
 
   const invalidResponse = await fetch(`${origin}/api/messages?category=unknown`);
   assert.equal(invalidResponse.status, 400);

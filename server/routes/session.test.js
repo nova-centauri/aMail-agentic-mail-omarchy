@@ -10,7 +10,7 @@ import { errorHandler } from '../middleware/errors.js';
 import { registerApi } from './api.js';
 
 test('session logout clears the cookie with matching attributes so later requests are unauthenticated', async () => {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gigamail-session-'));
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'amail-session-'));
   const accessToken = 'session-test-token';
   const config = {
     env: 'test',
@@ -40,18 +40,23 @@ test('session logout clears the cookie with matching attributes so later request
     });
     assert.equal(unlocked.status, 204);
     const setCookie = unlocked.headers.getSetCookie?.() || [];
-    assert.equal(setCookie.some((value) => value.startsWith('gigamail_session=')), true);
+    assert.equal(setCookie.some((value) => value.startsWith('amail_session=')), true);
 
     const cookieAuth = await fetch(`${origin}/api/session`, {
-      headers: { Cookie: `gigamail_session=${encodeURIComponent(accessToken)}` },
+      headers: { Cookie: `amail_session=${encodeURIComponent(accessToken)}` },
     });
     assert.equal(cookieAuth.status, 200);
     assert.deepEqual(await cookieAuth.json(), { protected: true, authenticated: true, passkeys: 0 });
 
+    const legacyCookieAuth = await fetch(`${origin}/api/session`, {
+      headers: { Cookie: `gigamail_session=${encodeURIComponent(accessToken)}` },
+    });
+    assert.deepEqual(await legacyCookieAuth.json(), { protected: true, authenticated: true, passkeys: 0 });
+
     const logout = await fetch(`${origin}/api/session`, { method: 'DELETE' });
     assert.equal(logout.status, 204);
     const cleared = logout.headers.getSetCookie?.() || [logout.headers.get('set-cookie')].filter(Boolean);
-    assert.equal(cleared.some((value) => /gigamail_session=/i.test(value)), true, `logout cookies: ${cleared.join(' || ')}`);
+    assert.equal(cleared.some((value) => /amail_session=/i.test(value)), true, `logout cookies: ${cleared.join(' || ')}`);
     assert.equal(cleared.some((value) => /SameSite=Strict/i.test(value) && (/Max-Age=0/i.test(value) || /Expires=/i.test(value))), true, `logout cookies: ${cleared.join(' || ')}`);
 
     const afterLogout = await fetch(`${origin}/api/session`);

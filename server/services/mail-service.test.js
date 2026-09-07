@@ -307,7 +307,7 @@ test('RFC822 compilation preserves the chosen Message-ID and keeps Bcc envelope-
     from: { name: 'Sender Name', address: 'sender@example.test' },
     to: 'visible@example.test',
     subject: 'Stable message',
-    text: 'Hello from GigaMail.',
+    text: 'Hello from aMail.',
   });
   const source = raw.toString('utf8');
   assert.match(source, /^Message-ID: <stable-message@example\.test>$/m);

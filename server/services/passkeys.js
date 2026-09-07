@@ -79,7 +79,7 @@ export function createPasskeyService({
     const options = await generateRegistration({
       rpName,
       rpID,
-      userName: 'gigamail',
+      userName: 'amail',
       userDisplayName: 'aMail',
       userID: userHandle(repos),
       attestationType: 'none',

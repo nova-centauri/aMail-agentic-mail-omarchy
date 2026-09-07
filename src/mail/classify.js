@@ -10,13 +10,14 @@ export function inferSmartCategory(raw = {}) {
   const labels = Array.isArray(raw.labels) ? raw.labels : Array.isArray(raw.tags) ? raw.tags : [];
   const from = normalizePerson(raw.from || raw.sender || raw.fromAddress);
   const haystack = [raw.subject, raw.snippet, raw.preview, from.name, from.email, ...labels].filter(Boolean).join(' ').toLowerCase();
-  const isOpsSource = /\b(?:workboard|proxmox|\bpve\b|watchtower|xer0|msl)\b/i.test(haystack)
-    || (/\bbackup\b/i.test(haystack) && /\b(?:xer0|msl)\b/i.test(haystack));
+  // Client-side inference only runs for preview data; live mail carries the
+  // server's category, which honours the operator's AMAIL_OPS_SOURCES list.
+  const isOpsSource = /\b(?:proxmox|pve|watchtower|unraid|truenas|synology|backup job|backup report)\b/i.test(haystack);
   const isOpsError = /\b(?:error|errors|failed|failure|fatal|critical|exception|unreachable|timeout|timed out)\b/i.test(haystack)
     && !/\b(?:0|no|without|zero)\s+errors?\b/i.test(haystack);
   if (isOpsSource) {
     return isOpsError
-      ? { category: 'ops_error', reason: 'Matched a Workboard, Proxmox, Watchtower, or xer0/msl backup failure.' }
+      ? { category: 'ops_error', reason: 'Matched an infrastructure digest that reports a failure.' }
       : { category: 'ops_quiet', reason: 'Routine ops digest with no error signal (hidden from All mail).' };
   }
   if (/(github|github actions|actions@github|workflow|pull request|check run|build #|ci failed|ci passed)/i.test(haystack)) {

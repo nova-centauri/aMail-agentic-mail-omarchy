@@ -83,6 +83,14 @@ export function normalizeThread(raw, index = 0) {
     participants: raw.participants || raw.people || [],
     timestamp: raw.timestamp || raw.latestAt || raw.updatedAt || raw.sentAt || raw.receivedAt || raw.date || latest.timestamp,
     unread: Boolean(raw.unread ?? raw.isUnread ?? (raw.unreadCount !== undefined ? Number(raw.unreadCount) > 0 : raw.isRead === false)),
+    // The agent's read/unread. Preview threads and drafts default to analyzed
+    // so only real, unprocessed mail shows the "needs analysis" marker.
+    analyzed: raw.isAnalyzed !== undefined || raw.analyzed !== undefined
+      ? Boolean(raw.isAnalyzed ?? raw.analyzed)
+      : raw.unanalyzedCount !== undefined ? Number(raw.unanalyzedCount) === 0 : true,
+    unanalyzedCount: Number(raw.unanalyzedCount) || 0,
+    analyzedBy: raw.analyzedBy || null,
+    analyzedAt: raw.analyzedAt || null,
     starred: Boolean(raw.starred ?? raw.isStarred),
     labels: raw.labels || raw.tags || [],
     folder: inferFolder(raw),

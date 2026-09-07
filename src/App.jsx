@@ -3,6 +3,7 @@ import { api } from './api.js';
 import { AccessPanel } from './components/AccessPanel.jsx';
 import { AddAccountModal } from './components/AddAccountModal.jsx';
 import { ComposeModal } from './components/ComposeModal.jsx';
+import { OnboardingWizard } from './components/OnboardingWizard.jsx';
 import { Icon } from './components/Icon.jsx';
 import { MailList } from './components/MailList.jsx';
 import { ProfileMenu } from './components/ProfileMenu.jsx';
@@ -12,10 +13,10 @@ import { Sidebar } from './components/Sidebar.jsx';
 import { ThreadView } from './components/ThreadView.jsx';
 import { Topbar } from './components/Topbar.jsx';
 import { Toast } from './components/ui.jsx';
-import { EMPTY_FOLDER_COUNTS, PERSON_FLAGS, SMART_CATEGORIES, UNIFIED_ACCOUNT } from './mail/constants.js';
+import { DEMO_PERSON_FLAGS, EMPTY_FOLDER_COUNTS, SMART_CATEGORIES, UNIFIED_ACCOUNT } from './mail/constants.js';
 import { demoAccounts, demoDraftThreads, demoMailboxThreads } from './mail/demo.js';
 import { normalizeFreshDraft, pruneDismissedFreshDrafts, visibleFreshDrafts } from './mail/fresh-drafts.js';
-import { countSmartCategories, filterVisibleThreads } from './mail/filter.js';
+import { countSmartCategories, filterVisibleThreads, findPersonFlag } from './mail/filter.js';
 import { useLiveMailboxSync } from './mail/live-sync.js';
 import { quotedComposeHtml } from './mail/html.js';
 import { formatMessageDate, getArray, normalizeAccount, normalizePerson, normalizeThread, recipientArray, formatRecipients } from './mail/normalize.js';
@@ -40,6 +41,11 @@ export default function App() {
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState('all');
   const [activePersonFlag, setActivePersonFlag] = useState(null);
+  const [personFlags, setPersonFlags] = useState([]);
+  const [opsSources, setOpsSources] = useState([]);
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
+  const [onboardingDismissed, setOnboardingDismissed] = useState(Boolean(initialPrefs.onboardingDismissed));
+  const [serverInfo, setServerInfo] = useState(null);
   const [mailTotal, setMailTotal] = useState(0);
   const [categoryCounts, setCategoryCounts] = useState(() => countSmartCategories([]));
   const [folderCounts, setFolderCounts] = useState(() => ({ ...EMPTY_FOLDER_COUNTS }));
@@ -231,6 +237,7 @@ export default function App() {
           starred: Number(mailData.folderCounts.starred) || 0,
           snoozed: Number(mailData.folderCounts.snoozed) || 0,
           drafts: Number(mailData.folderCounts.drafts) || 0,
+          unanalyzed: Number(mailData.folderCounts.unanalyzed) || 0,
         }
         : null;
       setAuthRequired(false);
@@ -251,11 +258,13 @@ export default function App() {
           starred: preview.filter((thread) => thread.starred).length,
           snoozed: preview.filter((thread) => thread.folder === 'snoozed').length,
           drafts: preview.filter((thread) => thread.folder === 'drafts').length,
+          unanalyzed: preview.filter((thread) => thread.folder === 'inbox' && thread.analyzed === false).length,
         });
       } else if (nextFolderCounts) {
         setFolderCounts(nextFolderCounts);
       }
       setIsDemo(isFreshSetup);
+      if (isFreshSetup && !onboardingDismissed) setOnboardingOpen(true);
       const nextSavedDrafts = isFreshSetup
         ? previewThreads.filter((thread) => thread.folder === 'drafts' || thread.draftId).map(normalizeFreshDraft)
         : getArray(draftData, ['drafts', 'items']).map(normalizeFreshDraft);
@@ -295,7 +304,7 @@ export default function App() {
     } finally {
       if (requestId === loadRequestRef.current) setLoading(false);
     }
-  }, [accessToken, activeAccount?.id, activeCategory, activePersonFlag, activeFolder, debouncedQuery, selectedThread]);
+  }, [accessToken, activeAccount?.id, activeCategory, activePersonFlag, activeFolder, debouncedQuery, onboardingDismissed, selectedThread]);
 
   const liveSyncInboxes = useCallback(async () => {
     if (isDemo || authRequired || !authenticated) return;
@@ -320,6 +329,33 @@ export default function App() {
   });
 
   useEffect(() => { loadMailbox({ keepSelection: false }); }, [activeFolder, activeAccount?.id, activeCategory, activePersonFlag, debouncedQuery, accessToken, sessionStamp]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!authenticated || authRequired) return undefined;
+    let cancelled = false;
+    api('/flags').then((payload) => {
+      if (cancelled) return;
+      setPersonFlags(Array.isArray(payload?.flags) ? payload.flags : []);
+      setOpsSources(Array.isArray(payload?.opsSources) ? payload.opsSources : []);
+    }).catch(() => undefined);
+    api('/health').then((payload) => { if (!cancelled) setServerInfo(payload || null); }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [authenticated, authRequired, sessionStamp]);
+
+  const savePersonFlags = async (flags) => {
+    const payload = await api('/flags', { method: 'PUT', body: JSON.stringify({ flags }) });
+    const saved = Array.isArray(payload?.flags) ? payload.flags : [];
+    setPersonFlags(saved);
+    if (activePersonFlag && !saved.some((flag) => flag.id === activePersonFlag)) setActivePersonFlag(null);
+    setNotice(saved.length ? 'Flagged people saved.' : 'Flagged people cleared.');
+    return saved;
+  };
+
+  const dismissOnboarding = () => {
+    setOnboardingOpen(false);
+    setOnboardingDismissed(true);
+    writeUiPrefs({ onboardingDismissed: true });
+  };
 
   useEffect(() => {
     if (!settingsOpen || authRequired) return undefined;
@@ -381,12 +417,16 @@ export default function App() {
     }
   };
 
+  const effectivePersonFlags = isDemo && !personFlags.length ? DEMO_PERSON_FLAGS : personFlags;
   const visibleThreads = useMemo(() => filterVisibleThreads(threads, {
     activeFolder,
     activeCategory,
     activePersonFlag,
+    personFlags: effectivePersonFlags,
     query,
-  }), [threads, activeFolder, activeCategory, activePersonFlag, query]);
+  }), [threads, activeFolder, activeCategory, activePersonFlag, effectivePersonFlags, query]);
+  const activeFlag = findPersonFlag(effectivePersonFlags, activePersonFlag);
+  const agentQueueActive = /^is:unanalyzed$/i.test(query.trim());
 
   const cursorThread = visibleThreads[clampIndex(cursorIndex, visibleThreads.length)] || null;
 
@@ -411,6 +451,7 @@ export default function App() {
     starred: folderCounts.starred,
     snoozed: folderCounts.snoozed,
     drafts: folderCounts.drafts,
+    unanalyzed: folderCounts.unanalyzed || 0,
   }), [folderCounts]);
 
   const goHome = () => {
@@ -423,6 +464,15 @@ export default function App() {
     setMobileSidebarOpen(false);
     setSettingsOpen(false);
     setProfileOpen(false);
+  };
+
+  const selectAgentQueue = () => {
+    setActiveFolder('inbox');
+    setActiveCategory('all');
+    setActivePersonFlag(null);
+    setQuery('is:unanalyzed');
+    setSelectedIds([]);
+    setSelectedThread(null);
   };
 
   const selectPersonFlag = (flagId) => {
@@ -527,6 +577,12 @@ export default function App() {
       setSelectedThread((current) => current && affected.has(current.id) ? { ...current, unread: true } : current);
     } else if (action === 'read') {
       setThreads((current) => current.map((item) => affected.has(item.id) ? { ...item, unread: false } : item));
+    } else if (action === 'analyzed' || action === 'unanalyzed') {
+      const analyzed = action === 'analyzed';
+      const patch = { analyzed, unanalyzedCount: analyzed ? 0 : 1, analyzedBy: analyzed ? 'you' : null, analyzedAt: analyzed ? new Date().toISOString() : null };
+      const update = (item) => affected.has(item.id) ? { ...item, ...patch } : item;
+      setThreads((current) => agentQueueActive && analyzed ? current.filter((item) => !affected.has(item.id)) : current.map(update));
+      setSelectedThread((current) => current && affected.has(current.id) ? { ...current, ...patch } : current);
     } else if (['archive', 'trash', 'spam', 'snooze'].includes(action)) {
       setThreads((current) => current.filter((item) => !affected.has(item.id)));
       if (selectedThread && affected.has(selectedThread.id)) setSelectedThread(null);
@@ -539,13 +595,17 @@ export default function App() {
       snooze: 'Conversation snoozed until tomorrow',
       unread: 'Marked as unread',
       read: 'Marked as read',
+      analyzed: 'Marked as analyzed',
+      unanalyzed: 'Marked as not yet analyzed',
     };
     setNotice(labels[action] || 'Updated');
-    if (['archive', 'trash', 'spam', 'snooze', 'unread', 'read'].includes(action)) {
+    if (['archive', 'trash', 'spam', 'snooze', 'unread', 'read', 'analyzed', 'unanalyzed'].includes(action)) {
       setFolderCounts((current) => {
         // Keep badges roughly honest after optimistic local actions until the
         // next full mailbox load replaces them with server totals.
         const delta = targetIds.length;
+        if (action === 'analyzed') return { ...current, unanalyzed: Math.max(0, (current.unanalyzed || 0) - delta) };
+        if (action === 'unanalyzed') return { ...current, unanalyzed: (current.unanalyzed || 0) + delta };
         if (action === 'unread') return { ...current, inbox: current.inbox + delta };
         if (action === 'read') return { ...current, inbox: Math.max(0, current.inbox - delta) };
         if (action === 'snooze') return { ...current, snoozed: current.snoozed + delta, inbox: Math.max(0, current.inbox - delta) };
@@ -554,7 +614,8 @@ export default function App() {
       });
     }
     if (!isDemo && labels[action]) {
-      void Promise.all(targetIds.map((id) => api(`/messages/${encodeURIComponent(id)}/${action}`, { method: 'POST' })))
+      const body = action === 'analyzed' ? JSON.stringify({ by: 'human' }) : undefined;
+      void Promise.all(targetIds.map((id) => api(`/messages/${encodeURIComponent(id)}/${action}`, { method: 'POST', ...(body ? { body } : {}) })))
         .then((results) => {
           const outcomes = results.flatMap((result) => result?.messages || (result?.message ? [result.message] : []))
             .map((message) => message?.remoteSync)
@@ -562,7 +623,7 @@ export default function App() {
           const failed = outcomes.find((outcome) => outcome.status === 'failed');
           const unsynced = outcomes.find((outcome) => ['local-only', 'skipped'].includes(outcome.status));
           if (failed) setNotice(`${labels[action] || 'Updated'} locally; IMAP did not confirm the change.`);
-          else if (unsynced && action !== 'snooze') setNotice(`${labels[action] || 'Updated'} locally; the provider change was not available.`);
+          else if (unsynced && !['snooze', 'analyzed', 'unanalyzed'].includes(action)) setNotice(`${labels[action] || 'Updated'} locally; the provider change was not available.`);
           else if (action === 'snooze') setNotice(labels.snooze);
         })
         .catch(() => setNotice('The local view was updated; the server action failed.'));
@@ -903,17 +964,21 @@ export default function App() {
         onAddAccount={() => setAddAccountOpen(true)}
         activePersonFlag={activePersonFlag}
         onSelectPersonFlag={selectPersonFlag}
+        personFlags={effectivePersonFlags}
+        onManageFlags={() => setSettingsOpen(true)}
+        agentQueueActive={agentQueueActive}
+        onSelectAgentQueue={selectAgentQueue}
         isDemo={isDemo}
       />
       <main className="mail-workspace">
-        {offline ? <div className="demo-banner offline-banner" role="status"><Icon name="eyeOff" size={16} /><span>Offline — showing the last mailbox loaded from this server.</span><button type="button" onClick={() => loadMailbox({ keepSelection: true })}>Retry</button></div> : isDemo && <div className="demo-banner"><Icon name="shield" size={16} /><span>Preview mailbox — connect your first account to replace this sample data.</span><button type="button" onClick={() => setAddAccountOpen(true)}>Add account</button></div>}
+        {offline ? <div className="demo-banner offline-banner" role="status"><Icon name="eyeOff" size={16} /><span>Offline — showing the last mailbox loaded from this server.</span><button type="button" onClick={() => loadMailbox({ keepSelection: true })}>Retry</button></div> : isDemo && <div className="demo-banner"><Icon name="shield" size={16} /><span>Preview mailbox — connect your first account to replace this sample data.</span><button type="button" onClick={() => setOnboardingOpen(true)}>Get started</button></div>}
         {activePersonFlag && !offline && (
           <div className="demo-banner flag-banner" role="status">
             <Icon name="person" size={16} />
             <span>
-              Flagged: {PERSON_FLAGS.find((flag) => flag.id === activePersonFlag)?.label || activePersonFlag}
+              Flagged: {activeFlag?.label || activePersonFlag}
               {' · '}
-              {(PERSON_FLAGS.find((flag) => flag.id === activePersonFlag)?.emails || []).join(', ')}
+              {(activeFlag?.emails || []).join(', ')}
             </span>
             <button type="button" onClick={() => setActivePersonFlag(null)}>Clear flag</button>
           </div>
@@ -967,9 +1032,24 @@ export default function App() {
         passkeysSupported={canUsePasskeys}
         onAddPasskey={addPasskey}
         onDeletePasskey={deletePasskey}
+        personFlags={personFlags}
+        onSavePersonFlags={savePersonFlags}
+        opsSources={opsSources}
+        serverInfo={serverInfo}
+        onOpenOnboarding={() => { setSettingsOpen(false); setOnboardingOpen(true); }}
+        isDemo={isDemo}
       />
       <ProfileMenu open={profileOpen} onClose={() => setProfileOpen(false)} account={displayAccount} accounts={identityAccounts} setActiveAccount={setActiveAccount} onSelectUnified={() => setActiveAccount(null)} onOpenSettings={() => setSettingsOpen(true)} onLogout={lockSession} showUnified={hasConnectedAccounts} />
       {addAccountOpen && <AddAccountModal onClose={() => setAddAccountOpen(false)} onAdded={accountAdded} />}
+      {onboardingOpen && authenticated && !authRequired && (
+        <OnboardingWizard
+          accounts={accounts}
+          serverInfo={serverInfo}
+          onAccountAdded={accountAdded}
+          onFinish={dismissOnboarding}
+          onSkip={dismissOnboarding}
+        />
+      )}
       <AccessPanel
         open={accessOpen}
         required={authRequired}

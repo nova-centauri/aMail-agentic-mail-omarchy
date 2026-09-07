@@ -1,11 +1,11 @@
-name: ${COMPOSE_PROJECT_NAME:-gigamail}
+name: ${COMPOSE_PROJECT_NAME:-amail}
 
 services:
-  gigamail:
+  amail:
     build:
       context: .
       dockerfile: Dockerfile
-    image: ${COMPOSE_PROJECT_NAME:-gigamail}:local
+    image: ${COMPOSE_PROJECT_NAME:-amail}:local
     restart: unless-stopped
     init: true
     env_file:
@@ -16,27 +16,23 @@ services:
       # still restricted by the loopback-only `ports` mapping below.
       HOST: 0.0.0.0
       PORT: "3000"
-      GIGAMAIL_DATA_DIR: /data
-      GIGAMAIL_STATIC_DIR: /app/dist
-      # Set by the production deploy script so health checks can prove which
-      # exact tested revision is serving traffic.
-      GIGAMAIL_RELEASE_SHA: ${GIGAMAIL_RELEASE_SHA:-}
+      AMAIL_DATA_DIR: /data
+      AMAIL_STATIC_DIR: /app/dist
+      # Optional: set by your deploy tooling so /api/health can report which
+      # exact revision is serving traffic.
+      AMAIL_RELEASE_SHA: ${AMAIL_RELEASE_SHA:-}
       # The privacy launcher provides this only for its own Compose invocation.
       # An empty value keeps remote-content requests on their normal path.
       REMOTE_CONTENT_PROXY_URL: ${REMOTE_CONTENT_PROXY_URL:-}
       # Keep SQLite/FTS temp files on the writable data volume. The container
       # root is read-only and /tmp is a small tmpfs.
       SQLITE_TMPDIR: /data/tmp
-      # Passkeys must use the public HTTPS origin, not the internal HTTP Host
-      # seen behind Nginx Proxy Manager. Empty .env values still get this pin.
-      GIGAMAIL_RP_ID: ${GIGAMAIL_RP_ID:-mail.xer0.io}
-      GIGAMAIL_ORIGIN: ${GIGAMAIL_ORIGIN:-https://mail.xer0.io}
     ports:
       # Deliberately local-only. Use an SSH tunnel or an authenticated reverse
       # proxy instead of publishing a mail client directly to the internet.
-      - "${GIGAMAIL_BIND_ADDRESS:-127.0.0.1}:${GIGAMAIL_PORT:-3080}:3000"
+      - "${AMAIL_BIND_ADDRESS:-127.0.0.1}:${AMAIL_PORT:-3080}:3000"
     volumes:
-      - gigamail-data:/data
+      - amail-data:/data
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m
     read_only: true
@@ -46,7 +42,7 @@ services:
     security_opt:
       - no-new-privileges:true
     networks:
-      # GigaMail needs direct provider access for IMAP/SMTP. Explicit gateway
+      # aMail needs direct provider access for IMAP/SMTP. Explicit gateway
       # priority prevents the internal privacy network from becoming its
       # default route on hosts that attach Compose networks in another order.
       app-net:
@@ -71,7 +67,7 @@ services:
     build:
       context: ./deploy/tor
       dockerfile: Dockerfile
-    image: ${COMPOSE_PROJECT_NAME:-gigamail}-tor-proxy:local
+    image: ${COMPOSE_PROJECT_NAME:-amail}-tor-proxy:local
     restart: unless-stopped
     init: true
     read_only: true
@@ -105,17 +101,22 @@ services:
       retries: 12
 
 volumes:
-  gigamail-data:
+  # Upgrading from GigaMail? Point this at your existing volume instead:
+  #   amail-data:
+  #     external: true
+  #     name: gigamail_gigamail-data
+  # aMail opens an existing gigamail.sqlite in place.
+  amail-data:
   tor-state:
 
 networks:
-  # GigaMail needs ordinary egress for IMAP/SMTP providers.
+  # aMail needs ordinary egress for IMAP/SMTP providers.
   app-net:
     driver: bridge
-  # Only GigaMail and Tor/Privoxy share this isolated network.
+  # Only aMail and Tor/Privoxy share this isolated network.
   privacy-net:
     driver: bridge
     internal: true
-  # Tor needs internet egress, but GigaMail is never attached to this network.
+  # Tor needs internet egress, but aMail is never attached to this network.
   tor-egress:
     driver: bridge

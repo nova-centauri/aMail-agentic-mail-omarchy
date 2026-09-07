@@ -79,7 +79,7 @@ export function AccessPanel({
             ? (passkeyPrimary
               ? 'Use your passkey to open the inbox. The access token is still available as a fallback.'
               : 'This aMail server is protected. Enter its access token to open your mail.')
-            : 'If this server has GIGAMAIL_ACCESS_TOKEN set, paste the matching token here.'}
+            : 'If this server has AMAIL_ACCESS_TOKEN set, paste the matching token here.'}
         </p>
         {passkeyPrimary && (
           <button type="button" className="primary-button passkey-button" onClick={usePasskey} disabled={passkeyBusy}>

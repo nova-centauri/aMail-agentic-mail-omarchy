@@ -15,6 +15,7 @@ function fieldsFromQuery(query) {
     before,
     unread: parsed.isUnread === true,
     starred: parsed.isStarred === true,
+    unanalyzed: parsed.isAnalyzed === false,
   };
 }
 
@@ -32,6 +33,7 @@ function queryFromFields(fields) {
     before: fields.before ? `${fields.before}T00:00:00.000Z` : null,
     isUnread: fields.unread ? true : null,
     isStarred: fields.starred ? true : null,
+    isAnalyzed: fields.unanalyzed ? false : null,
     folder: null,
   });
 }
@@ -95,6 +97,10 @@ export function SearchOptions({ open, query, onApply, onClose }) {
         <label>
           <input type="checkbox" checked={fields.starred} onChange={update('starred')} />
           Starred
+        </label>
+        <label>
+          <input type="checkbox" checked={fields.unanalyzed} onChange={update('unanalyzed')} />
+          Not yet analyzed by an agent
         </label>
       </div>
       <div className="search-options-actions">

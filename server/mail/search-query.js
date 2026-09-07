@@ -36,6 +36,8 @@ export function emptyMailboxQuery() {
     before: null,
     isUnread: null,
     isStarred: null,
+    // Agent-side counterpart of unread: null = ignore, true = only analyzed.
+    isAnalyzed: null,
     folder: null,
   };
 }
@@ -153,6 +155,8 @@ export function parseMailboxQuery(raw, { now = Date.now() } = {}) {
       else if (value === 'read') parsed.isUnread = operator.negated;
       else if (value === 'starred') parsed.isStarred = !operator.negated;
       else if (value === 'unstarred') parsed.isStarred = operator.negated;
+      else if (value === 'analyzed' || value === 'analysed') parsed.isAnalyzed = !operator.negated;
+      else if (value === 'unanalyzed' || value === 'unanalysed') parsed.isAnalyzed = operator.negated;
       continue;
     }
     if (operator.key === 'in') {
@@ -178,6 +182,7 @@ export function mailboxQueryIsActive(parsed) {
     || parsed.before
     || parsed.isUnread != null
     || parsed.isStarred != null
+    || parsed.isAnalyzed != null
     || parsed.folder,
   );
 }
@@ -209,6 +214,8 @@ export function serializeMailboxQuery(parsed) {
   if (parsed.isUnread === false) parts.push('is:read');
   if (parsed.isStarred === true) parts.push('is:starred');
   if (parsed.isStarred === false) parts.push('is:unstarred');
+  if (parsed.isAnalyzed === true) parts.push('is:analyzed');
+  if (parsed.isAnalyzed === false) parts.push('is:unanalyzed');
   if (parsed.folder) parts.push(`in:${parsed.folder}`);
   if (parsed.text) parts.push(parsed.text);
   return parts.join(' ');
@@ -275,6 +282,15 @@ function conversationIsStarred(conversation) {
   return (conversation.messages || conversation._threadMessages || []).some((message) => message.isStarred || message.starred);
 }
 
+function conversationIsAnalyzed(conversation) {
+  if (Number(conversation.unanalyzedCount) > 0) return false;
+  if (conversation.isAnalyzed === false || conversation.analyzed === false) return false;
+  const messages = conversation.messages || conversation._threadMessages || [];
+  if (messages.length) return messages.every((message) => message.isAnalyzed !== false && message.analyzed !== false);
+  const latest = conversation.latest || conversation;
+  return latest.isAnalyzed !== false && latest.analyzed !== false;
+}
+
 export function conversationMatchesMailboxQuery(conversation, parsed, { skipText = false } = {}) {
   if (!parsed || !mailboxQueryIsActive(parsed)) return true;
   const latest = conversation.latest || conversation;
@@ -302,5 +318,7 @@ export function conversationMatchesMailboxQuery(conversation, parsed, { skipText
   if (parsed.isUnread === false && conversationIsUnread(conversation)) return false;
   if (parsed.isStarred === true && !conversationIsStarred(conversation)) return false;
   if (parsed.isStarred === false && conversationIsStarred(conversation)) return false;
+  if (parsed.isAnalyzed === true && !conversationIsAnalyzed(conversation)) return false;
+  if (parsed.isAnalyzed === false && conversationIsAnalyzed(conversation)) return false;
   return true;
 }

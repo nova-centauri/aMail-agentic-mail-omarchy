@@ -17,7 +17,7 @@ test('plain-text signatures stay escaped and keep the RFC delimiter', () => {
     text: 'Hello',
     signature: 'Best,\nNova <Centauri>',
   });
-  assert.match(signed.html, /data-gigamail-signature="true"/);
+  assert.match(signed.html, /data-amail-signature="true"/);
   assert.match(signed.html, /-- <br>Best,<br>Nova &lt;Centauri&gt;/);
   assert.equal(signed.text, 'Hello\n\n-- \nBest,\nNova <Centauri>');
 });

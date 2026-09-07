@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { UNIFIED_ACCOUNT } from '../mail/constants.js';
+import { FLAG_COLORS, UNIFIED_ACCOUNT } from '../mail/constants.js';
 import { writeUiPrefs } from '../storage.js';
 import { Icon } from './Icon.jsx';
+import { PersonFlagsEditor } from './PersonFlagsEditor.jsx';
 import { SignatureEditor } from './SignatureEditor.jsx';
 import { Avatar, IconButton, Toggle } from './ui.jsx';
 
@@ -23,6 +24,12 @@ export function SettingsPanel({
   passkeysSupported = false,
   onAddPasskey,
   onDeletePasskey,
+  personFlags = [],
+  onSavePersonFlags,
+  opsSources = [],
+  serverInfo = null,
+  onOpenOnboarding,
+  isDemo = false,
 }) {
   const [signature, setSignature] = useState('');
   const [passkeyBusy, setPasskeyBusy] = useState(false);
@@ -85,6 +92,23 @@ export function SettingsPanel({
                 </button>
               ))}
             </div>
+          </section>
+          <section className="settings-section flags-settings-section">
+            <div className="settings-section-title"><h3>Flagged people</h3><Icon name="person" size={20} /></div>
+            <p className="settings-description">Each flag becomes a sidebar folder for mail involving those addresses. Agents can read and update the same list with <code>list_flags</code> and <code>set_flags</code>.</p>
+            <PersonFlagsEditor flags={personFlags} colors={FLAG_COLORS} onSave={onSavePersonFlags} disabled={isDemo || !onSavePersonFlags} />
+          </section>
+          <section className="settings-section agent-settings-section">
+            <div className="settings-section-title"><h3>Agents</h3><Icon name="sparkles" size={20} /></div>
+            <p className="settings-description">MCP endpoint: <code>{`${window.location.origin}/mcp`}</code>. Authenticate with the server access token as a Bearer header.</p>
+            {opsSources.length > 0 && (
+              <>
+                <p className="settings-description">Ops digest sources (set <code>AMAIL_OPS_SOURCES</code> on the server to change):</p>
+                <ul className="ops-sources">{opsSources.map((source) => <li key={source.id || source}>{source.label || source.id || source}</li>)}</ul>
+              </>
+            )}
+            {serverInfo?.releaseSha && <p className="settings-description">Server build <code>{String(serverInfo.releaseSha).slice(0, 12)}</code></p>}
+            {onOpenOnboarding && <button type="button" className="secondary-button" onClick={onOpenOnboarding}>Open the setup guide</button>}
           </section>
           <section className="settings-section privacy-section">
             <div className="settings-section-title"><h3>Privacy</h3><Icon name="shield" size={20} /></div>

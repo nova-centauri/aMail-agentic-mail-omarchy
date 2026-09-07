@@ -1,13 +1,18 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
+
+export const APP_NAME = 'aMail';
+export const SESSION_COOKIE = 'amail_session';
+/** Cookie name used by GigaMail-era deployments; still accepted for auth. */
+export const LEGACY_SESSION_COOKIE = 'gigamail_session';
+export const DB_FILENAME = 'amail.sqlite';
+const LEGACY_DB_FILENAME = 'gigamail.sqlite';
 
 const boolean = (value, fallback = false) => {
   if (value === undefined || value === '') return fallback;
   return ['1', 'true', 'yes', 'on'].includes(String(value).toLowerCase());
 };
-
-const PRODUCTION_WEBAUTHN_RP_ID = 'mail.xer0.io';
-const PRODUCTION_WEBAUTHN_ORIGIN = 'https://mail.xer0.io';
 
 const integer = (value, fallback, { min = 0, max = Number.MAX_SAFE_INTEGER } = {}) => {
   const parsed = Number.parseInt(value, 10);
@@ -22,87 +27,115 @@ function deriveKey(value) {
   return crypto.createHash('sha256').update(value, 'utf8').digest();
 }
 
+/**
+ * Read `AMAIL_<name>`, falling back to the GigaMail-era `GIGAMAIL_<name>` so an
+ * existing `.env` keeps working after upgrading.
+ */
+export function readEnv(env, name, fallback = undefined) {
+  const modern = env[`AMAIL_${name}`];
+  if (modern !== undefined && modern !== '') return modern;
+  const legacy = env[`GIGAMAIL_${name}`];
+  if (legacy !== undefined && legacy !== '') return legacy;
+  return fallback;
+}
+
+/**
+ * Prefer the aMail database filename, but keep opening a GigaMail-era database
+ * in place so upgrades never leave existing mail behind.
+ */
+export function resolveDbPath(dataDir, { exists = fs.existsSync } = {}) {
+  const modern = path.join(dataDir, DB_FILENAME);
+  const legacy = path.join(dataDir, LEGACY_DB_FILENAME);
+  if (!exists(modern) && exists(legacy)) return legacy;
+  return modern;
+}
+
 export function loadConfig(env = process.env) {
-  const dataDir = path.resolve(env.GIGAMAIL_DATA_DIR || path.join(process.cwd(), 'data'));
-  const credentialKey = deriveKey(env.GIGAMAIL_ENCRYPTION_KEY);
-  const remoteTokenKey = deriveKey(env.GIGAMAIL_REMOTE_TOKEN_KEY || env.GIGAMAIL_ENCRYPTION_KEY);
+  const dataDir = path.resolve(readEnv(env, 'DATA_DIR') || path.join(process.cwd(), 'data'));
+  const encryptionKey = readEnv(env, 'ENCRYPTION_KEY');
+  const credentialKey = deriveKey(encryptionKey);
+  const remoteTokenKey = deriveKey(readEnv(env, 'REMOTE_TOKEN_KEY') || encryptionKey);
+  const releaseSha = String(readEnv(env, 'RELEASE_SHA') || '');
 
   return Object.freeze({
+    appName: APP_NAME,
     env: env.NODE_ENV || 'development',
     // A local default makes a fresh install safe. The container explicitly sets
     // HOST=0.0.0.0 while Compose binds the published port to loopback.
     host: env.HOST || '127.0.0.1',
     port: integer(env.PORT, 3000, { min: 1, max: 65535 }),
     dataDir,
-    dbPath: path.join(dataDir, 'gigamail.sqlite'),
-    staticDir: path.resolve(env.GIGAMAIL_STATIC_DIR || path.join(process.cwd(), 'dist')),
-    releaseSha: /^[0-9a-f]{40}$/i.test(String(env.GIGAMAIL_RELEASE_SHA || ''))
-      ? String(env.GIGAMAIL_RELEASE_SHA).toLowerCase()
-      : null,
+    dbPath: resolveDbPath(dataDir),
+    staticDir: path.resolve(readEnv(env, 'STATIC_DIR') || path.join(process.cwd(), 'dist')),
+    releaseSha: /^[0-9a-f]{40}$/i.test(releaseSha) ? releaseSha.toLowerCase() : null,
     credentialKey,
     remoteTokenKey,
-    accessToken: env.GIGAMAIL_ACCESS_TOKEN || null,
+    accessToken: readEnv(env, 'ACCESS_TOKEN') || null,
     // This intentionally stays false unless a reverse proxy has been selected by
     // the operator. Trusting arbitrary forwarded headers is unsafe by default.
-    trustProxy: boolean(env.GIGAMAIL_TRUST_PROXY),
-    allowInsecureTls: boolean(env.GIGAMAIL_ALLOW_INSECURE_TLS),
-    syncBatchSize: integer(env.GIGAMAIL_SYNC_BATCH_SIZE, 200, { min: 1, max: 1000 }),
-    syncTimeoutMs: integer(env.GIGAMAIL_SYNC_TIMEOUT_MS, 60_000, { min: 5_000, max: 300_000 }),
+    trustProxy: boolean(readEnv(env, 'TRUST_PROXY')),
+    allowInsecureTls: boolean(readEnv(env, 'ALLOW_INSECURE_TLS')),
+    cookieSecure: boolean(readEnv(env, 'COOKIE_SECURE'), true),
+    syncBatchSize: integer(readEnv(env, 'SYNC_BATCH_SIZE'), 200, { min: 1, max: 1000 }),
+    syncTimeoutMs: integer(readEnv(env, 'SYNC_TIMEOUT_MS'), 60_000, { min: 5_000, max: 300_000 }),
     // The raw RFC822 source includes attachments. Keep each parse bounded so a
     // single unexpectedly large message cannot consume unrestricted memory.
-    syncMaxMessageBytes: integer(env.GIGAMAIL_SYNC_MAX_MESSAGE_BYTES, 10 * 1024 * 1024, {
+    syncMaxMessageBytes: integer(readEnv(env, 'SYNC_MAX_MESSAGE_BYTES'), 10 * 1024 * 1024, {
       min: 64 * 1024,
       max: 50 * 1024 * 1024,
     }),
     // 0 disables background polling. Sync calls open short-lived connections;
-    // GigaMail intentionally does not maintain an IDLE socket per account.
-    syncIntervalMinutes: integer(env.SYNC_INTERVAL_MINUTES, 0, { min: 0, max: 1440 }),
-    remoteContentMaxBytes: integer(env.GIGAMAIL_REMOTE_CONTENT_MAX_BYTES, 5 * 1024 * 1024, {
+    // aMail intentionally does not maintain an IDLE socket per account.
+    syncIntervalMinutes: integer(readEnv(env, 'SYNC_INTERVAL_MINUTES', env.SYNC_INTERVAL_MINUTES), 0, { min: 0, max: 1440 }),
+    remoteContentMaxBytes: integer(readEnv(env, 'REMOTE_CONTENT_MAX_BYTES'), 5 * 1024 * 1024, {
       min: 16 * 1024,
       max: 25 * 1024 * 1024,
     }),
-    remoteContentTimeoutMs: integer(env.GIGAMAIL_REMOTE_CONTENT_TIMEOUT_MS, 12_000, {
+    remoteContentTimeoutMs: integer(readEnv(env, 'REMOTE_CONTENT_TIMEOUT_MS'), 12_000, {
       min: 1_000,
       max: 60_000,
     }),
     // Capability URLs can be used by an unauthenticated <img> request, so keep
     // them deliberately short-lived. Reading a message reissues fresh tokens.
-    remoteContentTokenTtlSeconds: integer(env.GIGAMAIL_REMOTE_CONTENT_TOKEN_TTL, 5 * 60, {
+    remoteContentTokenTtlSeconds: integer(readEnv(env, 'REMOTE_CONTENT_TOKEN_TTL'), 5 * 60, {
       min: 30,
       max: 60 * 60,
     }),
     // REMOTE_CONTENT_PROXY_URL is deliberately not read from the conventional
     // HTTP_PROXY variables: only privacy image requests should use Tor/Privoxy.
-    remoteContentProxyUrl: env.REMOTE_CONTENT_PROXY_URL || env.GIGAMAIL_REMOTE_CONTENT_PROXY_URL || null,
+    remoteContentProxyUrl: env.REMOTE_CONTENT_PROXY_URL || readEnv(env, 'REMOTE_CONTENT_PROXY_URL') || null,
     // Direct fetches reveal the server IP. They are intentionally available only
     // as an explicit non-production development escape hatch.
     allowDirectRemoteContent: (env.NODE_ENV || 'development') !== 'production'
-      && boolean(env.GIGAMAIL_ALLOW_DIRECT_REMOTE_CONTENT),
+      && boolean(readEnv(env, 'ALLOW_DIRECT_REMOTE_CONTENT')),
     logLevel: env.LOG_LEVEL || 'info',
-    webauthnRpName: env.GIGAMAIL_RP_NAME || 'GigaMail',
-    webauthnRpId: webauthnRpId(env),
-    webauthnOrigins: webauthnOrigins(env),
+    webauthnRpName: readEnv(env, 'RP_NAME') || APP_NAME,
+    // Passkeys must match the public HTTPS origin. Behind a reverse proxy the
+    // container usually sees an internal Host, so operators pin these explicitly;
+    // when unset, the RP ID and origin are derived from each request.
+    webauthnRpId: String(readEnv(env, 'RP_ID') || '').trim(),
+    webauthnOrigins: String(readEnv(env, 'ORIGIN') || '')
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean),
+    // Keywords that identify routine infrastructure digests (Proxmox, Watchtower,
+    // a backup job, ...). Matching mail is hidden from the default inbox unless it
+    // reports a failure, which surfaces under "Ops errors".
+    opsSources: parseOpsSources(env.AMAIL_OPS_SOURCES ?? env.GIGAMAIL_OPS_SOURCES),
   });
 }
 
-function isProduction(env) {
-  return (env.NODE_ENV || 'development') === 'production';
-}
+export const DEFAULT_OPS_SOURCES = Object.freeze(['proxmox', 'watchtower']);
 
-function webauthnRpId(env) {
-  const explicit = String(env.GIGAMAIL_RP_ID || '').trim();
-  if (explicit) return explicit;
-  // Passkeys must match the public HTTPS origin. Behind Nginx the container
-  // often sees an internal Host and http, so production pins mail.xer0.io
-  // unless the operator overrides it.
-  return isProduction(env) ? PRODUCTION_WEBAUTHN_RP_ID : '';
-}
-
-function webauthnOrigins(env) {
-  const explicit = String(env.GIGAMAIL_ORIGIN || '')
+/**
+ * `AMAIL_OPS_SOURCES` is a comma-separated keyword list. Each keyword becomes a
+ * source id; an empty string disables ops-digest detection entirely.
+ */
+export function parseOpsSources(value) {
+  if (value === undefined || value === null) return [...DEFAULT_OPS_SOURCES];
+  const keywords = String(value)
     .split(',')
-    .map((value) => value.trim())
-    .filter(Boolean);
-  if (explicit.length) return explicit;
-  return isProduction(env) ? [PRODUCTION_WEBAUTHN_ORIGIN] : [];
+    .map((item) => item.trim().toLowerCase())
+    .filter((item) => /^[a-z0-9][a-z0-9 _./-]{0,63}$/.test(item));
+  return [...new Set(keywords)];
 }

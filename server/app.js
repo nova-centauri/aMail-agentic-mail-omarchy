@@ -10,7 +10,7 @@ import { errorHandler, notFound } from './middleware/errors.js';
 function safeRequestUrl(value) {
   const raw = String(value || '');
   try {
-    const url = new URL(raw, 'http://gigamail.invalid');
+    const url = new URL(raw, 'http://amail.invalid');
     for (const name of ['token', 'access_token', 'signature', 'sig']) {
       if (url.searchParams.has(name)) url.searchParams.set(name, '[redacted]');
     }

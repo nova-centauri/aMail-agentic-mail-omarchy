@@ -66,13 +66,13 @@ describe('MailList', () => {
   it('shows Fresh Drafts on the inbox and hides them in other folders', () => {
     const draft = {
       id: 'd1',
-      to: [{ name: 'Phil', email: 'phil@midstaelitho.com' }],
+      to: [{ name: 'Priya', email: 'priya@printworks.example' }],
       subject: 'Press window',
       updatedAt: '2026-09-06T12:00:00.000Z',
     };
     const { rerender } = render(<MailList {...defaults} freshDrafts={[draft]} />);
     expect(screen.getByRole('region', { name: 'Fresh drafts' })).toBeInTheDocument();
-    expect(screen.getByText('Phil')).toBeInTheDocument();
+    expect(screen.getByText('Priya')).toBeInTheDocument();
     rerender(<MailList {...defaults} folder="drafts" freshDrafts={[draft]} />);
     expect(screen.queryByRole('region', { name: 'Fresh drafts' })).not.toBeInTheDocument();
   });

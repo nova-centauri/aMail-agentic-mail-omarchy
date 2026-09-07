@@ -6,8 +6,10 @@ import { createMailService } from './services/mail-service.js';
 import { createRemoteContentService } from './services/remote-content.js';
 import { createPasskeyService } from './services/passkeys.js';
 import { createApp } from './app.js';
+import { configureSmartFilter } from './services/smart-filter.js';
 
 const config = loadConfig();
+configureSmartFilter({ opsSources: config.opsSources });
 const logger = pino({ level: config.logLevel, redact: ['req.headers.authorization', 'req.headers.cookie'] });
 let database;
 try {

@@ -20,17 +20,34 @@ if [ ! -f .env ]; then
   exit 1
 fi
 
-# Do not silently launch with the illustrative values shipped in .env.example.
 # Parsing only the individual KEY=value lines avoids executing an operator's
 # configuration file as shell code.
+count_key() {
+  awk -v key="$1" 'index($0, key "=") == 1 { count += 1 } END { print count + 0 }' .env
+}
+
+read_key() {
+  awk -v key="$1" 'index($0, key "=") == 1 { print substr($0, length(key) + 2); exit }' .env
+}
+
+# Do not silently launch with the illustrative values shipped in .env.example.
+# Each secret may be declared under its aMail name or its GigaMail-era name,
+# but exactly once overall so Compose never picks an unexpected value.
 require_secret() {
-  key=$1
-  count=$(awk -v key="$key" 'index($0, key "=") == 1 { count += 1 } END { print count + 0 }' .env)
+  name=$1
+  modern="AMAIL_$name"
+  legacy="GIGAMAIL_$name"
+  count=$(( $(count_key "$modern") + $(count_key "$legacy") ))
   if [ "$count" -ne 1 ]; then
-    echo "$key must appear exactly once in .env (found $count declarations)." >&2
+    echo "$modern must appear exactly once in .env (found $count declarations of $modern/$legacy)." >&2
     exit 1
   fi
-  value=$(awk -v key="$key" 'index($0, key "=") == 1 { print substr($0, length(key) + 2); exit }' .env)
+  if [ "$(count_key "$modern")" -eq 1 ]; then
+    key=$modern
+  else
+    key=$legacy
+  fi
+  value=$(read_key "$key")
   case "$value" in
     ''|replace-with-*|changeme*|change-me*|example*|"\"replace-with-"*|"'replace-with-"*)
       echo "$key must be replaced with a high-entropy secret in .env before launch." >&2
@@ -43,8 +60,8 @@ require_secret() {
   fi
 }
 
-require_secret GIGAMAIL_ENCRYPTION_KEY
-require_secret GIGAMAIL_ACCESS_TOKEN
+require_secret ENCRYPTION_KEY
+require_secret ACCESS_TOKEN
 
 # `config --quiet` renders the exact project first. It does not create,
 # remove, or restart containers, volumes, networks, or images.
@@ -57,20 +74,21 @@ compose_privacy() {
     docker compose --env-file .env --profile privacy "$@"
 }
 
+force_recreate=${AMAIL_FORCE_RECREATE:-${GIGAMAIL_FORCE_RECREATE:-0}}
+
 if [ "$mode" = privacy ]; then
-  if [ "${GIGAMAIL_FORCE_RECREATE:-0}" = "1" ]; then
-    # Never force-recreate Tor for an app release. A cold bootstrap from this
-    # VM currently stalls at 5% ("Connecting to a relay") with timeouts, and
-    # taking down a working relay is how production deploys get stuck.
+  if [ "$force_recreate" = "1" ]; then
+    # Never force-recreate Tor for an app release: a cold Tor bootstrap can
+    # take minutes, and taking down a working relay is how deploys get stuck.
     compose_privacy up --detach --build tor-proxy
-    compose_privacy up --detach --build --force-recreate --no-deps gigamail
+    compose_privacy up --detach --build --force-recreate --no-deps amail
   else
     compose_privacy up --detach --build
   fi
 else
-  # This intentionally runs no proxy. In production GigaMail keeps remote
+  # This intentionally runs no proxy. In production aMail keeps remote
   # content blocked rather than bypassing privacy controls with direct egress.
-  if [ "${GIGAMAIL_FORCE_RECREATE:-0}" = "1" ]; then
+  if [ "$force_recreate" = "1" ]; then
     REMOTE_CONTENT_PROXY_URL= \
       docker compose --env-file .env up --detach --build --force-recreate
   else

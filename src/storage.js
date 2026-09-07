@@ -1,5 +1,5 @@
-export const ACCESS_TOKEN_KEY = 'gigamail-access-token';
-export const PREFS_KEY = 'gigamail-ui-prefs';
+export const ACCESS_TOKEN_KEY = 'amail-access-token';
+export const PREFS_KEY = 'amail-ui-prefs';
 
 export function getAccessToken() {
   try {
