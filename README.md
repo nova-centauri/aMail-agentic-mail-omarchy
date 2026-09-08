@@ -109,6 +109,28 @@ amail-plugin server logs   # server mode only
 
 **Dependencies.** Client mode needs a JavaScript runtime for the plugin daemon: `node` (≥ 22) or `bun`, found on the usual paths including mise shims. Server mode needs `node` ≥ 22 and `npm` (the aMail server is Node; `better-sqlite3` ships prebuilt binaries), `openssl` for secret generation, `systemd --user`, and `rsync` (optional, `cp` fallback). The CLI uses `jq`, `curl`, and `gum` (optional, for the token prompt); toasts use `notify-send`; the web client opens through `omarchy-launch-webapp`. Everything the plugin writes lives under `~/.config/amail`, `~/.local/state/amail`, and `~/.local/share/amail`; it never edits Hyprland or Omarchy configuration.
 
+### Plugin security model
+
+The plugin runs entirely as your desktop user and is built so that neither a malicious e-mail nor a compromised aMail server can turn it into code execution on the desktop.
+
+- **No root, no shell, no downloads.** `amail-plugin` refuses to run as root and never calls `sudo`. Every process the widget, daemon, and CLI start is exec'd with an argv array; nothing is interpolated into `sh -c`. The only code that runs is what is in the plugin checkout (`omarchy plugin add` pins that), plus, in server mode, the lockfile-pinned npm dependencies of the aMail server. CI fails if a shell invocation, a privilege escalation, or a non-`node:` import appears in the plugin files.
+- **Untrusted data stays data.** Everything from the server (ids, subjects, senders, snippets, colours) is validated before it is used: conversation and account ids must match `[A-Za-z0-9][A-Za-z0-9._:@+=-]*` before they reach a command line, a URL path, or an IPC call; colours must be hex; toast text is markup-escaped and length-capped before `notify-send`; response bodies are capped at 8 MiB and the event stream at 1 MB per block. Settings read from `plugin.json` or given to `amail-plugin set` are coerced to their declared type and range (`badge` and `mode` are enums, poll intervals have floors so the daemon can never hammer a server).
+- **The token only goes to the configured origin.** The URL must be `http(s)://` without embedded credentials. Redirects are never followed (the CLI tells you which URL to connect to instead). The token is passed to helpers via environment or stdin, never argv, and is stored `0600` in a `0700` directory. The bar's "open in aMail" action goes through `amail-plugin open`, which re-reads the configured URL and only accepts an in-app path (no scheme, no host).
+- **Signals only reach the daemon.** Before `refresh`/`restart` signal the pid in `daemon.pid`, the CLI checks `/proc/<pid>` is owned by you and is running `daemon.mjs`, so a stale pid file after a crash can never hit an unrelated process.
+- **Local IPC is same-user only.** `omarchy-shell io.github.nova-centauri.amail …` calls are reachable by processes running as you (which already have your privileges). `snapshot` only writes `*.png` under `$HOME`; `goto` applies the same id check as above.
+
+**Server mode** is the one place the plugin touches anything outside its own directories, and it is deliberately narrow:
+
+| Capability | Exact scope |
+| --- | --- |
+| `systemctl --user` | Only the plugin's own unit, `amail-server.service`, written to `~/.config/systemd/user/`. No system units, no `sudo`, no `daemon-reexec`. |
+| `npm ci` | Runs in `~/.local/share/amail/server`, a private copy of this checkout, against the committed `package-lock.json`, with **lifecycle scripts disabled** (`--ignore-scripts`). The one native module, `better-sqlite3`, is then rebuilt explicitly (prebuilt binary or local compile); nothing else in the tree gets to run code at install time. After the web client is built, dev dependencies are pruned from the runtime tree. |
+| Secrets | `openssl rand -hex 32` for the encryption key and access token, written `0600` under `umask 077`. |
+
+The unit itself is sandboxed with systemd: `NoNewPrivileges`, `PrivateTmp`, `PrivateDevices`, `ProtectSystem=strict`, `ProtectHome=read-only` with `ReadWritePaths` only for `~/.local/share/amail` (the server's own code under it is read-only), `InaccessiblePaths` for `~/.config/amail` (the plugin token and `server.env`), `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.kube`, `~/.docker`, `~/.password-store` and the keyrings, `CapabilityBoundingSet=` (empty), `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK`, `SystemCallFilter=@system-service` minus `@privileged`, `RestrictNamespaces`, `RestrictSUIDSGID`, `LockPersonality`, `ProtectKernel*`, `ProtectControlGroups`, `ProtectClock`, `ProtectHostname`, `KeyringMode=private`, `UMask=0077`. It listens on `127.0.0.1:3080` only. Mount-namespace options in a user manager rely on unprivileged user namespaces (the stock Arch kernel has them; `linux-hardened` does not): if `journalctl --user -u amail-server` shows a namespace or mount error, remove the `Protect*`/`Private*`/`*Paths` lines from `~/.config/systemd/user/amail-server.service` and `systemctl --user daemon-reload`.
+
+The repository also contains the aMail server itself and its Docker deployment (`Dockerfile`, `deploy/`); those are what a *client-mode* plugin follows on some other machine and are not executed by the plugin.
+
 **Remove.**
 
 ```sh
@@ -117,7 +139,7 @@ amail-plugin server uninstall                          # server mode only: stops
 rm -rf ~/.config/amail ~/.local/state/amail ~/.local/share/amail   # optional: token, state, local mail database
 ```
 
-**IPC.** `omarchy-shell io.github.nova-centauri.amail status|open|close|toggle|refresh|web|counts`, `goto <conversationId>` to open one conversation (what a toast's Open button does), `view unread|unanalyzed|all`, `setup`, `snapshot <file.png>` to render the open panel to a PNG, and `debug` for geometry and job state.
+**IPC.** `omarchy-shell io.github.nova-centauri.amail status|open|close|toggle|refresh|web|counts`, `goto <conversationId>` to open one conversation (what a toast's Open button does), `view unread|unanalyzed|all`, `setup`, `snapshot <~/…/file.png>` to render the open panel to a PNG under your home directory, and `debug` for geometry and job state.
 
 ## Quick start (Docker)
 
@@ -135,7 +157,7 @@ Open `http://127.0.0.1:3080` (through an SSH tunnel if the server is remote), un
 ## Quick start (local development)
 
 ```sh
-npm install
+npm ci                  # exactly the locked dependency tree
 cp .env.example .env    # set the two secrets; AMAIL_COOKIE_SECURE=false for plain http
 npm run dev             # Vite on :5173, API on :3000
 ```

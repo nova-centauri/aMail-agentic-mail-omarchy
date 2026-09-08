@@ -43,6 +43,34 @@ jobs:
           npm test
           npm run check
 
+      - name: Lint the Omarchy plugin shell entry points
+        run: shellcheck --severity=warning bin/amail-plugin bin/amail-run
+
+      - name: Plugin runtime must stay dependency-free, shell-free and sudo-free
+        run: |
+          # Client mode runs plugin/*.mjs straight from the checkout under node or
+          # bun with no install step, so it may only import node: built-ins and
+          # sibling modules.
+          node -e '
+            const fs = require("node:fs");
+            let bad = 0;
+            for (const file of fs.readdirSync("plugin").filter((name) => name.endsWith(".mjs"))) {
+              const source = fs.readFileSync(`plugin/${file}`, "utf8");
+              for (const match of source.matchAll(/^\s*import\b[^;]*?\bfrom\s+["\x27]([^"\x27]+)["\x27]/gm)) {
+                const specifier = match[1];
+                if (!specifier.startsWith("node:") && !specifier.startsWith("./")) { console.error(`${file}: disallowed import ${specifier}`); bad = 1; }
+              }
+            }
+            process.exit(bad);
+          '
+          # Nothing in the plugin may go through a shell: every process is exec'd
+          # with an argv array, and nothing asks for root.
+          plugin_files="BarWidget.qml TriagePanel.qml Onboarding.qml bin/amail-plugin bin/amail-run plugin/cli.mjs plugin/daemon.mjs plugin/lib.mjs plugin/demo.mjs"
+          if grep -nE '"(sh|bash)", *"-c"|execSync|shell: *true|\bsudo\b|\bdoas\b|\bpkexec\b|\bsu -c\b' $plugin_files; then
+            echo "the plugin must not spawn shells or escalate privileges" >&2
+            exit 1
+          fi
+
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
 

@@ -12,7 +12,7 @@ Thanks for helping build an agentic, privacy-first mail client.
 ## Development
 
 ```sh
-npm install
+npm ci                    # the locked dependency tree; use `npm install` only when changing dependencies
 cp .env.example .env      # set AMAIL_ENCRYPTION_KEY and AMAIL_ACCESS_TOKEN; AMAIL_COOKIE_SECURE=false for http
 npm run dev               # Vite on http://127.0.0.1:5173, API on :3000
 ```
@@ -22,12 +22,13 @@ Node 22 or newer is required (`better-sqlite3`, `node:test`).
 ## Tests and checks
 
 ```sh
-npm test         # node --test server/**/*.test.js && vitest run
-npm run check    # vite build + node --check server/index.js
+npm test         # node --test server/**/*.test.js plugin/*.test.mjs && vitest run
+npm run check    # vite build + node --check on the server and plugin entry points + bash -n on bin/
 ```
 
 - Server tests live next to the module they cover (`server/**/*.test.js`) and use `node:test`; they spin up a real SQLite database in a temp directory and, for routes, a real Express listener.
 - Client tests use Vitest + Testing Library (`src/**/*.test.{js,jsx}`). Mock `../api.js` rather than `fetch`.
+- Omarchy plugin tests (`plugin/*.test.mjs`) cover the trust boundaries described under "Plugin security model" in the README: config coercion, id/URL/colour validation, response caps, redirect refusal, and daemon pid verification. The plugin runtime must stay dependency-free (`node:` imports only), must never spawn a shell, and must never escalate privileges; CI greps for all three and runs `shellcheck` on `bin/`.
 - CI runs both suites, the production build, `npm audit --omit=dev --audit-level=high`, Compose validation, both Docker builds, a live health check, and a boot with a GigaMail-era `.env`.
 
 ## Project layout
