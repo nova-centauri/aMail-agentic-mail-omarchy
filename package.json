@@ -15,8 +15,8 @@
     "dev:server": "node --watch server/index.js",
     "build": "vite build",
     "start": "node server/index.js",
-    "check": "npm run build && node --check server/index.js",
-    "test": "node --test server/**/*.test.js && vitest run"
+    "check": "npm run build && node --check server/index.js && node --check plugin/cli.mjs && node --check plugin/daemon.mjs && node --check plugin/lib.mjs && bash -n bin/amail-plugin bin/amail-run",
+    "test": "node --test server/**/*.test.js plugin/*.test.mjs && vitest run"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",

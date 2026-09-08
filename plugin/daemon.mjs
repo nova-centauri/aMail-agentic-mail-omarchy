@@ -17,7 +17,7 @@ import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 import {
   ApiError, PID_FILE, STATE_DIR, STATE_FILE, compactAccount, compactConversation,
-  createApi, ensureDir, loadConfig, loadToken, log, readJson, writeJsonAtomic,
+  createApi, ensureDir, isSafeId, loadConfig, loadToken, log, readJson, writeJsonAtomic,
 } from './lib.mjs';
 
 const config = loadConfig();
@@ -91,31 +91,41 @@ let current = {
   conversations: [],
 };
 
+// Notification daemons render the body (and often the summary) as Pango
+// markup, so sender-controlled text is escaped and squeezed onto a few lines.
+// Everything is passed as argv, never through a shell.
+function toastText(value, limit) {
+  return String(value || '')
+    .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .slice(0, limit);
+}
+
 function toast(conversation) {
   if (!config.toasts) return;
+  const id = String(conversation.id || '');
   const who = conversation.from.name || conversation.from.email || 'Unknown sender';
-  const summary = `${who}  ·  ${conversation.accountName}`;
-  const body = config.toastSnippet && conversation.snippet
+  const summary = toastText(`${who}  ·  ${conversation.accountName}`, 160);
+  const body = toastText(config.toastSnippet && conversation.snippet
     ? `${conversation.subject}\n${conversation.snippet}`
-    : conversation.subject;
+    : conversation.subject, 400);
   const args = [
     '--app-name=aMail',
     '--icon=mail-unread',
     '--category=email.arrived',
     '--hint=string:x-omarchy-plugin:amail',
-    `--hint=string:x-amail-thread:${conversation.id}`,
-    '--action=default=Open',
-    '--',
-    summary,
-    body,
   ];
+  // Only a well-formed id gets an Open action: it is forwarded to the shell
+  // over IPC, and an id we cannot vouch for is not worth a click.
+  if (isSafeId(id)) args.push(`--hint=string:x-amail-thread:${id}`, '--action=default=Open');
+  args.push('--', summary, body);
   try {
     const child = spawn('notify-send', args, { stdio: ['ignore', 'pipe', 'ignore'] });
     let out = '';
     child.stdout.on('data', (chunk) => { out += chunk; });
     child.on('exit', () => {
-      if (out.trim() === 'default') {
-        spawn('qs', ['-p', '/usr/share/omarchy/shell', 'ipc', 'call', SELF, 'goto', conversation.id], { stdio: 'ignore', detached: true }).unref();
+      if (out.trim() === 'default' && isSafeId(id)) {
+        spawn('qs', ['-p', '/usr/share/omarchy/shell', 'ipc', 'call', SELF, 'goto', id], { stdio: 'ignore', detached: true }).unref();
       }
     });
     child.unref();
@@ -233,7 +243,7 @@ async function runEventStream() {
     try {
       const headers = { ...api.headers, Accept: 'text/event-stream' };
       if (eventSeq) headers['Last-Event-ID'] = String(eventSeq);
-      const response = await fetch(`${api.base}/api/events`, { headers, signal });
+      const response = await fetch(`${api.base}/api/events`, { headers, signal, redirect: 'manual' });
       if (!response.ok || !response.body) throw new ApiError(response.status, `event stream returned ${response.status}`);
       transport = 'push';
       online = true;
@@ -248,6 +258,9 @@ async function runEventStream() {
         const { value, done } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
+        // An event block is a few hundred bytes; a stream that never ends one
+        // is broken or hostile, and must not grow the desktop session's heap.
+        if (buffer.length > 1_000_000) throw new Error('event stream sent an oversized block');
         let index;
         while ((index = buffer.indexOf('\n\n')) >= 0) {
           const block = buffer.slice(0, index);
