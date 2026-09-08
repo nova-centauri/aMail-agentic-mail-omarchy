@@ -138,14 +138,18 @@ Item {
   }
   function loadSettings() { if (!settingsProc.running) settingsProc.running = true }
 
-  Process { id: setProc }
+  // The daemon reads settings at start; once the setting is written, ask it to
+  // come back with the new ones. `cli restart` checks that the pid in
+  // daemon.pid really is our daemon before signalling it.
+  Process {
+    id: setProc
+    onExited: function() { if (!restartProc.running) restartProc.running = true }
+  }
   function setSetting(key, value) {
     setProc.command = [widget.runner, "cli", "set", key, String(value)]
     setProc.running = true
-    // The daemon reads settings at start; ask it to come back with the new ones.
-    Qt.callLater(function() { restartProc.running = true })
   }
-  Process { id: restartProc; command: ["sh", "-c", "pid=$(cat \"$HOME/.local/state/amail/daemon.pid\" 2>/dev/null) && kill -TERM \"$pid\""] }
+  Process { id: restartProc; command: [widget.runner, "cli", "restart"] }
 
   // ---------------------------------------------------------------- ui
   Flickable {
