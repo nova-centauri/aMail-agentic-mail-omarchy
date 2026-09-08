@@ -43,6 +43,9 @@ Panel {
 
   function alpha(c, a) { return Qt.rgba(c.r, c.g, c.b, a) }
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)) }
+  // Same alphabet the CLI enforces (lib.mjs isSafeId): ids come from the
+  // server via the state file or from IPC callers, and go on a command line.
+  function safeId(id) { return /^[A-Za-z0-9][A-Za-z0-9._:@+=-]{0,254}$/.test(String(id)) }
 
   function filtered(list, which, overrides) {
     var out = []
@@ -110,6 +113,7 @@ Panel {
   }
 
   function showConversation(id) {
+    if (!safeId(id)) { flash("✗ invalid conversation id"); return }
     root.openId = String(id)
     root.thread = null
     root.threadError = ""
@@ -172,6 +176,7 @@ Panel {
 
   function act(id, action) {
     if (!id || widget.demo) return
+    if (!safeId(id)) { flash("✗ invalid conversation id"); return }
     var cmd = [root.runner, "cli", "action", String(id), action]
     if (actionProc.running) { var q = actionProc.queue.slice(); q.push(cmd); actionProc.queue = q; return }
     actionProc.command = cmd
@@ -822,17 +827,13 @@ Panel {
   // KeyboardPanel's BorderSurface: the key catcher's grandparent.
   function snapshot(path) {
     if (!root.opened) return "panel is closed"
+    // Only a PNG, only somewhere under the caller's home directory.
+    var p = String(path || "")
+    var home = String(Quickshell.env("HOME") || "")
+    if (home === "" || p.indexOf(home + "/") !== 0 || !/\.png$/i.test(p) || p.indexOf("/../") >= 0) return "path must be a .png under " + home
     var target = keyCatcher.parent && keyCatcher.parent.parent ? keyCatcher.parent.parent : keyCatcher
-    var ok = target.grabToImage(function(result) { result.saveToFile(String(path)) }, Qt.size(target.width * 2, target.height * 2))
-    return ok ? "grabbing " + path : "grab failed"
-  }
-  function shellJob() {
-    if (jobProc.running) return "busy"
-    root.job = { name: "Mark all read", phase: "scan", done: 0, failed: 0, total: 0, scanned: 0, rate: 0, etaSeconds: -1, concurrency: 0, running: true }
-    jobProc.jobName = "Mark all read"
-    jobProc.command = ["sh", "-c", "i=0; while [ $i -le 3765 ]; do printf '{\"type\":\"progress\",\"phase\":\"mark\",\"done\":%s,\"total\":3765,\"rate\":41.8,\"etaSeconds\":%s,\"concurrency\":2}\n' $i $(( (3765 - i) / 42 )); i=$((i + 137)); sleep 0.5; done; printf '{\"type\":\"done\",\"phase\":\"mark\",\"done\":3765,\"total\":3765}\n'"]
-    jobProc.running = true
-    return "started"
+    var ok = target.grabToImage(function(result) { result.saveToFile(p) }, Qt.size(target.width * 2, target.height * 2))
+    return ok ? "grabbing " + p : "grab failed"
   }
   // Exercises the job pipeline without touching mail (omarchy-shell … dryrun).
   function dryRunJob() { return startJob("Dry run", ["read-all", "--dry-run", "--limit", "120"]) ? "started" : "busy" }

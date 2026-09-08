@@ -4,8 +4,9 @@
 // with a non-zero exit so the panel can show them.
 import fs from 'node:fs';
 import {
-  ApiError, CONFIG_FILE, DEFAULT_CONFIG, STATE_FILE, TOKEN_FILE, compactAccount, createApi,
-  loadConfig, loadToken, pokeDaemon, readJson, saveConfig, saveToken,
+  ApiError, CONFIG_FILE, DEFAULT_CONFIG, MODES, NUMERIC_LIMITS, STATE_FILE, TOKEN_FILE, clampInt, coerceSetting,
+  compactAccount, createApi, isHttpUrl, isSafeId, loadConfig, loadToken, normalizeUrl, pokeDaemon, readJson,
+  saveConfig, saveToken, signalDaemon,
 } from './lib.mjs';
 
 const [command, ...rest] = process.argv.slice(2);
@@ -31,6 +32,14 @@ function opt(name, fallback = null) {
 function positional(index) {
   const values = rest.filter((value, i) => !value.startsWith('--') && (i === 0 || !rest[i - 1].startsWith('--')));
   return values[index];
+}
+
+// Ids arrive from the panel (which got them from the daemon's state file, which
+// got them from the server) and from IPC callers. They end up in URL paths and
+// notification hints, so anything outside the expected alphabet is refused.
+function safeId(value, what = 'id') {
+  if (!isSafeId(value)) fail(`invalid ${what}`, 2);
+  return value;
 }
 
 function api() {
@@ -66,6 +75,7 @@ async function main() {
     case 'thread': {
       const id = positional(0);
       if (!id) fail('usage: thread <conversationId>', 2);
+      safeId(id, 'conversation id');
       const { client, config } = api();
       const payload = await client.get(`/api/threads/${encodeURIComponent(id)}`);
       const messages = (payload.messages || []).map((message) => ({
@@ -91,9 +101,14 @@ async function main() {
     case 'action': {
       const id = positional(0);
       const action = positional(1);
-      if (!id || !ACTIONS[action]) fail(`usage: action <conversationId> <${Object.keys(ACTIONS).join('|')}> [--by name] [--until iso]`, 2);
+      if (!id || !Object.hasOwn(ACTIONS, action)) fail(`usage: action <conversationId> <${Object.keys(ACTIONS).join('|')}> [--by name] [--until iso]`, 2);
+      safeId(id, 'conversation id');
       const { client, config } = api();
-      const result = await ACTIONS[action](client, encodeURIComponent(id), opt('by', config.agentName), opt('until'));
+      const by = String(opt('by', config.agentName) || config.agentName).slice(0, 64);
+      const untilRaw = opt('until');
+      const until = untilRaw && Number.isFinite(Date.parse(untilRaw)) ? new Date(Date.parse(untilRaw)).toISOString() : undefined;
+      if (untilRaw && !until) fail('--until must be an ISO 8601 date', 2);
+      const result = await ACTIONS[action](client, encodeURIComponent(id), by, until);
       pokeDaemon();
       out({ ok: true, action, id, remoteSync: result?.message?.remoteSync || null });
       return;
@@ -110,10 +125,11 @@ async function main() {
       //   {"type":"done",...}
       const { client } = api();
       const accountId = opt('account', '');
+      if (accountId) safeId(accountId, 'account id');
       const dryRun = rest.includes('--dry-run');
-      const maxConcurrency = Math.max(1, Math.min(4, Number(opt('concurrency', 2)) || 2));
-      const limit = Math.max(1, Math.min(20_000, Number(opt('limit', 5000)) || 5000));
-      const paceMs = Math.max(0, Number(opt('pace', 40)) || 0);
+      const maxConcurrency = clampInt(opt('concurrency', 2), { min: 1, max: 4 }, 2);
+      const limit = clampInt(opt('limit', 5000), { min: 1, max: 20_000 }, 5000);
+      const paceMs = clampInt(opt('pace', 40), { min: 0, max: 10_000 }, 40);
       const emit = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
 
       emit({ type: 'start', phase: 'scan' });
@@ -176,9 +192,10 @@ async function main() {
     }
     case 'list': {
       const { client } = api();
-      const q = opt('q', '');
-      const folder = opt('folder', 'inbox');
-      const payload = await client.get(`/api/messages?folder=${encodeURIComponent(folder)}&pageSize=${Number(opt('limit', 50))}${q ? `&q=${encodeURIComponent(q)}` : ''}`);
+      const q = String(opt('q', '') || '').slice(0, 512);
+      const folder = String(opt('folder', 'inbox') || 'inbox');
+      const limit = clampInt(opt('limit', 50), { min: 1, max: 500 }, 50);
+      const payload = await client.get(`/api/messages?folder=${encodeURIComponent(folder)}&pageSize=${limit}${q ? `&q=${encodeURIComponent(q)}` : ''}`);
       out({ ok: true, total: payload.total, folderCounts: payload.folderCounts, messages: payload.messages });
       return;
     }
@@ -197,6 +214,7 @@ async function main() {
     case 'sync': {
       const { client } = api();
       const accountId = positional(0);
+      if (accountId) safeId(accountId, 'account id');
       const payload = accountId
         ? await client.post(`/api/accounts/${encodeURIComponent(accountId)}/sync`, {}, { timeout: 10 * 60_000 })
         : await client.post('/api/sync', {}, { timeout: 10 * 60_000 });
@@ -206,6 +224,12 @@ async function main() {
     }
     case 'refresh': {
       out({ ok: true, poked: pokeDaemon() });
+      return;
+    }
+    case 'restart': {
+      // Stop the daemon so the widget brings it back with fresh settings. The
+      // pid is verified against /proc before anything is signalled.
+      out({ ok: true, stopped: signalDaemon('SIGTERM') });
       return;
     }
     case 'state': {
@@ -226,30 +250,40 @@ async function main() {
       const key = positional(0);
       const value = positional(1);
       if (!key || value === undefined || !Object.hasOwn(DEFAULT_CONFIG, key)) fail(`usage: set <${Object.keys(DEFAULT_CONFIG).join('|')}> <value>`, 2);
+      // The URL and token file are set by `connect`, which verifies them live.
+      if (key === 'url' || key === 'tokenFile') fail(`use: amail-plugin connect <url> to change the ${key}`, 2);
+      const coerced = coerceSetting(key, value);
+      if (coerced === undefined) {
+        const limits = NUMERIC_LIMITS[key];
+        fail(limits ? `${key} must be a whole number between ${limits.min} and ${limits.max}` : `invalid value for ${key}`, 2);
+      }
       const config = loadConfig();
-      const current = DEFAULT_CONFIG[key];
-      config[key] = typeof current === 'boolean' ? ['1', 'true', 'yes', 'on'].includes(String(value).toLowerCase())
-        : typeof current === 'number' ? Number(value)
-          : String(value);
+      config[key] = coerced;
       saveConfig(config);
       out({ ok: true, key, value: config[key] });
       return;
     }
     case 'connect': {
       // connect <url> [--mode client|server] ; token from AMAIL_ACCESS_TOKEN, --token-stdin, or --token
-      const url = String(positional(0) || '').replace(/\/+$/, '');
-      if (!/^https?:\/\//.test(url)) fail('usage: connect <https://mail.example.com> [--mode client|server] [--token-stdin]', 2);
-      let token = process.env.AMAIL_ACCESS_TOKEN || opt('token') || '';
+      const url = normalizeUrl(positional(0));
+      if (!isHttpUrl(url)) fail('usage: connect <https://mail.example.com> [--mode client|server] [--token-stdin]', 2);
+      const mode = opt('mode', null);
+      if (mode !== null && !MODES.includes(mode)) fail(`--mode must be one of: ${MODES.join(', ')}`, 2);
+      // Tokens are accepted from the environment or stdin. `--token` on the
+      // command line would be visible to every process on the machine via ps.
+      if (opt('token') !== null) fail('pass the token on stdin (--token-stdin) or in AMAIL_ACCESS_TOKEN, not on the command line', 2);
+      let token = process.env.AMAIL_ACCESS_TOKEN || '';
       if (rest.includes('--token-stdin')) token = fs.readFileSync(0, 'utf8').trim();
       if (!token) token = loadToken({ ...loadConfig(), token: undefined });
       if (!token) fail('No token given. Provide it on stdin with --token-stdin, or set AMAIL_ACCESS_TOKEN.', 2);
+      if (!/^[\x21-\x7e]{1,1024}$/.test(token)) fail('The access token must be printable ASCII without spaces (it travels in an HTTP header).', 2);
       const client = createApi({ url, token });
       const health = await client.get('/api/health', { timeout: 15_000 });
       const session = await client.get('/api/session', { timeout: 15_000 });
       if (session.protected && !session.authenticated) fail('aMail rejected that access token.', 4);
       const accounts = await client.get('/api/accounts', { timeout: 15_000 });
       const config = loadConfig();
-      config.mode = opt('mode', config.mode || 'client');
+      config.mode = mode || config.mode || 'client';
       config.url = url;
       delete config.token;
       config.tokenFile = TOKEN_FILE;
@@ -284,7 +318,7 @@ async function main() {
       return;
     }
     default:
-      fail('usage: cli.mjs <thread|action|read-all|list|accounts|health|sync|refresh|state|config|set|connect|mcp-config> …', 2);
+      fail('usage: cli.mjs <thread|action|read-all|list|accounts|health|sync|refresh|restart|state|config|set|connect|mcp-config> …', 2);
   }
 }
 

@@ -20,6 +20,7 @@ BarWidget {
   readonly property string home: Quickshell.env("HOME")
   readonly property string pluginDir: decodeURIComponent(Qt.resolvedUrl(".").toString().replace(/^file:\/\//, "").replace(/\/$/, ""))
   readonly property string runner: pluginDir + "/bin/amail-run"
+  readonly property string cliTool: pluginDir + "/bin/amail-plugin"
   readonly property string liveStateFile: home + "/.local/state/amail/state.json"
   // Demo mode: drop a fabricated state at ~/.local/state/amail/demo.json
   // (plugin/demo.mjs writes one) and the widget renders it instead of the
@@ -175,11 +176,15 @@ BarWidget {
   }
   function refresh() { if (!refreshProc.running) refreshProc.running = true }
 
+  // Opens the configured aMail origin (plus an optional in-app path) through
+  // `amail-plugin open`, which re-reads the URL from the plugin config and
+  // rejects anything that is not http(s) or that tries to leave the origin.
+  // Nothing here goes through a shell.
   function openWeb(path) {
-    if (root.url === "") return
-    Quickshell.execDetached(["sh", "-c",
-      'u="$1"; if command -v omarchy-launch-webapp >/dev/null 2>&1; then exec omarchy-launch-webapp "$u"; else exec xdg-open "$u"; fi',
-      "amail", root.url + (path || "")])
+    if (!/^https?:\/\//.test(root.url)) return
+    var p = String(path || "")
+    if (p !== "" && !/^\/[^\s\/]/.test(p) && p !== "/") return
+    Quickshell.execDetached(p === "" ? [root.cliTool, "open"] : [root.cliTool, "open", p])
   }
 
   function open() { panel.open() }
@@ -231,7 +236,6 @@ BarWidget {
     function snapshot(path: string): string { return panel.snapshot(path) }
     function demo(): string { return "demo=" + root.demo + " file=" + root.demoFile }
     function dryrun(): string { return panel.dryRunJob() }
-    function shelljob(): string { return panel.shellJob() }
     function view(name: string): string { panel.setFilter(String(name)); return "ok" }
     function setup(step: string): string { panel.openSetup(String(step || "mode")); return "ok" }
     function counts(): string { return JSON.stringify({ unread: root.unread, unanalyzed: root.unanalyzed, online: root.online, transport: root.transport }) }
