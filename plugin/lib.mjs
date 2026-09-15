@@ -4,6 +4,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { buildMailDeepLink, parseMailDeepLink, parseMailto, stripMailDeepLink } from '../src/mail/deep-link.js';
 
 export const HOME = os.homedir();
 export const CONFIG_DIR = process.env.AMAIL_PLUGIN_CONFIG_DIR || path.join(process.env.XDG_CONFIG_HOME || path.join(HOME, '.config'), 'amail');
@@ -198,4 +199,51 @@ export function pokeDaemon() {
 export function log(...parts) {
   const line = `${new Date().toISOString()} ${parts.map((part) => (typeof part === 'string' ? part : JSON.stringify(part))).join(' ')}\n`;
   process.stderr.write(line);
+}
+
+export { buildMailDeepLink, parseMailDeepLink, parseMailto, stripMailDeepLink };
+
+/** Turn a plugin "open" argument into the web-client URL and whether to focus an existing window. */
+export function resolveOpenTarget(config, target = '') {
+  const base = String(config?.url || '').replace(/\/+$/, '');
+  if (!base) {
+    return { ok: false, error: 'aMail is not configured. Run: amail-plugin connect <url>' };
+  }
+  const raw = String(target || '').trim();
+  if (/^mailto:/i.test(raw)) {
+    const intent = parseMailto(raw) || { compose: true };
+    return { ok: true, url: buildMailDeepLink(base, intent), focus: false, intent };
+  }
+  if (/^https?:\/\//i.test(raw)) {
+    const intent = parseMailDeepLink(raw);
+    const needsNew = Boolean(intent && (intent.compose || intent.thread || intent.reply || intent.forward));
+    return { ok: true, url: raw, focus: !needsNew, intent };
+  }
+  if (raw.startsWith('?') || raw.startsWith('/')) {
+    const url = `${base}${raw.startsWith('/') ? raw : `/${raw}`}`;
+    const intent = parseMailDeepLink(url);
+    const needsNew = Boolean(intent && (intent.compose || intent.thread || intent.reply || intent.forward));
+    return { ok: true, url, focus: !needsNew, intent };
+  }
+  if (raw) {
+    const intent = { thread: raw };
+    return { ok: true, url: buildMailDeepLink(base, intent), focus: false, intent };
+  }
+  return { ok: true, url: base, focus: true, intent: null };
+}
+
+export function recipientsFrom(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => {
+      if (item && typeof item === 'object') {
+        return { name: String(item.name || ''), email: String(item.email || item.address || '').trim() };
+      }
+      return { name: '', email: String(item || '').trim() };
+    }).filter((item) => item.email);
+  }
+  return String(value || '')
+    .split(/[,;]+/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((email) => ({ name: '', email }));
 }

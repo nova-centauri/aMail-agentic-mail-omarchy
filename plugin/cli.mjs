@@ -5,8 +5,9 @@
 import fs from 'node:fs';
 import {
   ApiError, CONFIG_FILE, DEFAULT_CONFIG, STATE_FILE, TOKEN_FILE, compactAccount, createApi,
-  loadConfig, loadToken, pokeDaemon, readJson, saveConfig, saveToken,
+  loadConfig, loadToken, pokeDaemon, readJson, recipientsFrom, resolveOpenTarget, saveConfig, saveToken,
 } from './lib.mjs';
+import { buildMailDeepLink, parseMailto } from '../src/mail/deep-link.js';
 
 const [command, ...rest] = process.argv.slice(2);
 // A consumer that stops reading (the panel closing a job, `| head`) must not
@@ -79,6 +80,7 @@ async function main() {
         isAnalyzed: Boolean(message.isAnalyzed),
         analyzedBy: message.analyzedBy || '',
         isSent: Boolean(message.isSent),
+        rfcMessageId: message.rfcMessageId || message.messageId || '',
         attachments: (message.attachments || []).map((attachment) => ({ filename: attachment.filename, size: attachment.size })),
         text: textOf(message),
       }));
@@ -283,8 +285,83 @@ async function main() {
       });
       return;
     }
+    case 'open-url': {
+      const target = positional(0) || '';
+      const result = resolveOpenTarget(loadConfig(), target);
+      if (!result.ok) fail(result.error, 2);
+      out({ ok: true, ...result });
+      return;
+    }
+    case 'compose-url': {
+      const config = loadConfig();
+      if (!config.url) fail('aMail is not configured. Run: amail-plugin connect <url>', 2);
+      const intent = {
+        compose: true,
+        to: opt('to', ''),
+        cc: opt('cc', ''),
+        bcc: opt('bcc', ''),
+        subject: opt('subject', ''),
+        body: opt('body', ''),
+        thread: opt('thread', ''),
+        reply: rest.includes('--reply') || Boolean(opt('reply')),
+        replyAll: rest.includes('--reply-all'),
+        forward: rest.includes('--forward') || Boolean(opt('forward')),
+      };
+      if (opt('reply') && opt('reply') !== '1' && !intent.thread) intent.thread = opt('reply');
+      if (opt('forward') && opt('forward') !== '1' && !intent.thread) intent.thread = opt('forward');
+      out({ ok: true, url: buildMailDeepLink(config.url, intent), focus: false, intent });
+      return;
+    }
+    case 'mailto': {
+      const raw = positional(0) || '';
+      const intent = parseMailto(raw);
+      if (!intent) fail('usage: mailto <mailto:address?subject=&body=>', 2);
+      const result = resolveOpenTarget(loadConfig(), raw);
+      if (!result.ok) fail(result.error, 2);
+      out({ ok: true, ...result, intent });
+      return;
+    }
+    case 'send': {
+      let payload = {};
+      if (rest.includes('--json-stdin')) {
+        payload = JSON.parse(fs.readFileSync(0, 'utf8'));
+      } else if (process.env.AMAIL_COMPOSE_JSON) {
+        payload = JSON.parse(process.env.AMAIL_COMPOSE_JSON);
+      } else {
+        payload = {
+          to: opt('to', ''),
+          cc: opt('cc', ''),
+          bcc: opt('bcc', ''),
+          subject: opt('subject', ''),
+          textBody: rest.includes('--body-stdin') ? fs.readFileSync(0, 'utf8') : (opt('body') || process.env.AMAIL_COMPOSE_BODY || ''),
+          accountId: opt('account', ''),
+          threadId: opt('thread', ''),
+          replyToMessageId: opt('reply-to', ''),
+        };
+      }
+      const to = recipientsFrom(payload.to);
+      const cc = recipientsFrom(payload.cc);
+      const bcc = recipientsFrom(payload.bcc);
+      if (!to.length && !cc.length && !bcc.length) fail('Add at least one recipient (--to, --cc, or --bcc).', 2);
+      const { client } = api();
+      const result = await client.post('/api/messages', {
+        to,
+        cc,
+        bcc,
+        subject: payload.subject || '',
+        textBody: payload.textBody || payload.body || '',
+        htmlBody: payload.htmlBody || payload.textBody || payload.body || '',
+        accountId: payload.accountId || undefined,
+        threadId: payload.threadId || undefined,
+        replyToMessageId: payload.replyToMessageId || undefined,
+        includeSignature: payload.includeSignature !== false,
+      }, { timeout: 60_000 });
+      pokeDaemon();
+      out({ ok: true, message: result?.message || result });
+      return;
+    }
     default:
-      fail('usage: cli.mjs <thread|action|read-all|list|accounts|health|sync|refresh|state|config|set|connect|mcp-config> …', 2);
+      fail('usage: cli.mjs <thread|action|read-all|list|accounts|health|sync|refresh|state|config|set|connect|mcp-config|open-url|compose-url|mailto|send> …', 2);
   }
 }
 

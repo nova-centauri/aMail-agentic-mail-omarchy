@@ -18,7 +18,8 @@ import { demoAccounts, demoDraftThreads, demoMailboxThreads } from './mail/demo.
 import { normalizeFreshDraft, pruneDismissedFreshDrafts, visibleFreshDrafts } from './mail/fresh-drafts.js';
 import { countSmartCategories, filterVisibleThreads, findPersonFlag } from './mail/filter.js';
 import { useLiveMailboxSync } from './mail/live-sync.js';
-import { quotedComposeHtml } from './mail/html.js';
+import { parseMailDeepLink, stripMailDeepLink } from './mail/deep-link.js';
+import { plainTextToHtml, quotedComposeHtml } from './mail/html.js';
 import { formatMessageDate, getArray, normalizeAccount, normalizePerson, normalizeThread, recipientArray, formatRecipients } from './mail/normalize.js';
 import { collectKnownPeople } from './mail/people.js';
 import { sanitizeSignatureHtml } from './mail/signature.js';
@@ -75,6 +76,8 @@ export default function App() {
   const syncInFlightRef = useRef(false);
   const demoDraftsRef = useRef([]);
   const demoDraftsSeededRef = useRef(false);
+  const pendingDeepLinkRef = useRef(typeof window !== 'undefined' ? parseMailDeepLink(window.location.href) : null);
+  const deepLinkAppliedRef = useRef(false);
   const [savedDrafts, setSavedDrafts] = useState([]);
   const [dismissedFreshDrafts, setDismissedFreshDrafts] = useState(() => readDismissedFreshDrafts());
   const canUsePasskeys = passkeysSupported();
@@ -544,9 +547,9 @@ export default function App() {
       setFolderCounts((current) => ({ ...current, inbox: Math.max(0, current.inbox - 1) }));
       if (!isDemo) api(`/messages/${encodeURIComponent(thread.id)}/read`, { method: 'POST' }).catch(() => undefined);
     }
-    if (isDemo || thread.messages?.length > 1) return;
+    if (isDemo || thread.messages?.length > 1) return provisional;
     try {
-      const data = await api(`/threads/${encodeURIComponent(thread.threadId)}`);
+      const data = await api(`/threads/${encodeURIComponent(thread.threadId || thread.id)}`);
       const raw = {
         ...(data?.thread || data || {}),
         messages: data?.messages || data?.thread?.messages || [],
@@ -554,10 +557,80 @@ export default function App() {
       const detailed = normalizeThread(raw);
       setSelectedThread(detailed);
       setThreads((current) => current.map((item) => item.id === detailed.id ? { ...item, ...detailed } : item));
+      return detailed;
     } catch {
       // The compact list payload remains a valid reader view.
     }
+    return provisional;
   };
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const sync = () => {
+      if (deepLinkAppliedRef.current) return;
+      pendingDeepLinkRef.current = parseMailDeepLink(window.location.href);
+    };
+    window.addEventListener('popstate', sync);
+    window.addEventListener('hashchange', sync);
+    return () => {
+      window.removeEventListener('popstate', sync);
+      window.removeEventListener('hashchange', sync);
+    };
+  }, []);
+
+  useEffect(() => {
+    const intent = pendingDeepLinkRef.current;
+    if (!intent || deepLinkAppliedRef.current || !authenticated || authRequired || loading) return;
+    deepLinkAppliedRef.current = true;
+    pendingDeepLinkRef.current = null;
+    if (typeof window !== 'undefined') {
+      const cleaned = stripMailDeepLink(`${window.location.pathname}${window.location.search}${window.location.hash}`);
+      const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+      if (cleaned !== current) window.history.replaceState(null, '', cleaned);
+    }
+    const apply = async () => {
+      const threadId = String(intent.thread || '').trim();
+      let thread = null;
+      if (threadId) {
+        thread = threads.find((item) => item.id === threadId || item.threadId === threadId) || null;
+        if (!thread && !isDemo) {
+          try {
+            const data = await api(`/threads/${encodeURIComponent(threadId)}`);
+            thread = normalizeThread({
+              ...(data?.thread || data || {}),
+              messages: data?.messages || data?.thread?.messages || [],
+            });
+          } catch {
+            setNotice('That conversation could not be opened.');
+          }
+        }
+        if (thread) thread = await openThread(thread) || thread;
+      }
+      if (thread && (intent.reply || intent.forward)) {
+        const message = thread.messages?.at(-1) || thread;
+        if (intent.forward) openForwardComposer(thread, message);
+        else openReplyComposer(thread, message, { replyAll: Boolean(intent.replyAll) });
+        return;
+      }
+      if (intent.compose || intent.to || intent.subject || intent.body) {
+        if (intent.to || intent.cc || intent.bcc || intent.subject || intent.body) {
+          const body = String(intent.body || '');
+          setComposeContext({
+            to: intent.to || '',
+            cc: intent.cc || '',
+            bcc: intent.bcc || '',
+            subject: intent.subject || '',
+            body,
+            htmlBody: body ? plainTextToHtml(body) : '',
+          });
+          setComposeOpen(true);
+        } else {
+          openNewCompose();
+        }
+      }
+    };
+    void apply();
+  }, [authenticated, authRequired, loading, isDemo, threads]);
 
   const toggleStar = (thread) => {
     const next = { ...thread, starred: !thread.starred };

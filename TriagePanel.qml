@@ -36,7 +36,9 @@ Panel {
   property var pending: ({})   // id -> local overrides until the daemon confirms
   property double nowMs: Date.now()
   property bool setupOpen: false
+  property bool composeOpen: false
   readonly property bool showSetup: !widget.configured || setupOpen
+  readonly property bool showCompose: composeOpen && !showSetup
 
   readonly property var items: filtered(widget.conversations, filter, pending)
   readonly property var current: items.length > 0 ? items[Math.min(cursor, items.length - 1)] : null
@@ -78,6 +80,18 @@ Panel {
   function personLabel(p) {
     if (!p) return ""
     return p.name && p.name !== "" ? p.name : (p.email || "")
+  }
+
+  function personEmail(p) {
+    if (!p) return ""
+    if (p.email && p.email !== "") return p.email
+    return p.name || ""
+  }
+
+  function lastMessage() {
+    if (root.thread && root.thread.messages && root.thread.messages.length)
+      return root.thread.messages[root.thread.messages.length - 1]
+    return root.current
   }
 
   function statusLine() {
@@ -327,8 +341,119 @@ Panel {
     for (var i = 0; i < list.length; i++) if (list[i].id === id) return Object.assign({}, list[i], pending[id] || {})
     return null
   }
-  function openInWeb() { widget.openWeb(""); root.close() }
-  function compose() { widget.openWeb("/?compose=1"); root.close() }
+  function openInWeb() {
+    if (root.openId !== "") widget.openWeb("/?thread=" + encodeURIComponent(root.openId))
+    else widget.openWeb("")
+    root.close()
+  }
+  function composeInWeb(path) { widget.openWeb(path || "/?compose=1"); root.close() }
+  function openCompose(initial) {
+    root.setupOpen = false
+    root.composeOpen = true
+    composePanel.start(initial || { mode: "new" })
+    root.open()
+  }
+  function closeCompose() {
+    root.composeOpen = false
+    Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+  }
+  function compose() {
+    if (!widget.configured) { openSetup("mode"); return }
+    var accountId = (root.current && root.current.accountId) || (widget.accounts.length ? widget.accounts[0].id : "")
+    openCompose({ mode: "new", accountId: accountId })
+  }
+  function reply(all) {
+    if (widget.demo) { flash("Demo inbox — compose is live against your server"); return }
+    var msg = lastMessage()
+    if (!msg && !root.current) { compose(); return }
+    var from = (msg && msg.from) || (root.current && root.current.from) || null
+    var subj = (root.thread && root.thread.thread && root.thread.thread.subject) || (root.current && root.current.subject) || ""
+    if (!/^re:/i.test(subj)) subj = "Re: " + subj
+    var to = personEmail(from)
+    var cc = ""
+    if (all && msg && msg.to && msg.to.length) {
+      var extras = []
+      for (var i = 0; i < msg.to.length; i++) {
+        var addr = personEmail(msg.to[i])
+        if (addr && addr !== to) extras.push(addr)
+      }
+      cc = extras.join(", ")
+    }
+    var quoted = "\n\nOn " + fullTime(msg && msg.sentAt) + ", " + personLabel(from) + " wrote:\n" + ((msg && msg.text) || (root.current && root.current.snippet) || "")
+    openCompose({
+      mode: all ? "reply-all" : "reply",
+      to: to,
+      cc: cc,
+      subject: subj,
+      body: quoted,
+      accountId: (root.thread && root.thread.thread && root.thread.thread.accountId) || (root.current && root.current.accountId) || "",
+      threadId: root.openId || (root.current && root.current.id) || "",
+      replyToMessageId: (msg && (msg.rfcMessageId || msg.messageId)) || ""
+    })
+  }
+  function forwardMail() {
+    var msg = lastMessage()
+    if (!msg && !root.current) { compose(); return }
+    var from = (msg && msg.from) || (root.current && root.current.from) || null
+    var subj = (root.thread && root.thread.thread && root.thread.thread.subject) || (root.current && root.current.subject) || ""
+    if (!/^fwd:/i.test(subj)) subj = "Fwd: " + subj
+    var quoted = "\n\n---------- Forwarded message ----------\nFrom: " + personLabel(from) + "\nDate: " + fullTime(msg && msg.sentAt) + "\nSubject: " + subj.replace(/^Fwd:\s*/i, "") + "\n\n" + ((msg && msg.text) || "")
+    openCompose({
+      mode: "forward",
+      subject: subj,
+      body: quoted,
+      accountId: (root.thread && root.thread.thread && root.thread.thread.accountId) || (root.current && root.current.accountId) || ""
+    })
+  }
+  function openReply(id) {
+    if (id) showConversation(id)
+    reply(false)
+  }
+
+  Process {
+    id: sendProc
+    stdout: StdioCollector {
+      onStreamFinished: {
+        try {
+          var d = JSON.parse(text.trim())
+          if (d.ok === true) {
+            composePanel.sent()
+            root.closeCompose()
+            root.flash("Sent")
+            widget.refresh()
+          } else {
+            composePanel.fail(String(d.error || "send failed"))
+          }
+        } catch (e) {
+          composePanel.fail("unreadable reply from the CLI")
+        }
+      }
+    }
+    onExited: function(code) {
+      if (code !== 0 && composePanel.busy) composePanel.fail("send failed (exit " + code + ")")
+    }
+  }
+  function sendCompose(payload) {
+    if (widget.demo) { flash("Demo inbox cannot send"); composePanel.fail("Demo inbox cannot send"); return }
+    var env = { AMAIL_COMPOSE_JSON: JSON.stringify(payload), AMAIL_PLUGIN_ID: widget.moduleName }
+    sendProc.environment = env
+    sendProc.command = [root.runner, "cli", "send"]
+    if (sendProc.running) sendProc.running = false
+    sendProc.running = true
+  }
+  function composeFullEditor() {
+    var payload = composePanel.payload()
+    var path = "/?compose=1"
+    if (payload.to) path += "&to=" + encodeURIComponent(payload.to)
+    if (payload.cc) path += "&cc=" + encodeURIComponent(payload.cc)
+    if (payload.subject) path += "&subject=" + encodeURIComponent(payload.subject)
+    if (payload.textBody) path += "&body=" + encodeURIComponent(String(payload.textBody).slice(0, 1800))
+    if (payload.threadId && (composePanel.mode === "reply" || composePanel.mode === "reply-all"))
+      path += "&thread=" + encodeURIComponent(payload.threadId) + "&reply=1" + (composePanel.mode === "reply-all" ? "&replyAll=1" : "")
+    if (composePanel.mode === "forward" && payload.threadId)
+      path += "&thread=" + encodeURIComponent(payload.threadId) + "&forward=1"
+    composeInWeb(path)
+  }
   function refreshNow() { widget.refresh(); flash("Refreshing…") }
   function openSetup(step) {
     root.setupOpen = true
@@ -370,12 +495,12 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      // Text fields in the wizard must receive typing; the catcher would
-      // otherwise eat every key as a shortcut.
-      blocked: root.showSetup && onboarding.editing
+      // Text fields in the wizard and composer must receive typing; the
+      // catcher would otherwise eat every key as a shortcut.
+      blocked: (root.showSetup && onboarding.editing) || root.showCompose
 
       onMoveRequested: function(dx, dy) {
-        if (root.showSetup) return
+        if (root.showSetup || root.showCompose) return
         if (root.openId !== "") {
           if (dy !== 0) detailFlick.contentY = root.clamp(detailFlick.contentY + dy * Style.space(64), 0, Math.max(0, detailFlick.contentHeight - detailFlick.height))
           if (dx !== 0) root.stepConversation(dx)
@@ -388,16 +513,16 @@ Panel {
         if (dx !== 0) root.cycleFilter(dx)
       }
       onActivateRequested: {
-        if (root.showSetup) return
+        if (root.showSetup || root.showCompose) return
         if (root.openId !== "") return
         if (root.current) root.showConversation(root.current.id)
       }
-      onReturnRequested: if (root.showSetup) { if (widget.configured) root.closeSetup(); else root.close() } else if (root.openId !== "") root.backToList(); else root.close()
-      onCloseRequested: if (root.showSetup) { if (widget.configured) root.closeSetup(); else root.close() } else if (root.openId !== "") root.backToList(); else root.close()
-      onDeleteRequested: if (!root.showSetup) root.trash()
+      onReturnRequested: if (root.showCompose) root.closeCompose(); else if (root.showSetup) { if (widget.configured) root.closeSetup(); else root.close() } else if (root.openId !== "") root.backToList(); else root.close()
+      onCloseRequested: if (root.showCompose) root.closeCompose(); else if (root.showSetup) { if (widget.configured) root.closeSetup(); else root.close() } else if (root.openId !== "") root.backToList(); else root.close()
+      onDeleteRequested: if (!root.showSetup && !root.showCompose) root.trash()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(t) {
-        if (root.showSetup) return
+        if (root.showSetup || root.showCompose) return
         switch (t) {
           case "j": keyCatcher.moveRequested(0, 1); break
           case "k": keyCatcher.moveRequested(0, -1); break
@@ -409,13 +534,15 @@ Panel {
           case "s": root.toggleStar(); break
           case "o": root.openInWeb(); break
           case "c": root.compose(); break
+          case "p": root.reply(false); break
+          case "f": root.forwardMail(); break
           case "R": root.refreshNow(); break
           case "M": root.markAllRead(); break
           case "u": if (root.openId !== "") root.backToList(); break
           case "1": root.setFilter("unread"); break
           case "2": root.setFilter("unanalyzed"); break
           case "3": root.setFilter("all"); break
-          case "?": root.flash("j/k move · Enter open · a analyzed · e archive · r read · M all read · s star · # trash · o web · c compose · 1/2/3 filter"); break
+          case "?": root.flash("j/k move · Enter open · c compose · p reply · f forward · o web · a analyzed · e archive · r read · M all read · s star · # trash · 1/2/3 filter"); break
         }
       }
 
@@ -444,8 +571,8 @@ Panel {
               spacing: Style.space(4)
               PanelActionButton { iconText: "󰇯"; tooltipText: "Mark all as read (M)"; foreground: root.foreground; fontFamily: root.fontFamily; onClicked: root.markAllRead() }
               PanelActionButton { iconText: "󰑐"; tooltipText: "Refresh (R)"; foreground: root.foreground; fontFamily: root.fontFamily; onClicked: root.refreshNow() }
-              PanelActionButton { iconText: "󱞁"; tooltipText: "Compose in aMail (c)"; foreground: root.foreground; fontFamily: root.fontFamily; onClicked: root.compose() }
-              PanelActionButton { iconText: "󰖟"; tooltipText: "Open aMail (o)"; foreground: root.foreground; fontFamily: root.fontFamily; onClicked: root.openInWeb() }
+              PanelActionButton { iconText: "󱞁"; tooltipText: "Compose (c)"; foreground: root.foreground; fontFamily: root.fontFamily; onClicked: root.compose() }
+              PanelActionButton { iconText: "󰖟"; tooltipText: "Open aMail web app (o)"; foreground: root.foreground; fontFamily: root.fontFamily; onClicked: root.openInWeb() }
               PanelActionButton { iconText: "󰒓"; tooltipText: "Settings"; foreground: root.foreground; fontFamily: root.fontFamily; onClicked: root.showSetup ? root.closeSetup() : root.openSetup() }
             }
           }
@@ -453,7 +580,7 @@ Panel {
 
         // ---------- filter chips (list mode) ----------
         Row {
-          visible: root.openId === "" && !root.showSetup
+          visible: root.openId === "" && !root.showSetup && !root.showCompose
           width: parent.width
           spacing: Style.space(6)
           Button { text: "Unread"; selected: root.filter === "unread"; foreground: root.foreground; accent: root.accent; fontFamily: root.fontFamily; fontSize: Style.font.bodySmall; onClicked: root.setFilter("unread") }
@@ -471,10 +598,11 @@ Panel {
 
         // ---------- detail header (thread mode) ----------
         Row {
-          visible: root.openId !== "" && !root.showSetup
+          visible: root.openId !== "" && !root.showSetup && !root.showCompose
           width: parent.width
           spacing: Style.space(6)
           Button { iconText: "󰁍"; text: "Back"; foreground: root.foreground; accent: root.accent; fontFamily: root.fontFamily; fontSize: Style.font.bodySmall; onClicked: root.backToList() }
+          Button { iconText: "󰏪"; text: "Reply"; tooltipText: "Reply (p)"; foreground: root.foreground; accent: root.accent; fontFamily: root.fontFamily; fontSize: Style.font.bodySmall; onClicked: root.reply(false) }
           Button { iconText: "󰄬"; text: "Analyzed"; tooltipText: "Mark analyzed (a)"; foreground: root.foreground; accent: root.accent; fontFamily: root.fontFamily; fontSize: Style.font.bodySmall; onClicked: root.markAnalyzed() }
           Button { iconText: "󰇰"; text: "Archive"; tooltipText: "Archive (e)"; foreground: root.foreground; accent: root.accent; fontFamily: root.fontFamily; fontSize: Style.font.bodySmall; onClicked: root.archive() }
           Button { iconText: "󰓎"; tooltipText: "Star (s)"; foreground: root.foreground; accent: root.accent; fontFamily: root.fontFamily; fontSize: Style.font.bodySmall; onClicked: root.toggleStar() }
@@ -559,10 +687,24 @@ Panel {
             onCancelled: root.closeSetup()
           }
 
+          ComposePanel {
+            id: composePanel
+            visible: root.showCompose
+            anchors.fill: parent
+            widget: root.widget
+            foreground: root.foreground
+            accent: root.accent
+            urgent: root.urgent
+            fontFamily: root.fontFamily
+            onSendRequested: function(payload) { root.sendCompose(payload) }
+            onCancelled: root.closeCompose()
+            onOpenFullEditor: root.composeFullEditor()
+          }
+
           // list
           ListView {
             id: listView
-            visible: root.openId === "" && !root.showSetup
+            visible: root.openId === "" && !root.showSetup && !root.showCompose
             anchors.fill: parent
             clip: true
             model: root.items
@@ -693,7 +835,7 @@ Panel {
           // thread detail
           Flickable {
             id: detailFlick
-            visible: root.openId !== "" && !root.showSetup
+            visible: root.openId !== "" && !root.showSetup && !root.showCompose
             anchors.fill: parent
             clip: true
             contentWidth: width
@@ -793,9 +935,10 @@ Panel {
             anchors.verticalCenter: parent.verticalCenter
             width: parent.width
             text: root.toast !== "" ? root.toast
+              : root.showCompose ? "Ctrl+Enter sends · Esc cancels · Full editor opens the aMail web app"
               : root.showSetup ? (widget.configured ? "Esc closes settings" : "aMail setup · Esc closes")
-              : (root.openId !== "" ? "u back · a analyzed · e archive · r read · s star · # trash · ←/→ next"
-                                   : "j/k move · Enter open · a analyzed · e archive · r read · o web · ? help")
+              : (root.openId !== "" ? "p reply · f forward · o web · u back · a analyzed · e archive · r read · s star · # trash"
+                                   : "j/k move · Enter open · c compose · o web · a analyzed · e archive · r read · ? help")
             color: root.toast !== "" ? root.foreground : root.faint
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption

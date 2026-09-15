@@ -85,18 +85,23 @@ Put `$PLUGIN/bin` on your `PATH` (or symlink `amail-plugin` into `~/.local/bin`)
 
 ```sh
 amail-plugin status        # what the daemon sees: transport, counts, accounts, last event
-amail-plugin open          # the full aMail web client as an Omarchy web app
+amail-plugin open          # the full aMail web client as an Omarchy web app (focuses an existing window)
+amail-plugin compose       # compose in the web app; amail-plugin compose --to you@example.com
+amail-plugin open <id>     # open one conversation in the web app
+amail-plugin webapp install  # Super+Space launcher + mailto: handler
 amail-plugin mcp-config    # the MCP snippet for Cursor / Claude / Codex
 amail-plugin set badge unanalyzed   # bar badge: unread (default), unanalyzed, or both
 amail-plugin set toasts false
 amail-plugin server logs   # server mode only
 ```
 
-**Bar widget.** `󰇮 12  󰚩 15` is unread and not-yet-analyzed; `amail-plugin set badge unread|unanalyzed|both` picks what shows. Dimmed means the server is unreachable. Left-click opens the panel, middle-click refreshes, right-click opens the web client.
+**Bar widget.** `󰇮 12  󰚩 15` is unread and not-yet-analyzed; `amail-plugin set badge unread|unanalyzed|both` picks what shows. Dimmed means the server is unreachable. Left-click opens the panel, middle-click refreshes, right-click focuses the aMail web app.
 
 **Bulk work stays light.** Mark all read (the envelope in the header, or `M`) runs as a background job in the CLI, not in the shell: it pages through the server's unread view, then works with at most two concurrent requests, a pacing gap between them, and an automatic drop to one worker when the server slows down. The panel shows progress, rate, ETA, and a cancel button, and keeps the job running while closed. Meanwhile the daemon coalesces the resulting flood of state events into at most one refresh every 1.5 s.
 
-**Panel.** Three views: Unread, Not analyzed, Inbox. `j`/`k` move, `Enter` reads the thread, `a` marks analyzed, `e` archives, `r` toggles read, `M` marks everything read, `s` stars, `#` trashes, `o` opens the web client, `c` composes there, `1`/`2`/`3` switch views, `?` shows the keys. Every action is applied optimistically and confirmed by the next push from the server.
+**Panel.** Three views: Unread, Not analyzed, Inbox. `j`/`k` move, `Enter` reads the thread, `c` composes in the panel (Ctrl+Enter sends; Full editor opens the web app), `p` replies, `f` forwards, `o` opens the current thread in the web app, `a` marks analyzed, `e` archives, `r` toggles read, `M` marks everything read, `s` stars, `#` trashes, `1`/`2`/`3` switch views, `?` shows the keys. Every action is applied optimistically and confirmed by the next push from the server.
+
+**Web app.** Connect installs an Omarchy web app named aMail (Super+Space, mailto: links, `amail-plugin open` / `compose`). The web client honours `?compose=1`, `?thread=<id>`, `?reply=1`, and `mailto:` so those launches actually compose or open the conversation instead of dumping you on the inbox.
 
 **New mail is pushed, not polled.** This fork adds two pieces to the server so a message reaches the bar about a second after the provider receives it:
 
@@ -107,7 +112,7 @@ amail-plugin server logs   # server mode only
 
 **Files.** `~/.config/amail/plugin.json` (mode, URL, settings), `~/.config/amail/token` (0600), `~/.local/state/amail/state.json` (what the bar renders: subjects, senders, counts, ids; never bodies), and in server mode `~/.config/amail/server.env` plus `~/.local/share/amail/` (database and a private copy of the server). Message bodies are fetched on demand when you open a thread and are not written to disk by the plugin.
 
-**Dependencies.** Client mode needs a JavaScript runtime for the plugin daemon: `node` (≥ 22) or `bun`, found on the usual paths including mise shims. Server mode needs `node` ≥ 22 and `npm` (the aMail server is Node; `better-sqlite3` ships prebuilt binaries), `openssl` for secret generation, `systemd --user`, and `rsync` (optional, `cp` fallback). The CLI uses `jq`, `curl`, and `gum` (optional, for the token prompt); toasts use `notify-send`; the web client opens through `omarchy-launch-webapp`. Everything the plugin writes lives under `~/.config/amail`, `~/.local/state/amail`, and `~/.local/share/amail`; it never edits Hyprland or Omarchy configuration.
+**Dependencies.** Client mode needs a JavaScript runtime for the plugin daemon: `node` (≥ 22) or `bun`, found on the usual paths including mise shims. Server mode needs `node` ≥ 22 and `npm` (the aMail server is Node; `better-sqlite3` ships prebuilt binaries), `openssl` for secret generation, `systemd --user`, and `rsync` (optional, `cp` fallback). The CLI uses `jq`, `curl`, and `gum` (optional, for the token prompt); toasts use `notify-send`; the web client opens through `omarchy-launch-or-focus-webapp` / `omarchy-launch-webapp`. Connect also writes `~/.local/share/applications/aMail.desktop` and a `~/.local/bin/amail-plugin` symlink. Everything else the plugin writes lives under `~/.config/amail`, `~/.local/state/amail`, and `~/.local/share/amail`; it never edits Hyprland or Omarchy configuration.
 
 **Remove.**
 
@@ -117,7 +122,7 @@ amail-plugin server uninstall                          # server mode only: stops
 rm -rf ~/.config/amail ~/.local/state/amail ~/.local/share/amail   # optional: token, state, local mail database
 ```
 
-**IPC.** `omarchy-shell io.github.nova-centauri.amail status|open|close|toggle|refresh|web|counts`, `goto <conversationId>` to open one conversation (what a toast's Open button does), `view unread|unanalyzed|all`, `setup`, `snapshot <file.png>` to render the open panel to a PNG, and `debug` for geometry and job state.
+**IPC.** `omarchy-shell io.github.nova-centauri.amail status|open|close|toggle|refresh|web|compose|counts`, `goto <conversationId>` to open one conversation (what a toast's Open button does), `reply <conversationId>`, `view unread|unanalyzed|all`, `setup`, `snapshot <file.png>` to render the open panel to a PNG, and `debug` for geometry and job state.
 
 ## Quick start (Docker)
 

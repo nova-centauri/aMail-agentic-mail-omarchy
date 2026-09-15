@@ -5,7 +5,10 @@
 #   amail-plugin server install           server mode: run aMail on this machine as a systemd user service
 #   amail-plugin server start|stop|restart|status|logs
 #   amail-plugin status                   what the daemon sees right now
-#   amail-plugin open                     open the aMail web client
+#   amail-plugin open [thread|path|mailto]  open the aMail web app (or a thread / mailto)
+#   amail-plugin compose [--to addr]      compose in the aMail web app
+#   amail-plugin send --to addr --subject s --body text   send via the API
+#   amail-plugin webapp install           register aMail as an Omarchy web app (mailto too)
 #   amail-plugin refresh                  ask the daemon to refresh now
 #   amail-plugin sync                     ask the server to poll every mailbox now
 #   amail-plugin mcp-config               MCP snippet for your agents
@@ -58,6 +61,8 @@ cmd_connect() {
   fi
   say "Token stored in $config_dir/token (0600)."
   cmd_enable || true
+  ensure_plugin_on_path
+  cmd_webapp install || true
 }
 
 cmd_status() {
@@ -65,11 +70,114 @@ cmd_status() {
     || say "daemon has not written state yet (is the widget enabled? omarchy plugin enable $plugin_id)"
 }
 
+launch_web() {
+  local url="$1"
+  local focus="${2:-false}"
+  if [ "$focus" = "true" ] && have omarchy-launch-or-focus-webapp; then
+    omarchy-launch-or-focus-webapp "aMail" "$url"
+  elif have omarchy-launch-webapp; then
+    omarchy-launch-webapp "$url"
+  else
+    xdg-open "$url"
+  fi
+}
+
 cmd_open() {
-  local url
-  url="$("$run" cli config | json_get .config.url)"
+  local target="${1:-}"
+  local out url focus
+  if [ -n "$target" ]; then
+    out="$("$run" cli open-url "$target")" || { say "$out"; exit 1; }
+  else
+    out="$("$run" cli open-url)" || { say "$out"; exit 1; }
+  fi
+  url="$(printf '%s' "$out" | json_get .url)"
+  focus="$(printf '%s' "$out" | json_get .focus)"
   [ -n "$url" ] && [ "$url" != "null" ] || die "not configured; run: amail-plugin connect <url>"
-  if have omarchy-launch-webapp; then omarchy-launch-webapp "$url"; else xdg-open "$url"; fi
+  launch_web "$url" "$focus"
+}
+
+cmd_compose() {
+  local to="" subject="" body="" cc="" bcc="" thread="" reply="" forward=""
+  while (( $# > 0 )); do
+    case "$1" in
+      --to) to="$2"; shift 2 ;;
+      --cc) cc="$2"; shift 2 ;;
+      --bcc) bcc="$2"; shift 2 ;;
+      --subject) subject="$2"; shift 2 ;;
+      --body) body="$2"; shift 2 ;;
+      --thread) thread="$2"; shift 2 ;;
+      --reply) reply=1; shift ;;
+      --reply-all) reply=1; extra_reply_all=1; shift ;;
+      --forward) forward=1; shift ;;
+      mailto:*) cmd_open "$1"; return ;;
+      *) die "usage: amail-plugin compose [--to addr] [--subject text] [--body text] [--cc addr] [--reply|--forward]" ;;
+    esac
+  done
+  local args=(cli compose-url)
+  [ -n "$to" ] && args+=(--to "$to")
+  [ -n "$cc" ] && args+=(--cc "$cc")
+  [ -n "$bcc" ] && args+=(--bcc "$bcc")
+  [ -n "$subject" ] && args+=(--subject "$subject")
+  [ -n "$body" ] && args+=(--body "$body")
+  [ -n "$thread" ] && args+=(--thread "$thread")
+  [ -n "$reply" ] && args+=(--reply)
+  [ -n "${extra_reply_all:-}" ] && args+=(--reply-all)
+  [ -n "$forward" ] && args+=(--forward)
+  local out url
+  out="$("$run" "${args[@]}")" || { say "$out"; exit 1; }
+  url="$(printf '%s' "$out" | json_get .url)"
+  [ -n "$url" ] && [ "$url" != "null" ] || die "not configured; run: amail-plugin connect <url>"
+  launch_web "$url" "false"
+}
+
+cmd_send() {
+  "$run" cli send "$@"
+}
+
+ensure_plugin_on_path() {
+  mkdir -p "$HOME/.local/bin"
+  ln -sfn "$here/bin/amail-plugin" "$HOME/.local/bin/amail-plugin"
+}
+
+cmd_webapp() {
+  local sub="${1:-install}"; shift || true
+  case "$sub" in
+    install)
+      local url
+      url="$("$run" cli config | json_get .config.url)"
+      [ -n "$url" ] && [ "$url" != "null" ] || die "not configured; run: amail-plugin connect <url>"
+      ensure_plugin_on_path
+      local icon="$here/public/favicon.svg"
+      [ -f "$icon" ] || icon="$here/preview.png"
+      if have omarchy-webapp-install; then
+        omarchy-webapp-install "aMail" "$url" "$icon" "$here/bin/amail-plugin open %u" "x-scheme-handler/mailto;"
+      else
+        mkdir -p "$HOME/.local/share/applications"
+        cat > "$HOME/.local/share/applications/aMail.desktop" <<DESK
+[Desktop Entry]
+Version=1.0
+Name=aMail
+Comment=aMail
+Exec=$here/bin/amail-plugin open %u
+Terminal=false
+Type=Application
+Icon=amail
+StartupNotify=true
+MimeType=x-scheme-handler/mailto;
+DESK
+        chmod +x "$HOME/.local/share/applications/aMail.desktop"
+      fi
+      update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1 || true
+      say "aMail web app installed. Super+Space → aMail opens the client; mailto: links compose there."
+      ;;
+    remove)
+      if have omarchy-webapp-remove; then omarchy-webapp-remove "aMail" || true; fi
+      rm -f "$HOME/.local/share/applications/aMail.desktop"
+      update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1 || true
+      say "aMail web app removed."
+      ;;
+    *) die "usage: amail-plugin webapp <install|remove>" ;;
+  esac
 }
 
 cmd_enable() {
@@ -181,7 +289,11 @@ case "${1:-help}" in
   connect) shift; cmd_connect "$@" ;;
   server) shift; cmd_server "$@" ;;
   status) cmd_status ;;
-  open) cmd_open ;;
+  open) shift; cmd_open "$@" ;;
+  compose) shift; cmd_compose "$@" ;;
+  send) shift; cmd_send "$@" ;;
+  mailto) shift; cmd_open "${1:-}" ;;
+  webapp) shift; cmd_webapp "$@" ;;
   refresh) "$run" cli refresh ;;
   sync) "$run" cli sync ;;
   mcp-config) "$run" cli mcp-config | jq . ;;
@@ -192,6 +304,6 @@ case "${1:-help}" in
   disable) cmd_disable ;;
   logs) shift; cmd_daemon_logs "$@" ;;
   cli) shift; "$run" cli "$@" ;;
-  help|-h|--help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//' ;;
+  help|-h|--help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//' ;;
   *) die "unknown command '$1' (try: amail-plugin help)" ;;
 esac

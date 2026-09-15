@@ -20,6 +20,7 @@ BarWidget {
   readonly property string home: Quickshell.env("HOME")
   readonly property string pluginDir: decodeURIComponent(Qt.resolvedUrl(".").toString().replace(/^file:\/\//, "").replace(/\/$/, ""))
   readonly property string runner: pluginDir + "/bin/amail-run"
+  readonly property string pluginBin: pluginDir + "/bin/amail-plugin"
   readonly property string liveStateFile: home + "/.local/state/amail/state.json"
   // Demo mode: drop a fabricated state at ~/.local/state/amail/demo.json
   // (plugin/demo.mjs writes one) and the widget renders it instead of the
@@ -177,15 +178,16 @@ BarWidget {
 
   function openWeb(path) {
     if (root.url === "") return
-    Quickshell.execDetached(["sh", "-c",
-      'u="$1"; if command -v omarchy-launch-webapp >/dev/null 2>&1; then exec omarchy-launch-webapp "$u"; else exec xdg-open "$u"; fi',
-      "amail", root.url + (path || "")])
+    var target = path || ""
+    if (target === "") Quickshell.execDetached([root.pluginBin, "open"])
+    else Quickshell.execDetached([root.pluginBin, "open", target])
   }
 
   function open() { panel.open() }
   function close() { panel.close() }
   function toggle() { panel.toggle() }
   function showConversation(id) { panel.showConversation(String(id)) }
+  function showCompose(initial) { panel.openCompose(initial || {}) }
 
   WidgetButton {
     id: button
@@ -227,6 +229,8 @@ BarWidget {
     function refresh(): string { root.refresh(); return "ok" }
     function goto(id: string): string { root.showConversation(id); return "shown" }
     function web(): string { root.openWeb(""); return "ok" }
+    function compose(): string { root.showCompose({}); return "ok" }
+    function reply(id: string): string { panel.openReply(String(id || "")); return "ok" }
     function debug(): string { return panel.debugInfo() }
     function snapshot(path: string): string { return panel.snapshot(path) }
     function demo(): string { return "demo=" + root.demo + " file=" + root.demoFile }
