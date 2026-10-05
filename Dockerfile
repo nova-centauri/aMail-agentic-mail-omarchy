@@ -4,8 +4,9 @@ FROM node:${NODE_VERSION}-bookworm-slim AS build
 
 WORKDIR /app
 
-# better-sqlite3 has a prebuilt binary for most platforms, but these build
-# dependencies make the image reliable when npm needs to compile it instead.
+# better-sqlite3-multiple-ciphers (SQLite with SQLCipher-compatible encryption)
+# ships prebuilt binaries for common platforms; these build dependencies make
+# the image reliable when npm has to compile the addon instead.
 COPY package.json package-lock.json ./
 RUN apt-get update \
     && apt-get install -y --no-install-recommends python3 make g++ \
@@ -43,6 +44,8 @@ COPY --chown=amail:amail --from=build /app/package.json /app/package-lock.json .
 COPY --chown=amail:amail --from=build /app/node_modules ./node_modules
 COPY --chown=amail:amail --from=build /app/dist ./dist
 COPY --chown=amail:amail --from=build /app/server ./server
+COPY deploy/docker-entrypoint.sh /usr/local/bin/amail-entrypoint
+RUN chmod 0755 /usr/local/bin/amail-entrypoint
 
 USER amail
 
@@ -51,4 +54,5 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:' + (process.env.PORT || '3000') + '/api/health').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))"
 
+ENTRYPOINT ["/usr/local/bin/amail-entrypoint"]
 CMD ["npm", "start"]

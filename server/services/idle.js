@@ -62,7 +62,7 @@ export function createIdleWatcher({ config, repos, mailService, logger, events, 
       watcher.dirty = false;
       try {
         const started = Date.now();
-        const result = await mailService.syncAccount(watcher.accountId, { inboxOnly: true });
+        const result = await mailService.syncAccount(watcher.accountId, { inboxOnly: true, force: true });
         watcher.lastSyncAt = new Date().toISOString();
         logger.info({ accountId: watcher.accountId, reason, imported: result?.imported || 0, ms: Date.now() - started }, 'IDLE-triggered inbox sync finished');
       } catch (error) {

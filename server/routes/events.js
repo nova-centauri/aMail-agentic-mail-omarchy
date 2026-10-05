@@ -14,8 +14,8 @@ function writeEvent(response, event) {
  * the connection was down, as long as they are still in the bus's recent
  * window; otherwise the `hello` event tells it to refresh.
  */
-export function registerEvents(app, { config, events }) {
-  app.get('/api/events', accessGate(config), (request, response) => {
+export function registerEvents(app, { config, events, auth = null }) {
+  app.get('/api/events', accessGate(auth || config), (request, response) => {
     response.status(200);
     response.set({
       'Content-Type': 'text/event-stream; charset=utf-8',

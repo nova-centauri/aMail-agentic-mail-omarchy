@@ -1,8 +1,11 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { DEFAULT_LOG_LEVEL, normalizeLogLevel } from './logging.js';
+import { deriveSubkey } from './services/crypto.js';
 
 export const APP_NAME = 'aMail';
+export const DATABASE_KEY_INFO = 'amail/database-key/v1';
 export const SESSION_COOKIE = 'amail_session';
 /** Cookie name used by GigaMail-era deployments; still accepted for auth. */
 export const LEGACY_SESSION_COOKIE = 'gigamail_session';
@@ -56,6 +59,19 @@ export function loadConfig(env = process.env) {
   const credentialKey = deriveKey(encryptionKey);
   const remoteTokenKey = deriveKey(readEnv(env, 'REMOTE_TOKEN_KEY') || encryptionKey);
   const releaseSha = String(readEnv(env, 'RELEASE_SHA') || '');
+  // Whole-database encryption is opt-in for self-hosted installs because an
+  // existing plaintext file is migrated in place on the first keyed boot.
+  const encryptDatabase = boolean(readEnv(env, 'ENCRYPT_DATABASE'));
+  // `env` (default) keys everything from AMAIL_ENCRYPTION_KEY and gates access
+  // with AMAIL_ACCESS_TOKEN. `keyslot` is the hosted model: the container boots
+  // locked and every key derives from a DEK that only a keyslot credential can
+  // unwrap. Both modes run from the same image.
+  const keyMode = String(readEnv(env, 'KEY_MODE') || 'env').trim().toLowerCase() === 'keyslot' ? 'keyslot' : 'env';
+  const keyslotMode = keyMode === 'keyslot';
+  const keyModeConflicts = keyslotMode
+    ? ['ENCRYPTION_KEY', 'ACCESS_TOKEN', 'REMOTE_TOKEN_KEY', 'ENCRYPT_DATABASE'].filter((name) => readEnv(env, name) !== undefined)
+    : [];
+  const mib = 1024 * 1024;
 
   return Object.freeze({
     appName: APP_NAME,
@@ -68,30 +84,74 @@ export function loadConfig(env = process.env) {
     dbPath: resolveDbPath(dataDir),
     staticDir: path.resolve(readEnv(env, 'STATIC_DIR') || path.join(process.cwd(), 'dist')),
     releaseSha: /^[0-9a-f]{40}$/i.test(releaseSha) ? releaseSha.toLowerCase() : null,
-    credentialKey,
-    remoteTokenKey,
-    accessToken: readEnv(env, 'ACCESS_TOKEN') || null,
+    credentialKey: keyslotMode ? null : credentialKey,
+    remoteTokenKey: keyslotMode ? null : remoteTokenKey,
+    encryptDatabase: keyslotMode ? true : encryptDatabase,
+    databaseKey: !keyslotMode && encryptDatabase && encryptionKey ? deriveSubkey(encryptionKey, DATABASE_KEY_INFO) : null,
+    accessToken: keyslotMode ? null : (readEnv(env, 'ACCESS_TOKEN') || null),
+    keyMode,
+    keyModeConflicts,
+    // Keyslot mode only. The provision secret authorizes the one-time
+    // /api/keyslots/init call; the escrow key is the operator KEK an opted-in
+    // tenant's DEK is wrapped under; the handoff socket passes the DEK between
+    // an old and a new process during a deploy.
+    provisionSecret: keyslotMode ? (readEnv(env, 'PROVISION_SECRET') || null) : null,
+    escrowKey: keyslotMode ? (readEnv(env, 'ESCROW_KEY') || null) : null,
+    handoffSocket: keyslotMode ? (readEnv(env, 'HANDOFF_SOCKET') || null) : null,
+    handoffSecret: keyslotMode ? (readEnv(env, 'HANDOFF_SECRET') || null) : null,
     // This intentionally stays false unless a reverse proxy has been selected by
     // the operator. Trusting arbitrary forwarded headers is unsafe by default.
     trustProxy: boolean(readEnv(env, 'TRUST_PROXY')),
     allowInsecureTls: boolean(readEnv(env, 'ALLOW_INSECURE_TLS')),
+    // Protected accounts may be reviewed and marked analyzed locally, but
+    // message flags, moves and sending (including Sent APPEND) are forbidden.
+    imapWriteProtectedAccounts: (readEnv(env, 'IMAP_WRITE_PROTECTED_ACCOUNTS') || '')
+      .split(',').map((email) => email.trim().toLowerCase()).filter(Boolean),
     cookieSecure: boolean(readEnv(env, 'COOKIE_SECURE'), true),
-    syncBatchSize: integer(readEnv(env, 'SYNC_BATCH_SIZE'), 200, { min: 1, max: 1000 }),
+    // Hosted (keyslot) defaults are the density profile: a smaller first-sync
+    // window, a 5 MiB parse cap, a 15-minute unattended poll, and error-only
+    // logs. Explicit env still wins. Self-hosted `env` mode keeps the OSS
+    // defaults so an existing .env is unchanged.
+    syncBatchSize: integer(readEnv(env, 'SYNC_BATCH_SIZE'), keyslotMode ? 100 : 200, { min: 1, max: 1000 }),
     syncTimeoutMs: integer(readEnv(env, 'SYNC_TIMEOUT_MS'), 60_000, { min: 5_000, max: 300_000 }),
     // The raw RFC822 source includes attachments. Keep each parse bounded so a
     // single unexpectedly large message cannot consume unrestricted memory.
-    syncMaxMessageBytes: integer(readEnv(env, 'SYNC_MAX_MESSAGE_BYTES'), 10 * 1024 * 1024, {
+    syncMaxMessageBytes: integer(readEnv(env, 'SYNC_MAX_MESSAGE_BYTES'), keyslotMode ? 5 * mib : 10 * mib, {
       min: 64 * 1024,
       max: 50 * 1024 * 1024,
     }),
-    // 0 disables background polling. Sync calls open short-lived connections;
-    // aMail intentionally does not maintain an IDLE socket per account.
-    syncIntervalMinutes: integer(readEnv(env, 'SYNC_INTERVAL_MINUTES', env.SYNC_INTERVAL_MINUTES), 0, { min: 0, max: 1440 }),
-    // Push path: one IMAP connection per account parked in IDLE on INBOX so new
-    // mail is ingested within a second of arrival. On by default; the periodic
-    // poll above remains the safety net for servers without IDLE.
+    // Floor applied to every syncAll/syncAccount (including old clients and
+    // MCP). Inside this window the previous result is returned. 0 disables.
+    // Manual refresh passes force=true to bypass it. The persistent IDLE
+    // watcher also passes force so a new message is not held for this window.
+    syncMinIntervalMs: integer(readEnv(env, 'SYNC_MIN_INTERVAL_MS'), 60_000, { min: 0, max: 3_600_000 }),
+    // A mailbox with more new mail than one SYNC_BATCH_SIZE page keeps paging
+    // (oldest first) until this much time has passed, then resumes next pass.
+    syncPassBudgetMs: integer(readEnv(env, 'SYNC_PASS_BUDGET_MS'), 60_000, { min: 0, max: 30 * 60_000 }),
+    // Accounts synchronized in parallel, each on its own IMAP session.
+    syncConcurrency: integer(readEnv(env, 'SYNC_CONCURRENCY'), keyslotMode ? 1 : 3, { min: 1, max: 16 }),
+    // Hard stop for one account's pass; its socket is closed so a server that
+    // stops answering cannot stall every later sync. 0 disables.
+    syncAccountTimeoutMs: integer(readEnv(env, 'SYNC_ACCOUNT_TIMEOUT_MS'), 10 * 60_000, { min: 0, max: 60 * 60_000 }),
+    // Keep one IMAP TCP session per account this long after the last use so
+    // the next pass skips the TLS handshake. 0 logs out immediately (tests).
+    imapPoolIdleMs: integer(readEnv(env, 'IMAP_POOL_IDLE_MS'), 8 * 60_000, { min: 0, max: 30 * 60_000 }),
+    // 0 disables background polling. Hosted defaults to 15. A focused tab
+    // polls GET /api/changes; the persistent IDLE watcher below is the push
+    // path for new mail between polls.
+    syncIntervalMinutes: integer(
+      readEnv(env, 'SYNC_INTERVAL_MINUTES', env.SYNC_INTERVAL_MINUTES),
+      keyslotMode ? 15 : 0,
+      { min: 0, max: 1440 },
+    ),
+    // One IMAP connection per account parked in IDLE on INBOX so new mail is
+    // ingested within about a second. On by default; the poll above remains
+    // the safety net. This is separate from the pooled session's auto-IDLE.
     imapIdle: boolean(readEnv(env, 'IMAP_IDLE'), true),
     imapIdleMaxMs: integer(readEnv(env, 'IMAP_IDLE_MAX_MS'), 4 * 60_000, { min: 30_000, max: 25 * 60_000 }),
+    // 0 keeps bodies forever. Operators may set AMAIL_RETAIN_DAYS to drop
+    // html_body/text_body older than that (headers, snippet, flags stay).
+    retainDays: integer(readEnv(env, 'RETAIN_DAYS'), 0, { min: 0, max: 3650 }),
     remoteContentMaxBytes: integer(readEnv(env, 'REMOTE_CONTENT_MAX_BYTES'), 5 * 1024 * 1024, {
       min: 16 * 1024,
       max: 25 * 1024 * 1024,
@@ -113,7 +173,14 @@ export function loadConfig(env = process.env) {
     // as an explicit non-production development escape hatch.
     allowDirectRemoteContent: (env.NODE_ENV || 'development') !== 'production'
       && boolean(readEnv(env, 'ALLOW_DIRECT_REMOTE_CONTENT')),
-    logLevel: env.LOG_LEVEL || 'info',
+    // `error` is the hosted profile: failures only, no per-request entries.
+    logLevel: normalizeLogLevel(env.LOG_LEVEL, keyslotMode ? 'error' : DEFAULT_LOG_LEVEL),
+    // Hosted-only usage metering. Unset means no-op: nothing is buffered or
+    // sent. The endpoint receives analyzed counts and timestamps, nothing else.
+    meteringUrl: parseHttpUrl(readEnv(env, 'METERING_URL')),
+    meteringToken: readEnv(env, 'METERING_TOKEN') || null,
+    // Opaque identifier the metering endpoint uses to attribute events.
+    tenantId: String(readEnv(env, 'TENANT_ID') || '').trim().slice(0, 128) || null,
     webauthnRpName: readEnv(env, 'RP_NAME') || APP_NAME,
     // Passkeys must match the public HTTPS origin. Behind a reverse proxy the
     // container usually sees an internal Host, so operators pin these explicitly;
@@ -127,7 +194,30 @@ export function loadConfig(env = process.env) {
     // a backup job, ...). Matching mail is hidden from the default inbox unless it
     // reports a failure, which surfaces under "Ops errors".
     opsSources: parseOpsSources(env.AMAIL_OPS_SOURCES ?? env.GIGAMAIL_OPS_SOURCES),
+    // auto uses Typesense when AMAIL_TYPESENSE_URL is set and the SQLite file
+    // is not encrypted. off/fts keeps FTS inside the database. typesense forces
+    // the external index even next to SQLCipher (the index is plaintext).
+    searchEngine: normalizeSearchEngine(readEnv(env, 'SEARCH_ENGINE')),
+    typesenseUrl: parseHttpUrl(readEnv(env, 'TYPESENSE_URL')),
+    typesenseApiKey: readEnv(env, 'TYPESENSE_API_KEY') || null,
   });
+}
+
+function normalizeSearchEngine(value) {
+  const mode = String(value || 'auto').trim().toLowerCase();
+  return ['auto', 'typesense', 'off', 'fts'].includes(mode) ? mode : 'auto';
+}
+
+/** Accept only absolute http(s) URLs; anything else disables the feature. */
+export function parseHttpUrl(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    return ['http:', 'https:'].includes(url.protocol) ? url.toString() : null;
+  } catch {
+    return null;
+  }
 }
 
 export const DEFAULT_OPS_SOURCES = Object.freeze(['proxmox', 'watchtower']);

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api.js';
 import { AccessPanel } from './components/AccessPanel.jsx';
 import { AddAccountModal } from './components/AddAccountModal.jsx';
+import { EditAccountModal } from './components/EditAccountModal.jsx';
 import { ComposeModal } from './components/ComposeModal.jsx';
 import { OnboardingWizard } from './components/OnboardingWizard.jsx';
 import { Icon } from './components/Icon.jsx';
@@ -17,11 +18,13 @@ import { DEMO_PERSON_FLAGS, EMPTY_FOLDER_COUNTS, SMART_CATEGORIES, UNIFIED_ACCOU
 import { demoAccounts, demoDraftThreads, demoMailboxThreads } from './mail/demo.js';
 import { normalizeFreshDraft, pruneDismissedFreshDrafts, visibleFreshDrafts } from './mail/fresh-drafts.js';
 import { countSmartCategories, filterVisibleThreads, findPersonFlag } from './mail/filter.js';
-import { useLiveMailboxSync } from './mail/live-sync.js';
+import { LIVE_SYNC_MAX_AGE_SECONDS, useLiveMailboxSync } from './mail/live-sync.js';
 import { parseMailDeepLink, stripMailDeepLink } from './mail/deep-link.js';
 import { plainTextToHtml, quotedComposeHtml } from './mail/html.js';
 import { formatMessageDate, getArray, normalizeAccount, normalizePerson, normalizeThread, recipientArray, formatRecipients } from './mail/normalize.js';
 import { collectKnownPeople } from './mail/people.js';
+import { PANEL_EASE_MS, prefersReducedMotion, usePresence } from './mail/presence.js';
+import { mergeOpenThread, nextThreadAfterRemoval, reconcileSelectedThread, sameOpenThread } from './mail/selection.js';
 import { sanitizeSignatureHtml } from './mail/signature.js';
 import { syncResultStatus, syncSkippedMessageCount } from './mail/sync.js';
 import { authenticateWithPasskey, passkeysSupported, registerPasskey } from './passkeys.js';
@@ -57,6 +60,11 @@ export default function App() {
   const [profileOpen, setProfileOpen] = useState(false);
   const [composeOpen, setComposeOpen] = useState(false);
   const [composeContext, setComposeContext] = useState(null);
+  const composePresence = usePresence(composeOpen);
+  const readerThreadRef = useRef(null);
+  const [readerMounted, setReaderMounted] = useState(false);
+  const [readerOpen, setReaderOpen] = useState(false);
+  if (selectedThread) readerThreadRef.current = selectedThread;
   const [notice, setNotice] = useState('');
   const [privacy, setPrivacy] = useState({ privateImages: initialPrefs.privateImages !== false });
   const [density, setDensity] = useState(['Default', 'Comfortable', 'Compact'].includes(initialPrefs.density) ? initialPrefs.density : 'Default');
@@ -65,7 +73,9 @@ export default function App() {
   const [authRequired, setAuthRequired] = useState(false);
   const [authenticated, setAuthenticated] = useState(false);
   const [addAccountOpen, setAddAccountOpen] = useState(false);
+  const [editingAccount, setEditingAccount] = useState(null);
   const [passkeyCount, setPasskeyCount] = useState(0);
+  const [keyMode, setKeyMode] = useState('env');
   const [passkeys, setPasskeys] = useState([]);
   const [sessionStamp, setSessionStamp] = useState(0);
   const [demoIdentities, setDemoIdentities] = useState(() => demoAccounts.map((item) => ({ ...item })));
@@ -105,6 +115,32 @@ export default function App() {
     document.title = unread > 0 ? `(${unread}) aMail` : 'aMail';
   }, [folderCounts.inbox]);
 
+  useEffect(() => {
+    if (!selectedThread) return undefined;
+    setReaderMounted(true);
+    if (prefersReducedMotion()) {
+      setReaderOpen(true);
+      return undefined;
+    }
+    const frame = window.requestAnimationFrame(() => setReaderOpen(true));
+    return () => window.cancelAnimationFrame(frame);
+  }, [selectedThread]);
+
+  useEffect(() => {
+    if (selectedThread || (!readerMounted && !readerThreadRef.current)) return undefined;
+    setReaderOpen(false);
+    if (prefersReducedMotion()) {
+      readerThreadRef.current = null;
+      setReaderMounted(false);
+      return undefined;
+    }
+    const timer = window.setTimeout(() => {
+      readerThreadRef.current = null;
+      setReaderMounted(false);
+    }, PANEL_EASE_MS);
+    return () => window.clearTimeout(timer);
+  }, [selectedThread, readerMounted]);
+
   const openNewCompose = () => {
     setComposeContext(null);
     setComposeOpen(true);
@@ -112,7 +148,6 @@ export default function App() {
 
   const closeCompose = () => {
     setComposeOpen(false);
-    setComposeContext(null);
   };
 
   const openReplyComposer = (thread, message, { replyAll = false } = {}) => {
@@ -192,6 +227,7 @@ export default function App() {
       } catch (sessionError) {
         if (sessionError.status === 401 || sessionError.status === 403) throw sessionError;
       }
+      if (session?.keyMode) setKeyMode(session.keyMode);
       if (session?.protected && !session.authenticated) {
         setOffline(false);
         setAuthRequired(true);
@@ -277,12 +313,9 @@ export default function App() {
         setDismissedFreshDrafts(prunedDismissals);
         writeDismissedFreshDrafts(prunedDismissals);
       }
-      if (keepSelection && selectedThread) {
-        const replacement = (isFreshSetup ? previewThreads : nextThreads).find((item) => item.id === selectedThread.id);
-        setSelectedThread(replacement || null);
-      } else {
-        setSelectedThread(null);
-      }
+      // Functional update so an in-flight reload cannot close a thread opened after it started.
+      const loadedThreads = isFreshSetup ? previewThreads : nextThreads;
+      setSelectedThread((current) => reconcileSelectedThread(current, loadedThreads, { keepSelection }));
     } catch (error) {
       if (requestId !== loadRequestRef.current) return;
       if (error.status === 401 || error.status === 403) {
@@ -307,19 +340,33 @@ export default function App() {
     } finally {
       if (requestId === loadRequestRef.current) setLoading(false);
     }
-  }, [accessToken, activeAccount?.id, activeCategory, activePersonFlag, activeFolder, debouncedQuery, onboardingDismissed, selectedThread]);
+  }, [accessToken, activeAccount?.id, activeCategory, activePersonFlag, activeFolder, debouncedQuery, onboardingDismissed]);
 
-  const liveSyncInboxes = useCallback(async () => {
+  const lastChangeRef = useRef('');
+  const liveSyncInboxes = useCallback(async ({ immediate } = {}) => {
     if (isDemo || authRequired || !authenticated) return;
     if (syncInFlightRef.current) return;
     syncInFlightRef.current = true;
+    let reload = Boolean(immediate);
     try {
-      await api('/sync', { method: 'POST', body: JSON.stringify({ mailbox: 'INBOX' }) });
+      if (immediate) {
+        await api('/sync', { method: 'POST', body: JSON.stringify({ mailbox: 'INBOX', maxAgeSeconds: LIVE_SYNC_MAX_AGE_SECONDS }) });
+        const stamp = await api('/changes').catch(() => null);
+        if (stamp?.changedAt) lastChangeRef.current = stamp.changedAt;
+        reload = true;
+      } else {
+        const since = lastChangeRef.current;
+        const query = since ? `?since=${encodeURIComponent(since)}` : '';
+        const payload = await api(`/changes${query}`);
+        if (payload?.changedAt) lastChangeRef.current = payload.changedAt;
+        reload = Boolean(payload?.changed);
+      }
     } catch {
       // Keep the current mailbox. A later tick or a manual refresh will retry.
+      reload = false;
     } finally {
       try {
-        await loadMailbox({ keepSelection: true, silent: true });
+        if (reload) await loadMailbox({ keepSelection: true, silent: true });
       } finally {
         syncInFlightRef.current = false;
       }
@@ -401,7 +448,7 @@ export default function App() {
     setNotice(account ? `Syncing ${account.email}…` : 'Syncing all connected accounts…');
     try {
       const syncPath = account?.id ? `/accounts/${encodeURIComponent(account.id)}/sync` : '/sync';
-      const response = await api(syncPath, { method: 'POST', body: JSON.stringify({ mailbox: 'INBOX' }) });
+      const response = await api(syncPath, { method: 'POST', body: JSON.stringify({ mailbox: 'INBOX', force: true }) });
       const status = syncResultStatus(response);
       const skippedMessages = syncSkippedMessageCount(response);
       if (status === 'failed') setNotice('Mailbox sync failed. Showing the latest stored mail.');
@@ -555,8 +602,12 @@ export default function App() {
         messages: data?.messages || data?.thread?.messages || [],
       };
       const detailed = normalizeThread(raw);
-      setSelectedThread(detailed);
-      setThreads((current) => current.map((item) => item.id === detailed.id ? { ...item, ...detailed } : item));
+      setSelectedThread((current) => (
+        sameOpenThread(current, thread) || sameOpenThread(current, detailed)
+          ? mergeOpenThread(current, detailed)
+          : current
+      ));
+      setThreads((current) => current.map((item) => sameOpenThread(item, detailed) ? { ...item, ...detailed } : item));
       return detailed;
     } catch {
       // The compact list payload remains a valid reader view.
@@ -659,8 +710,15 @@ export default function App() {
       setThreads((current) => agentQueueActive && analyzed ? current.filter((item) => !affected.has(item.id)) : current.map(update));
       setSelectedThread((current) => current && affected.has(current.id) ? { ...current, ...patch } : current);
     } else if (['archive', 'trash', 'spam', 'snooze'].includes(action)) {
+      const removingOpen = Boolean(selectedThread && affected.has(selectedThread.id));
+      const advance = removingOpen && (action === 'trash' || action === 'spam')
+        ? nextThreadAfterRemoval(visibleThreads, selectedThread, [...affected])
+        : null;
       setThreads((current) => current.filter((item) => !affected.has(item.id)));
-      if (selectedThread && affected.has(selectedThread.id)) setSelectedThread(null);
+      if (removingOpen) {
+        if (advance?.next) void openThread(advance.next);
+        else setSelectedThread(null);
+      }
     }
     setSelectedIds([]);
     const labels = {
@@ -707,11 +765,13 @@ export default function App() {
 
   useEffect(() => {
     const handleKeys = (event) => {
+      // Account editing owns its keyboard; never mutate mail behind this dialog.
+      if (editingAccount) return;
       // Open context menus own their keys (arrows, Enter, Escape, typeahead).
       if (event.target?.closest?.('[role="menu"]')) return;
       const action = shortcutAction(event);
       if (!action) return;
-      if (composeOpen && action !== 'escape' && action !== 'help') return;
+      if (composePresence.mounted && action !== 'escape' && action !== 'help') return;
       event.preventDefault();
       const focused = cursorThread || selectedThread || visibleThreads[0] || null;
       if (action === 'compose') openNewCompose();
@@ -719,7 +779,7 @@ export default function App() {
       if (action === 'help') setShortcutsOpen((value) => !value);
       if (action === 'escape') {
         if (shortcutsOpen) { setShortcutsOpen(false); return; }
-        if (composeOpen) return;
+        if (composePresence.mounted) return;
         setSettingsOpen(false);
         setProfileOpen(false);
         setMobileSidebarOpen(false);
@@ -752,7 +812,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handleKeys);
     return () => window.removeEventListener('keydown', handleKeys);
-  }, [composeOpen, shortcutsOpen, cursorThread, selectedThread, visibleThreads, selectedIds]);
+  }, [composePresence.mounted, editingAccount, shortcutsOpen, cursorThread, selectedThread, visibleThreads, selectedIds]);
 
   const loadRemoteContent = async (message) => {
     try {
@@ -881,6 +941,7 @@ export default function App() {
     setComposeOpen(false);
     setComposeContext(null);
     setAddAccountOpen(false);
+    setEditingAccount(null);
     try {
       await api('/session', { method: 'DELETE' });
     } catch {
@@ -904,8 +965,12 @@ export default function App() {
   };
 
   const unlockServer = async (token) => {
-    persistAccessToken(token);
-    setAccessToken(token);
+    // In keyslot mode a passphrase or recovery code also unlocks, but only a
+    // real bearer token is worth keeping for the Authorization header; the
+    // session cookie carries the rest.
+    const keepAsBearer = keyMode !== 'keyslot' || /^amk1_/.test(token);
+    persistAccessToken(keepAsBearer ? token : '');
+    setAccessToken(keepAsBearer ? token : '');
     if (!token) {
       setAuthRequired(false);
       setAccessOpen(false);
@@ -977,6 +1042,38 @@ export default function App() {
     }
   };
 
+  const openAccountEditor = (account) => {
+    if (isDemo || !account?.id) return;
+    setProfileOpen(false);
+    setMobileSidebarOpen(false);
+    setEditingAccount(account);
+  };
+
+  const accountUpdated = (account) => {
+    // Discard list requests that started before the saved change.
+    loadRequestRef.current += 1;
+    setAccounts((current) => current.map((item) => item.id === account.id ? account : item));
+    setActiveAccount((current) => current?.id === account.id ? account : current);
+    setNotice(`${account.email} settings saved.`);
+    setSessionStamp((current) => current + 1);
+  };
+
+  const accountRemoved = (accountId) => {
+    loadRequestRef.current += 1;
+    setAccounts((current) => current.filter((item) => item.id !== accountId));
+    setActiveAccount(null);
+    setSelectedThread(null);
+    setSelectedIds([]);
+    setThreads([]);
+    setSavedDrafts([]);
+    setMailTotal(0);
+    setFolderCounts({ ...EMPTY_FOLDER_COUNTS });
+    setCategoryCounts(countSmartCategories([]));
+    setNotice('Account removed from aMail. Mail at the provider was not deleted.');
+    // Refresh with the newly selected unified scope, including last-account removal.
+    setSessionStamp((current) => current + 1);
+  };
+
   const accountAdded = (account) => {
     setOffline(false);
     setAccounts((current) => [...current.filter((item) => item.id !== account.id), account]);
@@ -1009,9 +1106,11 @@ export default function App() {
   );
 
   const densityClass = density === 'Comfortable' ? 'density-comfortable-ui' : density === 'Compact' ? 'density-compact-ui' : '';
+  const readerThread = selectedThread || (readerMounted ? readerThreadRef.current : null);
+  const readerClass = `${readerMounted || selectedThread ? 'reader-mounted' : ''} ${readerOpen && selectedThread ? 'thread-open' : ''}`.trim();
 
   return (
-    <div className={`mail-app ${sidebarCompact ? 'sidebar-compact' : ''} ${selectedThread ? 'thread-open' : ''} ${densityClass}`.trim()}>
+    <div className={`mail-app ${sidebarCompact ? 'sidebar-compact' : ''} ${readerClass} ${densityClass}`.trim()}>
       <Topbar
         onToggleSidebar={() => (window.innerWidth <= 840 ? setMobileSidebarOpen((value) => !value) : toggleSidebarCompact())}
         onGoHome={goHome}
@@ -1039,6 +1138,7 @@ export default function App() {
         onSelectUnified={() => setActiveAccount(null)}
         onOpenSettings={() => setSettingsOpen(true)}
         onAddAccount={() => setAddAccountOpen(true)}
+        onEditAccount={openAccountEditor}
         activePersonFlag={activePersonFlag}
         onSelectPersonFlag={selectPersonFlag}
         personFlags={effectivePersonFlags}
@@ -1091,10 +1191,10 @@ export default function App() {
             onForward={(thread) => openForwardComposer(thread, thread.messages?.at(-1) || thread)}
             onNotice={setNotice}
           />
-          {selectedThread ? <ThreadView key={selectedThread.id} thread={selectedThread} activeFolder={activeFolder} onBack={() => setSelectedThread(null)} onAction={applyAction} onLoadRemote={loadRemoteContent} onReply={openReplyComposer} onReplyAll={(thread, message) => openReplyComposer(thread, message, { replyAll: true })} onForward={openForwardComposer} onToggleStar={toggleStar} onNotice={setNotice} allowPrivateImages={privacy.privateImages} /> : null}
+          {readerThread ? <ThreadView key={readerThread.id} thread={readerThread} activeFolder={activeFolder} onBack={() => setSelectedThread(null)} onAction={applyAction} onLoadRemote={loadRemoteContent} onReply={openReplyComposer} onReplyAll={(thread, message) => openReplyComposer(thread, message, { replyAll: true })} onForward={openForwardComposer} onToggleStar={toggleStar} onNotice={setNotice} allowPrivateImages={privacy.privateImages} /> : null}
         </div>
       </main>
-      {composeOpen && <ComposeModal key={composeContext?.draftId || composeContext?.mode || 'compose'} account={composeAccount} accounts={identityAccounts} contacts={composeContacts} isDemo={isDemo} initialReply={composeContext} onClose={closeCompose} onSent={sendMessage} onDraftSaved={draftSaved} onDraftRemoved={draftRemoved} />}
+      {composePresence.mounted && <ComposeModal key={composeContext?.draftId || composeContext?.mode || 'compose'} closing={composePresence.closing} account={composeAccount} accounts={identityAccounts} contacts={composeContacts} isDemo={isDemo} initialReply={composeContext} onClose={closeCompose} onSent={sendMessage} onDraftSaved={draftSaved} onDraftRemoved={draftRemoved} />}
       <SettingsPanel
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
@@ -1106,6 +1206,7 @@ export default function App() {
         density={density}
         setDensity={updateDensity}
         onAddAccount={() => setAddAccountOpen(true)}
+        onEditAccount={openAccountEditor}
         onUnlock={() => setAccessOpen(true)}
         onSaveSignature={saveAccountSignature}
         showUnified={hasConnectedAccounts}
@@ -1122,6 +1223,7 @@ export default function App() {
       />
       <ProfileMenu open={profileOpen} onClose={() => setProfileOpen(false)} account={displayAccount} accounts={identityAccounts} setActiveAccount={setActiveAccount} onSelectUnified={() => setActiveAccount(null)} onOpenSettings={() => setSettingsOpen(true)} onLogout={lockSession} showUnified={hasConnectedAccounts} />
       {addAccountOpen && <AddAccountModal onClose={() => setAddAccountOpen(false)} onAdded={accountAdded} />}
+      {editingAccount && authenticated && !authRequired && <EditAccountModal key={editingAccount.id} account={editingAccount} onClose={() => setEditingAccount(null)} onUpdated={accountUpdated} onRemoved={accountRemoved} removalBlockedReason={composePresence.mounted ? 'Close the open draft before removing an account.' : ''} />}
       {onboardingOpen && authenticated && !authRequired && (
         <OnboardingWizard
           accounts={accounts}
@@ -1142,6 +1244,7 @@ export default function App() {
         onPasskeyLogin={loginWithPasskey}
         authenticated={authenticated}
         onRegisterPasskey={authenticated ? addPasskey : undefined}
+        keyMode={keyMode}
       />
       <ShortcutCheatsheet open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
       <Toast notice={notice} onClose={() => setNotice('')} />

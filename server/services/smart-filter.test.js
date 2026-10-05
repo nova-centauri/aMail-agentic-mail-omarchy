@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import Database from 'better-sqlite3';
+import Database from 'better-sqlite3-multiple-ciphers';
 import { createDatabase, createRepositories } from '../db.js';
 import {
   SMART_CATEGORY_SLUGS,
@@ -140,6 +140,8 @@ test('existing databases gain category columns and old messages are classified o
       snippet TEXT NOT NULL DEFAULT '',
       text_body TEXT NOT NULL DEFAULT '',
       sent_at TEXT,
+      received_at TEXT,
+      created_at TEXT NOT NULL DEFAULT '',
       is_archived INTEGER NOT NULL DEFAULT 0,
       is_trashed INTEGER NOT NULL DEFAULT 0
     );

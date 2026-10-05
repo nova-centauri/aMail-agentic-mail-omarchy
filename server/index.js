@@ -1,56 +1,39 @@
 import 'dotenv/config';
-import pino from 'pino';
 import { loadConfig } from './config.js';
-import { createDatabase, createRepositories } from './db.js';
-import { createMailService } from './services/mail-service.js';
-import { createRemoteContentService } from './services/remote-content.js';
-import { createPasskeyService } from './services/passkeys.js';
-import { createApp } from './app.js';
+import { createLogger } from './logging.js';
+import { createHarness } from './bootstrap.js';
 import { configureSmartFilter } from './services/smart-filter.js';
-import { createEventBus } from './services/events.js';
-import { createIdleWatcher } from './services/idle.js';
 
 const config = loadConfig();
 configureSmartFilter({ opsSources: config.opsSources });
-const logger = pino({ level: config.logLevel, redact: ['req.headers.authorization', 'req.headers.cookie'] });
-let database;
+const logger = createLogger(config);
+
+if (config.keyModeConflicts.length) {
+  logger.fatal({ variables: config.keyModeConflicts.map((name) => `AMAIL_${name}`) }, 'AMAIL_KEY_MODE=keyslot derives every key from the tenant DEK; remove these variables');
+  process.exit(1);
+}
+if (config.encryptDatabase && !config.databaseKey && config.keyMode === 'env') {
+  logger.warn('AMAIL_ENCRYPT_DATABASE is set but AMAIL_ENCRYPTION_KEY is missing; the database stays unencrypted');
+}
+
+let harness;
 try {
-  database = createDatabase(config);
+  harness = createHarness({ config, logger });
 } catch (error) {
   logger.fatal({ err: error }, 'Failed to initialize the aMail database');
   process.exit(1);
 }
-const repos = createRepositories(database);
-const remoteContent = createRemoteContentService({ config, repos, logger });
-const events = createEventBus();
-const mailService = createMailService({ config, repos, logger, events });
-const passkeys = createPasskeyService({ config, repos });
-const idle = config.imapIdle ? createIdleWatcher({ config, repos, mailService, logger, events }) : null;
-const app = createApp({ config, repos, mailService, remoteContent, logger, passkeys, events, idle });
 
-const server = app.listen(config.port, config.host, () => {
-  logger.info({ host: config.host, port: config.port, dataDir: config.dataDir }, 'aMail is ready');
-  if (idle) {
-    idle.start();
-    logger.info({ maxIdleMs: config.imapIdleMaxMs }, 'IMAP IDLE push watchers enabled');
-  }
+const server = harness.app.listen(config.port, config.host, () => {
+  logger.info({ host: config.host, port: config.port, dataDir: config.dataDir, keyMode: config.keyMode }, 'aMail is ready');
 });
-
-let pollTimer;
-if (config.syncIntervalMinutes > 0) {
-  const poll = () => mailService.syncAll().catch((error) => logger.warn({ err: error }, 'Background mail sync failed'));
-  pollTimer = setInterval(poll, config.syncIntervalMinutes * 60_000);
-  pollTimer.unref();
-  logger.info({ intervalMinutes: config.syncIntervalMinutes }, 'Background IMAP polling enabled');
-}
+harness.start().catch((error) => logger.error({ err: error }, 'Startup tasks failed'));
+if (harness.metering.enabled) logger.info({ tenant: config.tenantId }, 'Analyzed-mark metering enabled');
 
 async function shutdown(signal) {
   logger.info({ signal }, 'Shutting down aMail');
-  if (pollTimer) clearInterval(pollTimer);
-  if (idle) await idle.stop().catch(() => {});
   server.close(async () => {
-    await remoteContent.close().catch(() => {});
-    repos.close();
+    await harness.stop().catch((error) => logger.error({ err: error }, 'Shutdown tasks failed'));
     process.exit(0);
   });
   setTimeout(() => process.exit(1), 10_000).unref();

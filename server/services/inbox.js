@@ -12,6 +12,7 @@ import {
 } from '../mail/search-query.js';
 import { publicAttachmentMeta } from './compose-attachments.js';
 import { NotFoundError, ValidationError } from '../errors.js';
+import { shouldSearchProvider } from '../mail/imap-search.js';
 
 export const parseNumber = (value, fallback, min, max) => {
   const number = Number.parseInt(value, 10);
@@ -56,9 +57,67 @@ const emptyCategoryCounts = () => Object.fromEntries(
     .map((category) => [category, 0]),
 );
 
-const conversationTouchesPersonFlag = (conversationMessages, flag) => conversationMessages.some((message) => messageMatchesPersonFlag(message, flag));
-
 const emptyFolderCounts = () => ({ inbox: 0, starred: 0, snoozed: 0, drafts: 0, unanalyzed: 0 });
+
+/**
+ * Typesense ranks leftover text. Provider hits that never matched locally are
+ * prefixed onto the page. Any engine failure falls back to SQLite FTS.
+ */
+async function conversationSearch(repos, listArgs, { page, pageSize, extraThreadIds }) {
+  const engine = repos.searchEngine;
+  if (engine?.enabled && listArgs.parsed?.text) {
+    try {
+      const eligibleExtras = extraThreadIds.length
+        ? repos.messages.searchConversations({
+          ...listArgs,
+          ftsQuery: '',
+          extraThreadIds: [],
+          restrictThreadIds: extraThreadIds,
+          limit: extraThreadIds.length,
+          offset: 0,
+        }).threadIds
+        : [];
+      const matchedExtras = eligibleExtras.length
+        ? await engine.matchingThreadIds({
+          accountIds: listArgs.accountIds,
+          folder: listArgs.folder,
+          mailbox: listArgs.mailbox,
+          parsed: listArgs.parsed,
+          category: listArgs.category,
+          personEmails: listArgs.personEmails,
+          hideQuiet: listArgs.hideQuiet,
+          threadIds: eligibleExtras,
+        })
+        : new Set();
+      const extraOnly = eligibleExtras.filter((id) => !matchedExtras.has(id));
+      const start = (page - 1) * pageSize;
+      const prefix = extraOnly.slice(start, start + pageSize);
+      const rankedOffset = Math.max(0, start - extraOnly.length);
+      const rankedLimit = pageSize - prefix.length;
+      const ranked = await engine.searchConversations({
+        accountIds: listArgs.accountIds,
+        folder: listArgs.folder,
+        mailbox: listArgs.mailbox,
+        parsed: listArgs.parsed,
+        category: listArgs.category,
+        personEmails: listArgs.personEmails,
+        hideQuiet: listArgs.hideQuiet,
+        offset: rankedLimit > 0 ? rankedOffset : 0,
+        limit: rankedLimit > 0 ? rankedLimit : 1,
+      });
+      if (rankedLimit <= 0) ranked.threadIds = [];
+      const seen = new Set(prefix);
+      return {
+        threadIds: [...prefix, ...ranked.threadIds.filter((id) => !seen.has(id))],
+        total: (ranked.total || 0) + extraOnly.length,
+        categoryCounts: ranked.categoryCounts || [],
+      };
+    } catch {
+      // The cache listing below is the same path used when Typesense is off.
+    }
+  }
+  return repos.messages.searchConversations(listArgs);
+}
 
 export const sumFolderCounts = (accounts, repos) => accounts.reduce((totals, account) => {
   const counts = repos.messages.folderCounts(account.id);
@@ -70,6 +129,45 @@ export const sumFolderCounts = (accounts, repos) => accounts.reduce((totals, acc
     unanalyzed: totals.unanalyzed + (counts.unanalyzed || 0),
   };
 }, emptyFolderCounts());
+
+export function listStoredDrafts(repos, accountIds = null) {
+  const accounts = accountIds
+    ? accountIds.map((id) => repos.accounts.get(id)).filter(Boolean)
+    : repos.accounts.list();
+  const seen = new Set();
+  const items = [];
+  const push = (draft, account) => {
+    const id = String(draft?.id || '');
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    items.push({ draft, account });
+  };
+  for (const account of accounts) {
+    for (const draft of repos.drafts.list(account.id)) push(draft, account);
+  }
+  for (const account of accounts) {
+    const messages = typeof repos.messages.listDrafts === 'function'
+      ? repos.messages.listDrafts(account.id)
+      : [];
+    for (const message of messages) {
+      push({
+        id: message.id,
+        accountId: message.accountId,
+        threadId: message.threadId,
+        to: message.to || [],
+        cc: message.cc || [],
+        bcc: message.bcc || [],
+        subject: message.subject === '(no subject)' ? '' : (message.subject || ''),
+        htmlBody: message.htmlBody || '',
+        textBody: message.textBody || '',
+        attachments: message.attachments || [],
+        updatedAt: message.receivedAt || message.sentAt || message.updatedAt,
+        createdAt: message.createdAt || message.receivedAt || message.sentAt,
+      }, account);
+    }
+  }
+  return items;
+}
 
 export function draftListItem(draft, account) {
   const id = `draft:${draft.id}`;
@@ -116,7 +214,7 @@ export function draftListItem(draft, account) {
  * Unified conversation listing used by the REST API and MCP tools.
  * Returns the same shape as GET /api/messages.
  */
-export function listConversations(repos, {
+export async function listConversations(repos, {
   accountId = null,
   folder: folderInput = 'inbox',
   category: categoryInput = '',
@@ -125,6 +223,9 @@ export function listConversations(repos, {
   pageSize: pageSizeInput = 50,
   query: queryInput = '',
   mailbox = 'INBOX',
+  mailService = null,
+  searchSource = 'cache',
+  signal = null,
 } = {}) {
   const parsedQuery = parseMailboxQuery(String(queryInput || '').trim().slice(0, 800));
   const folder = normalizeFolder(parsedQuery.folder || folderInput);
@@ -138,15 +239,33 @@ export function listConversations(repos, {
   const accounts = accountId ? [repos.accounts.get(accountId)].filter(Boolean) : repos.accounts.list();
   if (accountId && !accounts.length) throw new NotFoundError('Mail account not found.');
 
+  let extraThreadIds = [];
+  if (
+    mailService?.searchAndMaterialize
+    && shouldSearchProvider(parsedQuery, { source: searchSource, folder })
+  ) {
+    try {
+      const provider = await mailService.searchAndMaterialize({
+        accounts,
+        parsed: parsedQuery,
+        folder,
+        signal,
+      });
+      extraThreadIds = provider?.threadIds || [];
+    } catch {
+      // Local cache results are still returned if provider search fails.
+    }
+  }
+
   if (folder === 'drafts') {
-    const drafts = accounts.flatMap((account) => repos.drafts.list(account.id)
-      .map((draft) => draftListItem(draft, account))
+    const drafts = listStoredDrafts(repos, accounts.map((account) => account.id))
+      .map(({ draft, account }) => draftListItem(draft, account))
       .filter((draft) => {
         if (personFlag && !messageMatchesPersonFlag(draft, personFlag)) return false;
         if (!searchActive) return true;
         return conversationMatchesMailboxQuery(draft, parsedQuery);
       })
-    ).sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)));
+      .sort((left, right) => String(right.updatedAt).localeCompare(String(left.updatedAt)));
     const start = (page - 1) * pageSize;
     return {
       messages: category ? [] : drafts.slice(start, start + pageSize),
@@ -160,90 +279,71 @@ export function listConversations(repos, {
     };
   }
 
-  const results = accounts.map((account) => {
-    if (ftsQuery) {
-      const threadIds = repos.messages.searchThreadIds({
-        accountId: account.id,
-        folder,
-        mailbox: String(mailbox || 'INBOX'),
-        ftsQuery,
-        limit: Math.min(500, page * pageSize + pageSize),
-      });
-      return { items: repos.messages.forThreads(threadIds, { folder, mailbox: String(mailbox || 'INBOX') }) };
-    }
-    return repos.messages.list({
-      accountId: account.id,
-      folder,
-      mailbox: String(mailbox || 'INBOX'),
-      query: '',
-      category: '',
-      limit: 1000,
-      offset: 0,
-    });
-  });
+  const listArgs = {
+    accountIds: accounts.map((account) => account.id),
+    folder,
+    mailbox: String(mailbox || 'INBOX'),
+    parsed: searchActive ? parsedQuery : null,
+    ftsQuery,
+    category,
+    personEmails: personFlag?.emails || [],
+    hideQuiet: !searchActive && !category && !personFlag,
+    extraThreadIds,
+    limit: pageSize,
+    offset: (page - 1) * pageSize,
+  };
+  const search = await conversationSearch(repos, listArgs, { page, pageSize, extraThreadIds });
   const byThread = new Map();
-  for (const message of results.flatMap((result) => result.items)) {
-    const key = `${message.accountId}:${message.threadId}`;
-    const existing = byThread.get(key);
+  for (const message of repos.messages.forThreads(search.threadIds, {
+    folder,
+    mailbox: String(mailbox || 'INBOX'),
+    includeBodies: false,
+  })) {
+    const existing = byThread.get(message.threadId);
     const messageTime = String(message.sentAt || message.receivedAt || message.createdAt);
     const existingTime = String(existing?.latest?.sentAt || existing?.latest?.receivedAt || existing?.latest?.createdAt || '');
     if (!existing) {
-      byThread.set(key, { latest: message, messages: [message] });
+      byThread.set(message.threadId, { latest: message, messages: [message] });
     } else {
       existing.messages.push(message);
       if (messageTime > existingTime) existing.latest = message;
     }
   }
-  const conversations = [...byThread.values()]
-    .filter(({ messages }) => !personFlag || conversationTouchesPersonFlag(messages, personFlag))
-    .filter(({ messages, latest }) => {
-      // Explicit search can still find quiet digests. Unscoped browsing and
-      // smart-category chips hide routine ops noise even when unread.
-      if (searchActive) {
-        return conversationMatchesMailboxQuery({ latest, messages }, parsedQuery, { skipText: Boolean(ftsQuery) });
-      }
-      if (category) return true;
-      if (personFlag) return true;
-      return !isHiddenDefaultCategory(latest.category);
-    })
-    .map(({ latest: latestMessage, messages }) => {
-      const thread = repos.threads.get(latestMessage.threadId);
-      const latestAt = latestMessage.sentAt || latestMessage.receivedAt || latestMessage.createdAt;
-      return {
-        ...latestMessage,
-        // Gmail's list is made of conversations. The thread id is intentionally
-        // the row id so every toolbar action can target all messages in it.
-        id: latestMessage.threadId,
-        threadId: latestMessage.threadId,
-        latestMessageId: latestMessage.id,
-        messageCount: thread?.messageCount || 1,
-        unreadCount: thread?.unreadCount || 0,
-        unanalyzedCount: thread ? thread.unanalyzedCount : messages.filter((message) => !message.isAnalyzed).length,
-        participants: thread?.participants || [latestMessage.from],
-        latestAt,
-        snippet: latestMessage.snippet,
-        hasAttachments: Boolean(latestMessage.attachments?.length) || messages.some((message) => message.attachments?.length),
-        isRead: (thread?.unreadCount || 0) === 0,
-        isAnalyzed: thread ? thread.unanalyzedCount === 0 : messages.every((message) => message.isAnalyzed),
-        isStarred: thread?.isStarred ?? latestMessage.isStarred,
-        _threadMessages: messages,
-        ...(folder === 'snoozed' ? { folder: 'snoozed' } : {}),
-      };
-    }).sort((left, right) =>
-      String(right.latestAt || right.sentAt || right.receivedAt || right.createdAt).localeCompare(String(left.latestAt || left.sentAt || left.receivedAt || left.createdAt)));
   const categoryCounts = emptyCategoryCounts();
-  for (const conversation of conversations) {
-    if (isHiddenDefaultCategory(conversation.category)) continue;
-    if (Object.hasOwn(categoryCounts, conversation.category)) categoryCounts[conversation.category] += 1;
+  for (const row of search.categoryCounts) {
+    if (Object.hasOwn(categoryCounts, row.category)) categoryCounts[row.category] = Number(row.count) || 0;
   }
-  const all = category
-    ? conversations.filter((conversation) => conversation.category === category)
-    : conversations;
-  const start = (page - 1) * pageSize;
-  const pageItems = all.slice(start, start + pageSize).map(({ _threadMessages, ...conversation }) => conversation);
+  // Filtering still uses all candidate messages in each conversation. Only
+  // visible rows need their stored, whole-thread unread/analyzed aggregates.
+  const pageItems = search.threadIds.map((threadId) => {
+    const grouped = byThread.get(threadId);
+    if (!grouped) return null;
+    const { latest: latestMessage, messages } = grouped;
+    const thread = repos.threads.get(latestMessage.threadId);
+    const latestAt = latestMessage.sentAt || latestMessage.receivedAt || latestMessage.createdAt;
+    return {
+      ...latestMessage,
+      // Gmail's list is made of conversations. The thread id is intentionally
+      // the row id so every toolbar action can target all messages in it.
+      id: latestMessage.threadId,
+      threadId: latestMessage.threadId,
+      latestMessageId: latestMessage.id,
+      messageCount: thread?.messageCount || 1,
+      unreadCount: thread?.unreadCount || 0,
+      unanalyzedCount: thread ? thread.unanalyzedCount : messages.filter((message) => !message.isAnalyzed).length,
+      participants: thread?.participants || [latestMessage.from],
+      latestAt,
+      snippet: latestMessage.snippet,
+      hasAttachments: Boolean(latestMessage.attachments?.length) || messages.some((message) => message.attachments?.length),
+      isRead: (thread?.unreadCount || 0) === 0,
+      isAnalyzed: thread ? thread.unanalyzedCount === 0 : messages.every((message) => message.isAnalyzed),
+      isStarred: thread?.isStarred ?? latestMessage.isStarred,
+      ...(folder === 'snoozed' ? { folder: 'snoozed' } : {}),
+    };
+  }).filter(Boolean);
   return {
     messages: pageItems,
-    total: all.length,
+    total: search.total,
     page,
     pageSize,
     categoryCounts,
