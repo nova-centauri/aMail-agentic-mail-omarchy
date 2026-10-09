@@ -95,7 +95,7 @@ amail-plugin set toasts false
 amail-plugin server logs   # server mode only
 ```
 
-**Bar widget.** `󰇮 12  󰚩 15` is unread and not-yet-analyzed; `amail-plugin set badge unread|unanalyzed|both` picks what shows. Dimmed means the server is unreachable. Left-click opens the panel, middle-click refreshes, right-click focuses the aMail web app.
+**Bar widget.** `󰇮 12  󰚩 15` is unread and not-yet-analyzed; `amail-plugin set badge unread|unanalyzed|both` picks what shows. Counts and the unread mark use the theme accent, so they follow whatever theme is active. Dimmed means the server is unreachable, and only that failure uses the bar's alarm color. New-mail toasts use normal urgency, which takes the theme's notification color. Left-click opens the panel, middle-click refreshes, right-click focuses the aMail web app.
 
 **Bulk work stays light.** Mark all read (the envelope in the header, or `M`) runs as a background job in the CLI, not in the shell: it pages through the server's unread view, then works with at most two concurrent requests, a pacing gap between them, and an automatic drop to one worker when the server slows down. The panel shows progress, rate, ETA, and a cancel button, and keeps the job running while closed. Meanwhile the daemon coalesces the resulting flood of state events into at most one refresh every 1.5 s.
 

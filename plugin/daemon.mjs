@@ -100,6 +100,9 @@ function toast(conversation) {
     : conversation.subject;
   const args = [
     '--app-name=aMail',
+    // Normal urgency uses the theme's notification color. Critical is the
+    // alarm color and is reserved for errors.
+    '--urgency=normal',
     '--icon=mail-unread',
     '--category=email.arrived',
     '--hint=string:x-omarchy-plugin:amail',

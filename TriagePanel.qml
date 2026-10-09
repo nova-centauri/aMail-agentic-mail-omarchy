@@ -749,7 +749,8 @@ Panel {
                   Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     width: Style.space(7); height: width; radius: width / 2
-                    color: root.urgent
+                    // Theme accent, same role as the bar count. Urgent stays for errors.
+                    color: root.accent
                     visible: !modelData.isRead
                   }
                   Text {

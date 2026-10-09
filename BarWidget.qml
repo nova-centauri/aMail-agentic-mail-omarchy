@@ -73,6 +73,12 @@ BarWidget {
     return parts.length ? parts.join("  ") : "󰇮"
   }
   readonly property bool hasWork: (showUnread && unread > 0) || (showUnanalyzed && unanalyzed > 0)
+  // Waiting mail follows the theme accent. WidgetButton's default active color
+  // is bar.active, which themes reserve for alarms (recording, alerts). A real
+  // connection failure still uses that alarm color.
+  readonly property bool hasError: configured && !online && lastError !== ""
+  readonly property color mailColor: Color.accent
+  readonly property color errorColor: bar ? bar.urgent : Color.urgent
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
@@ -194,7 +200,8 @@ BarWidget {
     anchors.fill: parent
     bar: root.bar
     text: root.badgeText
-    active: root.unread > 0
+    active: root.hasError || root.hasWork
+    activeColor: root.hasError ? root.errorColor : root.mailColor
     dimmed: !root.online
     tooltipText: !root.configured ? "aMail: click to set up"
       : !root.online ? "aMail: offline" + (root.lastError !== "" ? " — " + root.lastError : "")
