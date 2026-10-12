@@ -51,7 +51,7 @@ test('IDLE watcher parks on INBOX and runs an inbox-only sync when mail arrives'
   // The connect itself schedules a catch-up sync.
   await sleep(500);
   assert.equal(syncs.length, 1);
-  assert.deepEqual(syncs[0], { id: 'acc-1', options: { inboxOnly: true } });
+  assert.deepEqual(syncs[0], { id: 'acc-1', options: { inboxOnly: true, force: true } });
 
   instances[0].emit('exists', { count: 11, prevCount: 10 });
   instances[0].emit('exists', { count: 12, prevCount: 11 });

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import Database from 'better-sqlite3';
+import Database from 'better-sqlite3-multiple-ciphers';
 import {
   SMART_CATEGORY_SLUGS,
   SMART_FILTER_VERSION,
@@ -13,6 +13,7 @@ import {
 
 const SMART_FILTER_FINGERPRINT_SETTING = 'smartFilterFingerprint';
 import { ftsDocument } from './services/fts.js';
+import { buildConversationSearch } from './services/conversation-search.js';
 
 const json = (value, fallback = []) => {
   if (value === null || value === undefined || value === '') return fallback;
@@ -25,6 +26,15 @@ const json = (value, fallback = []) => {
 
 const stringify = (value, fallback = []) => JSON.stringify(value ?? fallback);
 const now = () => new Date().toISOString();
+
+// List/search candidates never need full message bodies. Keep this projection
+// explicit so SQLite does not load them before the UI's conversation pagination.
+const MESSAGE_METADATA_COLUMNS = `id, account_id, thread_id, mailbox, uid, rfc_message_id, in_reply_to,
+  references_json, subject, from_name, from_email, to_json, cc_json,
+  bcc_json, reply_to_json, sent_at, received_at, snippet, attachments_json,
+  labels_json, is_read, is_starred, is_archived, is_trashed, is_spam,
+  snoozed_until, is_sent, analyzed_at, analyzed_by, smart_category,
+  smart_category_reason, source_imported, created_at, updated_at`;
 
 function publicAccount(row) {
   if (!row) return null;
@@ -83,17 +93,63 @@ function publicMessage(row) {
     isSpam: Boolean(row.is_spam),
     snoozedUntil: row.snoozed_until,
     isSent: Boolean(row.is_sent),
+    isDraft: Boolean(row.is_draft),
     // Agent-facing counterpart of read/unread: set when an agent (or person)
     // has processed this message. Stored locally; never pushed to IMAP.
     isAnalyzed: Boolean(row.analyzed_at),
     analyzedAt: row.analyzed_at || null,
     analyzedBy: row.analyzed_by || null,
+    sourceImported: row.source_imported === undefined || row.source_imported === null ? true : Boolean(row.source_imported),
     category,
     categoryLabel: categoryLabel(category),
     categoryReason: row.smart_category_reason || 'No automated category signal matched.',
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function publicMessageMetadata(row) {
+  const { htmlBody: _html, textBody: _text, ...message } = publicMessage(row);
+  return message;
+}
+
+/** Bounded review metadata. Fetch get_message for omitted bodies or clipped fields. */
+function publicReviewMessage(row) {
+  const message = publicMessageMetadata(row);
+  let summaryTruncated = false;
+  const clip = (value, limit) => {
+    if (typeof value !== 'string') return value;
+    if (value.length > limit) summaryTruncated = true;
+    return value.slice(0, limit);
+  };
+  const bounded = (values, transform) => {
+    if (values.length > 20) summaryTruncated = true;
+    return values.slice(0, 20).map(transform);
+  };
+  const person = (value) => typeof value === 'string'
+    ? clip(value, 320)
+    : { name: clip(value?.name || '', 256), email: clip(value?.email || value?.address || '', 320) };
+  message.subject = clip(message.subject, 1000);
+  message.snippet = clip(message.snippet, 1000);
+  message.from = person(message.from);
+  for (const field of ['to', 'cc', 'bcc', 'replyTo']) {
+    if (Array.isArray(message[field])) message[field] = bounded(message[field], person);
+  }
+  message.messageId = clip(message.messageId, 1000);
+  message.inReplyTo = clip(message.inReplyTo, 1000);
+  message.references = bounded(message.references, (value) => clip(value, 1000));
+  message.labels = bounded(message.labels, (value) => clip(value, 256));
+  message.mailbox = clip(message.mailbox, 256);
+  message.categoryReason = clip(message.categoryReason, 1000);
+  message.attachmentCount = message.attachments.length;
+  message.hasAttachments = message.attachmentCount > 0;
+  message.attachments = bounded(message.attachments, (value) => ({
+    ...value,
+    filename: clip(value.filename, 256),
+    contentType: clip(value.contentType, 256),
+    contentId: clip(value.contentId, 256),
+  }));
+  return { ...message, summaryTruncated };
 }
 
 function publicThread(row) {
@@ -216,12 +272,14 @@ function initSchema(db) {
       is_spam INTEGER NOT NULL DEFAULT 0,
       snoozed_until TEXT,
       is_sent INTEGER NOT NULL DEFAULT 0,
+      is_draft INTEGER NOT NULL DEFAULT 0,
       analyzed_at TEXT,
       analyzed_by TEXT NOT NULL DEFAULT '',
       smart_category TEXT NOT NULL DEFAULT 'primary' CHECK (smart_category IN ('primary', 'github_ci', 'logs', 'status', 'ops_error', 'ops_quiet')),
       smart_category_reason TEXT NOT NULL DEFAULT '',
       smart_category_rule TEXT NOT NULL DEFAULT '',
       smart_category_version INTEGER NOT NULL DEFAULT 0,
+      source_imported INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       UNIQUE(account_id, mailbox, uid)
@@ -273,6 +331,15 @@ function initSchema(db) {
       synced_at TEXT,
       PRIMARY KEY (account_id, mailbox)
     );
+
+    CREATE TABLE IF NOT EXISTS sync_skips (
+      account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+      mailbox TEXT NOT NULL,
+      uid INTEGER NOT NULL,
+      reason TEXT NOT NULL,
+      seen_at TEXT NOT NULL,
+      PRIMARY KEY (account_id, mailbox, uid)
+    );
   `);
   const messageColumns = new Set(db.prepare('PRAGMA table_info(messages)').all().map((column) => column.name));
   if (!messageColumns.has('is_spam')) db.exec('ALTER TABLE messages ADD COLUMN is_spam INTEGER NOT NULL DEFAULT 0');
@@ -283,6 +350,8 @@ function initSchema(db) {
   if (!messageColumns.has('smart_category_version')) db.exec('ALTER TABLE messages ADD COLUMN smart_category_version INTEGER NOT NULL DEFAULT 0');
   if (!messageColumns.has('analyzed_at')) db.exec('ALTER TABLE messages ADD COLUMN analyzed_at TEXT');
   if (!messageColumns.has('analyzed_by')) db.exec("ALTER TABLE messages ADD COLUMN analyzed_by TEXT NOT NULL DEFAULT ''");
+  if (!messageColumns.has('source_imported')) db.exec('ALTER TABLE messages ADD COLUMN source_imported INTEGER NOT NULL DEFAULT 1');
+  if (!messageColumns.has('is_draft')) db.exec('ALTER TABLE messages ADD COLUMN is_draft INTEGER NOT NULL DEFAULT 0');
   db.exec('CREATE INDEX IF NOT EXISTS idx_messages_smart_category ON messages(account_id, smart_category, sent_at DESC)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_messages_analyzed ON messages(account_id, analyzed_at)');
   const threadColumns = new Set(db.prepare('PRAGMA table_info(threads)').all().map((column) => column.name));
@@ -376,6 +445,45 @@ function initSchema(db) {
     db.pragma('foreign_keys = ON');
   }
 
+  // Reply threading falls back to the newest thread with the same subject.
+  db.exec('CREATE INDEX IF NOT EXISTS idx_threads_subject ON threads(account_id, normalized_subject, latest_at DESC)');
+
+  const columnsAfterRebuild = new Set(db.prepare('PRAGMA table_info(messages)').all().map((column) => column.name));
+  if (!columnsAfterRebuild.has('source_imported')) {
+    db.exec('ALTER TABLE messages ADD COLUMN source_imported INTEGER NOT NULL DEFAULT 1');
+  }
+  if (!columnsAfterRebuild.has('is_draft')) {
+    db.exec('ALTER TABLE messages ADD COLUMN is_draft INTEGER NOT NULL DEFAULT 0');
+  }
+
+  // Sidebar polling must count compact index entries rather than visit message
+  // rows carrying bodies and inline attachment data on every refresh.
+  const badgeColumns = ['is_read', 'is_spam', 'is_starred', 'snoozed_until'];
+  // Older partial schemas can still run classification migrations without the
+  // mail-state columns needed by these optional polling indexes.
+  if (badgeColumns.every((column) => columnsAfterRebuild.has(column))) db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_messages_badge_inbox
+      ON messages(account_id, thread_id, is_read, snoozed_until, analyzed_at, source_imported)
+      WHERE mailbox = 'INBOX' AND is_archived = 0 AND is_trashed = 0 AND is_spam = 0
+        AND smart_category <> 'ops_quiet';
+    CREATE INDEX IF NOT EXISTS idx_messages_badge_starred
+      ON messages(account_id, thread_id) WHERE is_starred = 1 AND is_trashed = 0;
+    CREATE INDEX IF NOT EXISTS idx_messages_badge_snoozed
+      ON messages(account_id, thread_id, snoozed_until)
+      WHERE snoozed_until IS NOT NULL AND is_trashed = 0 AND is_spam = 0;
+  `);
+
+  // Review pages seek directly through pending messages, both across all
+  // accounts and within one account. Install after any legacy table rebuild.
+  db.exec(`
+    DROP INDEX IF EXISTS idx_messages_review_order;
+    DROP INDEX IF EXISTS idx_messages_review_account_order;
+    CREATE INDEX IF NOT EXISTS idx_messages_review_order
+      ON messages(COALESCE(received_at, sent_at, created_at), id) WHERE analyzed_at IS NULL AND COALESCE(source_imported, 1) = 1;
+    CREATE INDEX IF NOT EXISTS idx_messages_review_account_order
+      ON messages(account_id, COALESCE(received_at, sent_at, created_at), id) WHERE analyzed_at IS NULL AND COALESCE(source_imported, 1) = 1;
+  `);
+
   // Rules are partly operator-configured (ops-digest sources), so a changed
   // fingerprint reclassifies everything rather than only version-stale rows.
   const fingerprint = smartFilterFingerprint();
@@ -416,24 +524,23 @@ function initSchema(db) {
       .run(SMART_FILTER_FINGERPRINT_SETTING, JSON.stringify(fingerprint), now());
   }
 
-  db.exec(`
-    CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
-      subject,
-      snippet,
-      from_name,
-      from_email,
-      recipients,
-      text_body,
-      tokenize = 'unicode61 remove_diacritics 2'
-    );
-    CREATE TRIGGER IF NOT EXISTS messages_ad_fts AFTER DELETE ON messages BEGIN
-      INSERT INTO messages_fts(messages_fts, rowid) VALUES('delete', old.rowid);
-    END;
-  `);
-  backfillMessagesFts(db);
+  ensureMessagesFts(db);
 }
 
 const FTS_BACKFILL_BATCH = 100;
+const SEARCH_INDEX_COLUMNS = `id, account_id, thread_id, mailbox, subject, from_name, from_email,
+  to_json, cc_json, bcc_json, reply_to_json, sent_at, received_at, created_at, text_body, snippet,
+  attachments_json, is_read, is_starred, is_archived, is_trashed, is_spam, snoozed_until, is_sent,
+  analyzed_at, smart_category, source_imported`;
+const WAL_SIZE_LIMIT_BYTES = 64 * 1024 * 1024;
+const WAL_AUTOCHECKPOINT_PAGES = 1000;
+const SQLITE_CACHE_KIB = -16000;
+const SQLITE_MMAP_BYTES = 268435456;
+const LAST_VACUUM_SETTING = 'lastVacuumAt';
+
+function isUniqueMailboxUidConstraint(error) {
+  return /UNIQUE constraint failed: messages\.account_id, mailbox, uid/i.test(String(error?.message || ''));
+}
 
 function prepareSqliteTempDir(dataDir) {
   const sqliteTmpDir = path.join(dataDir, 'tmp');
@@ -444,29 +551,54 @@ function prepareSqliteTempDir(dataDir) {
   return sqliteTmpDir;
 }
 
-function backfillMessagesFts(db, { batchSize = FTS_BACKFILL_BATCH } = {}) {
-  const ftsCount = db.prepare('SELECT COUNT(*) AS count FROM messages_fts').get()?.count || 0;
-  const messageCount = db.prepare('SELECT COUNT(*) AS count FROM messages').get()?.count || 0;
-  const ftsColumns = new Set(db.prepare('PRAGMA table_info(messages)').all().map((column) => column.name));
-  const canIndexFts = ['to_json', 'cc_json', 'bcc_json', 'text_body', 'snippet', 'from_name', 'from_email', 'subject']
-    .every((column) => ftsColumns.has(column));
-  if (!canIndexFts || ftsCount === messageCount) return;
+const FTS_CREATE_SQL = `CREATE VIRTUAL TABLE messages_fts USING fts5(
+      subject,
+      snippet,
+      from_name,
+      from_email,
+      recipients,
+      text_body,
+      attachments,
+      content='',
+      contentless_delete=1,
+      tokenize = 'unicode61 remove_diacritics 2'
+    )`;
 
-  // delete-all is only valid on contentless/external-content FTS5 tables.
-  // This standalone index must be cleared with a normal DELETE.
-  db.exec('DELETE FROM messages_fts');
-  const selectBatch = db.prepare(`
-    SELECT rowid, subject, snippet, from_name, from_email, to_json, cc_json, bcc_json, text_body
-    FROM messages
-    WHERE rowid > ?
-    ORDER BY rowid
-    LIMIT ?
-  `);
-  const insertFts = db.prepare(`INSERT INTO messages_fts(
-    rowid, subject, snippet, from_name, from_email, recipients, text_body
-  ) VALUES (@rowid, @subject, @snippet, @from_name, @from_email, @recipients, @text_body)`);
-  const insertBatch = db.transaction((rows) => {
-    for (const row of rows) {
+const FTS_INSERT_SQL = `INSERT INTO messages_fts(
+    rowid, subject, snippet, from_name, from_email, recipients, text_body, attachments
+  ) VALUES (@rowid, @subject, @snippet, @from_name, @from_email, @recipients, @text_body, @attachments)`;
+
+function messagesFtsSql(db) {
+  return String(db.prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'messages_fts'`).get()?.sql || '');
+}
+
+function isDesiredMessagesFts(sql) {
+  return /content\s*=\s*''/.test(sql) && /\battachments\b/.test(sql);
+}
+
+function isContentBearingMessagesFts(sql) {
+  return Boolean(sql) && !/content\s*=\s*''/.test(sql) && !/content\s*=/.test(sql);
+}
+
+function createMessagesFtsTable(db) {
+  const triggerSql = `
+    CREATE TRIGGER messages_ad_fts AFTER DELETE ON messages BEGIN
+      DELETE FROM messages_fts WHERE rowid = old.rowid;
+    END;
+  `;
+  db.exec('DROP TRIGGER IF EXISTS messages_ad_fts; DROP TABLE IF EXISTS messages_fts;');
+  try {
+    db.exec(FTS_CREATE_SQL);
+  } catch {
+    db.exec(FTS_CREATE_SQL.replace(/\s*contentless_delete=1,\s*/, '\n      '));
+  }
+  db.exec(triggerSql);
+}
+
+function insertFtsDocuments(db, rows) {
+  const insertFts = db.prepare(FTS_INSERT_SQL);
+  const insertBatch = db.transaction((batch) => {
+    for (const row of batch) {
       try {
         insertFts.run(ftsDocument(row, json));
       } catch {
@@ -474,29 +606,241 @@ function backfillMessagesFts(db, { batchSize = FTS_BACKFILL_BATCH } = {}) {
       }
     }
   });
+  insertBatch(rows);
+}
+
+function backfillMessagesFts(db, { batchSize = FTS_BACKFILL_BATCH } = {}) {
+  const ftsCount = db.prepare('SELECT COUNT(*) AS count FROM messages_fts').get()?.count || 0;
+  const messageCount = db.prepare('SELECT COUNT(*) AS count FROM messages').get()?.count || 0;
+  const ftsColumns = new Set(db.prepare('PRAGMA table_info(messages)').all().map((column) => column.name));
+  const canIndexFts = ['to_json', 'cc_json', 'bcc_json', 'text_body', 'snippet', 'from_name', 'from_email', 'subject', 'attachments_json']
+    .every((column) => ftsColumns.has(column));
+  if (!canIndexFts || ftsCount === messageCount) return;
+
+  db.exec(`INSERT INTO messages_fts(messages_fts) VALUES('delete-all')`);
+  const selectBatch = db.prepare(`
+    SELECT rowid, subject, snippet, from_name, from_email, to_json, cc_json, bcc_json, text_body, attachments_json
+    FROM messages
+    WHERE rowid > ?
+    ORDER BY rowid
+    LIMIT ?
+  `);
 
   let lastRowid = 0;
   for (;;) {
     const rows = selectBatch.all(lastRowid, batchSize);
     if (!rows.length) break;
-    insertBatch(rows);
+    insertFtsDocuments(db, rows);
     lastRowid = rows[rows.length - 1].rowid;
   }
 }
 
-export function createDatabase(config) {
+function ensureMessagesFts(db) {
+  const existingSql = messagesFtsSql(db);
+  if (isDesiredMessagesFts(existingSql)) {
+    db.exec(`
+      DROP TRIGGER IF EXISTS messages_ad_fts;
+      CREATE TRIGGER messages_ad_fts AFTER DELETE ON messages BEGIN
+        DELETE FROM messages_fts WHERE rowid = old.rowid;
+      END;
+    `);
+    backfillMessagesFts(db);
+    return;
+  }
+
+  // Content-bearing FTS stores a second copy of the body. Copy those documents
+  // before dropping the table so pruneBodies' emptied text_body does not wipe
+  // search tokens that the old index still holds.
+  let preserved = [];
+  if (isContentBearingMessagesFts(existingSql)) {
+    try {
+      preserved = db.prepare(`
+        SELECT fts.rowid AS rowid, fts.subject AS subject, fts.snippet AS snippet,
+          fts.from_name AS from_name, fts.from_email AS from_email, fts.recipients AS recipients,
+          fts.text_body AS text_body, messages.to_json AS to_json, messages.cc_json AS cc_json,
+          messages.bcc_json AS bcc_json, messages.attachments_json AS attachments_json
+        FROM messages_fts fts
+        LEFT JOIN messages ON messages.rowid = fts.rowid
+      `).all();
+    } catch {
+      preserved = [];
+    }
+  }
+
+  createMessagesFtsTable(db);
+  if (preserved.length) {
+    const insertFts = db.prepare(FTS_INSERT_SQL);
+    const insertBatch = db.transaction((rows) => {
+      for (const row of rows) {
+        try {
+          insertFts.run({
+            ...ftsDocument(row, json),
+            text_body: String(row.text_body || '').slice(0, 80_000),
+            recipients: row.recipients || ftsDocument(row, json).recipients,
+          });
+        } catch {
+          // Same as backfill: skip one bad row rather than failing open.
+        }
+      }
+    });
+    insertBatch(preserved);
+    return;
+  }
+  backfillMessagesFts(db);
+}
+
+const SQLITE_HEADER = 'SQLite format 3\0';
+const DATABASE_KEY_BYTES = 32;
+
+export class DatabaseKeyError extends Error {
+  constructor(message, code = 'DATABASE_KEY_INVALID') {
+    super(message);
+    this.name = 'DatabaseKeyError';
+    this.code = code;
+  }
+}
+
+function assertDatabaseKey(key) {
+  if (!Buffer.isBuffer(key) || key.length !== DATABASE_KEY_BYTES) {
+    throw new DatabaseKeyError(`Database key must be ${DATABASE_KEY_BYTES} raw bytes.`, 'DATABASE_KEY_MALFORMED');
+  }
+}
+
+/**
+ * Apply a raw SQLCipher-compatible key. The `x'…'` form hands SQLite the key
+ * bytes directly, so no passphrase KDF runs inside the database engine and the
+ * same 32 bytes always open the same file.
+ */
+function applyDatabaseKey(db, key) {
+  assertDatabaseKey(key);
+  db.pragma("cipher='sqlcipher'");
+  db.pragma(`key="x'${key.toString('hex')}'"`);
+}
+
+/**
+ * `true` for an existing plaintext SQLite file, `false` for an existing file
+ * whose header is not SQLite's (encrypted, or not a database), `null` when the
+ * file is missing or empty and will be created fresh.
+ */
+export function isPlaintextSqliteFile(filePath) {
+  let handle;
+  try {
+    handle = fs.openSync(filePath, 'r');
+    const header = Buffer.alloc(SQLITE_HEADER.length);
+    const read = fs.readSync(handle, header, 0, header.length, 0);
+    if (read < header.length) return null;
+    return header.toString('latin1') === SQLITE_HEADER;
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    throw error;
+  } finally {
+    if (handle !== undefined) fs.closeSync(handle);
+  }
+}
+
+/**
+ * Open a database, keyed when `key` is given, and fail fast with a clear error
+ * instead of at the first query if the key does not fit the file.
+ */
+export function openDatabase(dbPath, { key = null, readonly = false } = {}) {
+  const db = new Database(dbPath, { readonly });
+  try {
+    if (key) applyDatabaseKey(db, key);
+    db.prepare('SELECT count(*) AS count FROM sqlite_master').get();
+  } catch (error) {
+    db.close();
+    if (error?.code === 'SQLITE_NOTADB') {
+      throw new DatabaseKeyError(
+        key
+          ? 'The database could not be opened with the configured key. It was encrypted with a different key.'
+          : 'The database is encrypted but no database key is configured. Re-enable AMAIL_ENCRYPT_DATABASE with the original AMAIL_ENCRYPTION_KEY.',
+        key ? 'DATABASE_KEY_INVALID' : 'DATABASE_KEY_REQUIRED',
+      );
+    }
+    throw error;
+  }
+  return db;
+}
+
+/**
+ * Encrypt an existing plaintext database in place. SQLite3MC refuses to rekey a
+ * WAL-mode file, so the journal is switched to DELETE first (which also
+ * checkpoints and removes the -wal/-shm files); the caller restores WAL.
+ */
+export function encryptDatabaseInPlace(dbPath, key) {
+  assertDatabaseKey(key);
+  if (isPlaintextSqliteFile(dbPath) !== true) {
+    throw new DatabaseKeyError('Only a plaintext SQLite database can be encrypted in place.', 'DATABASE_NOT_PLAINTEXT');
+  }
+  const db = new Database(dbPath);
+  try {
+    db.pragma('journal_mode = DELETE');
+    db.pragma("cipher='sqlcipher'");
+    db.pragma(`rekey="x'${key.toString('hex')}'"`);
+  } finally {
+    db.close();
+  }
+}
+
+export function createDatabase(config, { key = config.databaseKey || null } = {}) {
   fs.mkdirSync(config.dataDir, { recursive: true, mode: 0o700 });
   const sqliteTmpDir = prepareSqliteTempDir(config.dataDir);
-  const db = new Database(config.dbPath);
+  const plaintext = isPlaintextSqliteFile(config.dbPath);
+  // Turning encryption on for an existing install migrates the file once, on
+  // the first boot with a key. Turning it back off is refused rather than
+  // silently starting with an empty database next to the encrypted one.
+  if (key && plaintext === true) encryptDatabaseInPlace(config.dbPath, key);
+  if (!key && plaintext === false) {
+    throw new DatabaseKeyError(
+      'The database is encrypted but no database key is configured. Re-enable AMAIL_ENCRYPT_DATABASE with the original AMAIL_ENCRYPTION_KEY.',
+      'DATABASE_KEY_REQUIRED',
+    );
+  }
+  const db = openDatabase(config.dbPath, { key });
   db.pragma('journal_mode = WAL');
+  // NORMAL is safe with WAL: a crash loses at most the last transaction, and
+  // IMAP is the source of truth. FULL was fsyncing every autocommit.
+  db.pragma('synchronous = NORMAL');
+  db.pragma(`cache_size = ${SQLITE_CACHE_KIB}`);
+  db.pragma(`wal_autocheckpoint = ${WAL_AUTOCHECKPOINT_PAGES}`);
+  // SQLite reuses a WAL file but never shrinks it, so one large import leaves
+  // hundreds of megabytes on the volume for good. Truncate it back to this
+  // size after checkpoints, and reclaim any oversized WAL from earlier runs.
+  db.pragma(`journal_size_limit = ${WAL_SIZE_LIMIT_BYTES}`);
+  // mmap is incompatible with SQLCipher-style encryption; skip it when keyed.
+  if (!key) db.pragma(`mmap_size = ${SQLITE_MMAP_BYTES}`);
   db.pragma('foreign_keys = ON');
   db.pragma('busy_timeout = 5000');
   db.pragma(`temp_store_directory = '${sqliteTmpDir.replace(/'/g, "''")}'`);
   initSchema(db);
+  db.pragma('wal_checkpoint(TRUNCATE)');
   return db;
 }
 
 export function createRepositories(db) {
+  const messageListSql = (projection) => `SELECT ${projection} FROM messages m
+      WHERE m.account_id = @accountId AND
+        CASE @folder
+          WHEN 'inbox' THEN m.mailbox = 'INBOX' AND m.is_archived = 0 AND m.is_trashed = 0 AND m.is_spam = 0 AND m.is_draft = 0 AND (m.snoozed_until IS NULL OR m.snoozed_until <= @now)
+          WHEN 'starred' THEN m.is_starred = 1 AND m.is_trashed = 0
+          WHEN 'sent' THEN m.is_sent = 1 AND m.is_trashed = 0
+          WHEN 'drafts' THEN m.is_draft = 1 AND m.is_trashed = 0 AND m.is_spam = 0
+          WHEN 'snoozed' THEN m.snoozed_until > @now AND m.is_trashed = 0 AND m.is_spam = 0
+          WHEN 'all' THEN m.is_trashed = 0 AND m.is_spam = 0 AND m.is_draft = 0
+          WHEN 'trash' THEN m.is_trashed = 1
+          WHEN 'spam' THEN m.is_spam = 1 AND m.is_trashed = 0
+          WHEN 'archive' THEN m.is_archived = 1 AND m.is_trashed = 0 AND (m.snoozed_until IS NULL OR m.snoozed_until <= @now)
+          ELSE m.mailbox = @mailbox AND m.is_trashed = 0 AND m.is_spam = 0
+        END
+        AND (@category = '' OR m.smart_category = @category)
+        AND (@query = '' OR m.subject LIKE @likeQuery OR m.from_name LIKE @likeQuery OR m.from_email LIKE @likeQuery OR m.snippet LIKE @likeQuery)
+      ORDER BY COALESCE(m.sent_at, m.received_at, m.created_at) DESC LIMIT @limit OFFSET @offset`;
+  const reviewQueueSql = (scoped, after) => `SELECT ${MESSAGE_METADATA_COLUMNS}
+      FROM messages WHERE analyzed_at IS NULL AND COALESCE(source_imported, 1) = 1
+        ${scoped ? 'AND account_id = @accountId' : ''}
+        ${after ? 'AND (COALESCE(received_at, sent_at, created_at), id) > (@afterTimestamp, @afterId)' : ''}
+      ORDER BY COALESCE(received_at, sent_at, created_at) ASC, id ASC
+      LIMIT @limit`;
   const queries = {
     accountById: db.prepare('SELECT * FROM accounts WHERE id = ?'),
     accountByEmail: db.prepare('SELECT * FROM accounts WHERE email = ? COLLATE NOCASE'),
@@ -539,34 +883,29 @@ export function createRepositories(db) {
       is_starred = @is_starred, labels_json = @labels_json, updated_at = @updated_at
       WHERE id = @id`),
     messageById: db.prepare('SELECT * FROM messages WHERE id = ?'),
+    messageAnalysisById: db.prepare('SELECT id, account_id, analyzed_at, analyzed_by FROM messages WHERE id = ?'),
+    // This queue filters before LIMIT and spans all cached folders. Do not route
+    // it through the conversation UI's bounded list/search candidate window.
+    unanalyzedMessages: db.prepare(reviewQueueSql(false, false)),
+    unanalyzedMessagesAfter: db.prepare(reviewQueueSql(false, true)),
+    unanalyzedAccountMessages: db.prepare(reviewQueueSql(true, false)),
+    unanalyzedAccountMessagesAfter: db.prepare(reviewQueueSql(true, true)),
+    unanalyzedMessageCount: db.prepare('SELECT COUNT(*) AS count FROM messages WHERE analyzed_at IS NULL AND COALESCE(source_imported, 1) = 1'),
+    unanalyzedAccountMessageCount: db.prepare('SELECT COUNT(*) AS count FROM messages WHERE analyzed_at IS NULL AND COALESCE(source_imported, 1) = 1 AND account_id = @accountId'),
+    messageByUid: db.prepare('SELECT * FROM messages WHERE account_id = ? AND mailbox = ? AND uid = ?'),
     messageByRfcId: db.prepare('SELECT * FROM messages WHERE account_id = ? AND rfc_message_id = ? ORDER BY sent_at DESC LIMIT 1'),
     messagesByThread: db.prepare('SELECT * FROM messages WHERE thread_id = ? ORDER BY COALESCE(sent_at, received_at, created_at) ASC'),
-    messageList: db.prepare(`SELECT m.* FROM messages m
-      WHERE m.account_id = @accountId AND
-        CASE @folder
-          WHEN 'inbox' THEN m.mailbox = 'INBOX' AND m.is_archived = 0 AND m.is_trashed = 0 AND m.is_spam = 0 AND (m.snoozed_until IS NULL OR m.snoozed_until <= @now)
-          WHEN 'starred' THEN m.is_starred = 1 AND m.is_trashed = 0
-          WHEN 'sent' THEN m.is_sent = 1 AND m.is_trashed = 0
-          WHEN 'drafts' THEN 0
-          WHEN 'snoozed' THEN m.snoozed_until > @now AND m.is_trashed = 0 AND m.is_spam = 0
-          WHEN 'all' THEN m.is_trashed = 0 AND m.is_spam = 0
-          WHEN 'trash' THEN m.is_trashed = 1
-          WHEN 'spam' THEN m.is_spam = 1 AND m.is_trashed = 0
-          WHEN 'archive' THEN m.is_archived = 1 AND m.is_trashed = 0 AND (m.snoozed_until IS NULL OR m.snoozed_until <= @now)
-          ELSE m.mailbox = @mailbox AND m.is_trashed = 0 AND m.is_spam = 0
-        END
-        AND (@category = '' OR m.smart_category = @category)
-        AND (@query = '' OR m.subject LIKE @likeQuery OR m.from_name LIKE @likeQuery OR m.from_email LIKE @likeQuery OR m.snippet LIKE @likeQuery)
-      ORDER BY COALESCE(m.sent_at, m.received_at, m.created_at) DESC LIMIT @limit OFFSET @offset`),
+    messageList: db.prepare(messageListSql('m.*')),
+    messageListMetadata: db.prepare(messageListSql(MESSAGE_METADATA_COLUMNS.split(',').map((column) => `m.${column.trim()}`).join(', '))),
     messageCount: db.prepare(`SELECT COUNT(*) AS count FROM messages m
       WHERE m.account_id = @accountId AND
         CASE @folder
-          WHEN 'inbox' THEN m.mailbox = 'INBOX' AND m.is_archived = 0 AND m.is_trashed = 0 AND m.is_spam = 0 AND (m.snoozed_until IS NULL OR m.snoozed_until <= @now)
+          WHEN 'inbox' THEN m.mailbox = 'INBOX' AND m.is_archived = 0 AND m.is_trashed = 0 AND m.is_spam = 0 AND m.is_draft = 0 AND (m.snoozed_until IS NULL OR m.snoozed_until <= @now)
           WHEN 'starred' THEN m.is_starred = 1 AND m.is_trashed = 0
           WHEN 'sent' THEN m.is_sent = 1 AND m.is_trashed = 0
-          WHEN 'drafts' THEN 0
+          WHEN 'drafts' THEN m.is_draft = 1 AND m.is_trashed = 0 AND m.is_spam = 0
           WHEN 'snoozed' THEN m.snoozed_until > @now AND m.is_trashed = 0 AND m.is_spam = 0
-          WHEN 'all' THEN m.is_trashed = 0 AND m.is_spam = 0
+          WHEN 'all' THEN m.is_trashed = 0 AND m.is_spam = 0 AND m.is_draft = 0
           WHEN 'trash' THEN m.is_trashed = 1
           WHEN 'spam' THEN m.is_spam = 1 AND m.is_trashed = 0
           WHEN 'archive' THEN m.is_archived = 1 AND m.is_trashed = 0 AND (m.snoozed_until IS NULL OR m.snoozed_until <= @now)
@@ -580,12 +919,12 @@ export function createRepositories(db) {
       FROM messages m
       WHERE m.account_id = @accountId AND
         CASE @folder
-          WHEN 'inbox' THEN m.mailbox = 'INBOX' AND m.is_archived = 0 AND m.is_trashed = 0 AND m.is_spam = 0 AND (m.snoozed_until IS NULL OR m.snoozed_until <= @now)
+          WHEN 'inbox' THEN m.mailbox = 'INBOX' AND m.is_archived = 0 AND m.is_trashed = 0 AND m.is_spam = 0 AND m.is_draft = 0 AND (m.snoozed_until IS NULL OR m.snoozed_until <= @now)
           WHEN 'starred' THEN m.is_starred = 1 AND m.is_trashed = 0
           WHEN 'sent' THEN m.is_sent = 1 AND m.is_trashed = 0
-          WHEN 'drafts' THEN 0
+          WHEN 'drafts' THEN m.is_draft = 1 AND m.is_trashed = 0 AND m.is_spam = 0
           WHEN 'snoozed' THEN m.snoozed_until > @now AND m.is_trashed = 0 AND m.is_spam = 0
-          WHEN 'all' THEN m.is_trashed = 0 AND m.is_spam = 0
+          WHEN 'all' THEN m.is_trashed = 0 AND m.is_spam = 0 AND m.is_draft = 0
           WHEN 'trash' THEN m.is_trashed = 1
           WHEN 'spam' THEN m.is_spam = 1 AND m.is_trashed = 0
           WHEN 'archive' THEN m.is_archived = 1 AND m.is_trashed = 0 AND (m.snoozed_until IS NULL OR m.snoozed_until <= @now)
@@ -632,7 +971,10 @@ export function createRepositories(db) {
           GROUP BY thread_id
         )
       ) AS snoozed,
-      (SELECT COUNT(*) FROM drafts WHERE account_id = @accountId) AS drafts,
+      (
+        (SELECT COUNT(*) FROM drafts WHERE account_id = @accountId)
+        + (SELECT COUNT(*) FROM messages WHERE account_id = @accountId AND is_draft = 1 AND is_trashed = 0 AND is_spam = 0)
+      ) AS drafts,
       (
         SELECT COUNT(*) FROM (
           SELECT thread_id FROM messages
@@ -640,6 +982,7 @@ export function createRepositories(db) {
             AND mailbox = 'INBOX'
             AND is_archived = 0 AND is_trashed = 0 AND is_spam = 0
             AND analyzed_at IS NULL
+            AND COALESCE(source_imported, 1) = 1
             AND (snoozed_until IS NULL OR snoozed_until <= @now)
             AND smart_category <> 'ops_quiet'
           GROUP BY thread_id
@@ -650,16 +993,16 @@ export function createRepositories(db) {
       id, account_id, thread_id, mailbox, uid, rfc_message_id, in_reply_to, references_json,
       subject, from_name, from_email, to_json, cc_json, bcc_json, reply_to_json,
       sent_at, received_at, html_body, text_body, snippet, attachments_json, labels_json,
-      is_read, is_starred, is_archived, is_trashed, is_spam, snoozed_until, is_sent,
+      is_read, is_starred, is_archived, is_trashed, is_spam, snoozed_until, is_sent, is_draft,
       smart_category, smart_category_reason, smart_category_rule, smart_category_version,
-      created_at, updated_at
+      source_imported, created_at, updated_at
     ) VALUES (
       @id, @account_id, @thread_id, @mailbox, @uid, @rfc_message_id, @in_reply_to, @references_json,
       @subject, @from_name, @from_email, @to_json, @cc_json, @bcc_json, @reply_to_json,
       @sent_at, @received_at, @html_body, @text_body, @snippet, @attachments_json, @labels_json,
-      @is_read, @is_starred, @is_archived, @is_trashed, @is_spam, @snoozed_until, @is_sent,
+      @is_read, @is_starred, @is_archived, @is_trashed, @is_spam, @snoozed_until, @is_sent, @is_draft,
       @smart_category, @smart_category_reason, @smart_category_rule, @smart_category_version,
-      @created_at, @updated_at
+      @source_imported, @created_at, @updated_at
     )`),
     messageUpdate: db.prepare(`UPDATE messages SET
       thread_id = @thread_id, mailbox = @mailbox, uid = @uid, rfc_message_id = @rfc_message_id,
@@ -670,9 +1013,10 @@ export function createRepositories(db) {
       attachments_json = @attachments_json, labels_json = @labels_json, is_read = @is_read,
       is_starred = @is_starred, is_archived = @is_archived, is_trashed = @is_trashed,
       is_spam = @is_spam, snoozed_until = @snoozed_until,
-      is_sent = @is_sent, smart_category = @smart_category,
+      is_sent = @is_sent, is_draft = @is_draft, smart_category = @smart_category,
       smart_category_reason = @smart_category_reason, smart_category_rule = @smart_category_rule,
-      smart_category_version = @smart_category_version, updated_at = @updated_at
+      smart_category_version = @smart_category_version,
+      source_imported = COALESCE(@source_imported, source_imported), updated_at = @updated_at
       WHERE id = @id`),
     messageRelocate: db.prepare(`UPDATE messages SET mailbox = @mailbox, uid = @uid, updated_at = @updated_at WHERE id = @id`),
     messageState: db.prepare(`UPDATE messages SET
@@ -692,9 +1036,23 @@ export function createRepositories(db) {
       ON CONFLICT(account_id, mailbox) DO UPDATE SET
         last_uid = excluded.last_uid, uid_validity = excluded.uid_validity,
         last_error = excluded.last_error, synced_at = excluded.synced_at`),
+    syncSkipUpsert: db.prepare(`INSERT INTO sync_skips (account_id, mailbox, uid, reason, seen_at)
+      VALUES (@account_id, @mailbox, @uid, @reason, @seen_at)
+      ON CONFLICT(account_id, mailbox, uid) DO UPDATE SET
+        reason = excluded.reason, seen_at = excluded.seen_at`),
+    syncSkipClear: db.prepare('DELETE FROM sync_skips WHERE account_id = ? AND mailbox = ?'),
+    maxMessageUpdated: db.prepare('SELECT MAX(updated_at) AS t FROM messages'),
+    maxSyncSynced: db.prepare('SELECT MAX(synced_at) AS t FROM sync_state'),
+    maxAccountUpdated: db.prepare('SELECT MAX(updated_at) AS t FROM accounts'),
+    pruneBodies: db.prepare(`UPDATE messages SET html_body = '', text_body = '', updated_at = @updated_at
+      WHERE COALESCE(received_at, sent_at, created_at) < @cutoff
+        AND (html_body != '' OR text_body != '')`),
     draftById: db.prepare('SELECT * FROM drafts WHERE id = ?'),
     draftList: db.prepare('SELECT * FROM drafts WHERE account_id = ? ORDER BY updated_at DESC'),
     draftListAll: db.prepare('SELECT * FROM drafts ORDER BY updated_at DESC'),
+    providerDraftMessages: db.prepare(`SELECT * FROM messages
+      WHERE account_id = ? AND is_draft = 1 AND is_trashed = 0 AND is_spam = 0
+      ORDER BY COALESCE(received_at, sent_at, created_at) DESC`),
     draftInsert: db.prepare(`INSERT INTO drafts (
       id, account_id, thread_id, to_json, cc_json, bcc_json, subject, html_body,
       text_body, attachments_json, created_at, updated_at
@@ -711,30 +1069,8 @@ export function createRepositories(db) {
     settingUpsert: db.prepare(`INSERT INTO settings (key, value_json, updated_at) VALUES (?, ?, ?)
       ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at`),
     messageRow: db.prepare('SELECT rowid, * FROM messages WHERE id = ?'),
-    ftsInsert: db.prepare(`INSERT INTO messages_fts(
-      rowid, subject, snippet, from_name, from_email, recipients, text_body
-    ) VALUES (@rowid, @subject, @snippet, @from_name, @from_email, @recipients, @text_body)`),
-    ftsDelete: db.prepare("INSERT INTO messages_fts(messages_fts, rowid) VALUES('delete', ?)"),
-    searchThreadIds: db.prepare(`SELECT m.thread_id AS threadId
-      FROM messages m
-      JOIN messages_fts fts ON fts.rowid = m.rowid
-      WHERE m.account_id = @accountId AND
-        CASE @folder
-          WHEN 'inbox' THEN m.mailbox = 'INBOX' AND m.is_archived = 0 AND m.is_trashed = 0 AND m.is_spam = 0 AND (m.snoozed_until IS NULL OR m.snoozed_until <= @now)
-          WHEN 'starred' THEN m.is_starred = 1 AND m.is_trashed = 0
-          WHEN 'sent' THEN m.is_sent = 1 AND m.is_trashed = 0
-          WHEN 'drafts' THEN 0
-          WHEN 'snoozed' THEN m.snoozed_until > @now AND m.is_trashed = 0 AND m.is_spam = 0
-          WHEN 'all' THEN m.is_trashed = 0 AND m.is_spam = 0
-          WHEN 'trash' THEN m.is_trashed = 1
-          WHEN 'spam' THEN m.is_spam = 1 AND m.is_trashed = 0
-          WHEN 'archive' THEN m.is_archived = 1 AND m.is_trashed = 0 AND (m.snoozed_until IS NULL OR m.snoozed_until <= @now)
-          ELSE m.mailbox = @mailbox AND m.is_trashed = 0 AND m.is_spam = 0
-        END
-        AND messages_fts MATCH @ftsQuery
-      GROUP BY m.thread_id
-      ORDER BY MAX(COALESCE(m.sent_at, m.received_at, m.created_at)) DESC
-      LIMIT @limit`),
+    ftsInsert: db.prepare(FTS_INSERT_SQL),
+    ftsDelete: db.prepare('DELETE FROM messages_fts WHERE rowid = ?'),
     passkeyById: db.prepare('SELECT * FROM passkeys WHERE id = ?'),
     passkeyList: db.prepare('SELECT * FROM passkeys ORDER BY created_at DESC'),
     passkeyCount: db.prepare('SELECT COUNT(*) AS count FROM passkeys'),
@@ -750,13 +1086,11 @@ export function createRepositories(db) {
   const syncFts = (id) => {
     const row = queries.messageRow.get(id);
     if (!row) return;
-    try {
-      queries.ftsDelete.run(row.rowid);
-    } catch {
-      // First insert has no FTS row yet; FTS5 errors on deleting a missing rowid.
-    }
+    queries.ftsDelete.run(row.rowid);
     queries.ftsInsert.run(ftsDocument(row, json));
   };
+
+  let queueSearch = () => {};
 
   const recomputeThread = db.transaction((threadId) => {
     const thread = queries.threadById.get(threadId);
@@ -777,7 +1111,7 @@ export function createRepositories(db) {
       latest_at: newest.sent_at || newest.received_at || newest.created_at,
       message_count: messages.length,
       unread_count: messages.filter((message) => !message.is_read).length,
-      unanalyzed_count: messages.filter((message) => !message.analyzed_at).length,
+      unanalyzed_count: messages.filter((message) => !message.analyzed_at && Number(message.source_imported ?? 1) === 1).length,
       is_starred: messages.some((message) => message.is_starred) ? 1 : 0,
       labels_json: stringify(labels),
       updated_at: now(),
@@ -785,7 +1119,81 @@ export function createRepositories(db) {
     return queries.threadById.get(threadId);
   });
 
+  let writeBatchDepth = 0;
+  const pendingThreadIds = new Set();
+  const pendingFtsIds = new Set();
+
+  const finishMessageWrite = (threadIds, messageId) => {
+    if (writeBatchDepth > 0) {
+      for (const threadId of threadIds) {
+        if (threadId) pendingThreadIds.add(threadId);
+      }
+      if (messageId) pendingFtsIds.add(messageId);
+      return;
+    }
+    for (const threadId of threadIds) {
+      if (threadId) recomputeThread(threadId);
+    }
+    if (messageId) {
+      syncFts(messageId);
+      queueSearch({ messageIds: [messageId] });
+    }
+  };
+
+  const insertMessageRow = (row) => {
+    queries.messageInsert.run(row);
+    finishMessageWrite([row.thread_id], row.id);
+    return publicMessage(queries.messageById.get(row.id));
+  };
+
+  const updateMessageRow = (existing, row) => {
+    queries.messageUpdate.run(row);
+    const threads = existing.thread_id === row.thread_id
+      ? [existing.thread_id]
+      : [existing.thread_id, row.thread_id];
+    finishMessageWrite(threads, existing.id);
+    return publicMessage(queries.messageById.get(existing.id));
+  };
+
   return {
+    runWriteBatch(fn) {
+      let indexedIds = [];
+      const result = db.transaction(() => {
+        writeBatchDepth += 1;
+        try {
+          const batched = fn();
+          if (writeBatchDepth === 1) {
+            for (const threadId of pendingThreadIds) recomputeThread(threadId);
+            for (const id of pendingFtsIds) syncFts(id);
+            indexedIds = [...pendingFtsIds];
+            pendingThreadIds.clear();
+            pendingFtsIds.clear();
+          }
+          return batched;
+        } finally {
+          writeBatchDepth -= 1;
+        }
+      })();
+      if (indexedIds.length) queueSearch({ messageIds: indexedIds });
+      return result;
+    },
+    setSearchIndexer(fn) {
+      queueSearch = typeof fn === 'function' ? fn : () => {};
+    },
+    checkpointWal() {
+      db.pragma('wal_checkpoint(TRUNCATE)');
+    },
+    vacuum() {
+      db.exec('VACUUM');
+      queries.settingUpsert.run(LAST_VACUUM_SETTING, JSON.stringify(now()), now());
+    },
+    vacuumIfDue({ minIntervalMs = 24 * 60 * 60 * 1000 } = {}) {
+      const last = json(queries.settingByKey.get(LAST_VACUUM_SETTING)?.value_json, null);
+      const lastMs = last ? Date.parse(last) : 0;
+      if (Number.isFinite(lastMs) && Date.now() - lastMs < minIntervalMs) return false;
+      this.vacuum();
+      return true;
+    },
     accounts: {
       list: () => queries.accountList.all().map(publicAccount),
       get: (id) => publicAccount(queries.accountById.get(id)),
@@ -803,7 +1211,10 @@ export function createRepositories(db) {
         queries.accountUpdate.run({ ...existing, ...input, id, updated_at: now() });
         return publicAccount(queries.accountById.get(id));
       },
-      remove: (id) => queries.accountDelete.run(id).changes > 0,
+      remove: (id) => {
+        queueSearch({ accountRemoved: id });
+        return queries.accountDelete.run(id).changes > 0;
+      },
       markSynced(id) {
         const timestamp = now();
         queries.accountSynced.run(timestamp, timestamp, id);
@@ -812,8 +1223,29 @@ export function createRepositories(db) {
     },
     messages: {
       get: (id) => publicMessage(queries.messageById.get(id)),
+      analysisStatus: db.transaction((ids) => ids.map((id) => {
+        const row = queries.messageAnalysisById.get(id);
+        return row ? { id: row.id, accountId: row.account_id,
+          isAnalyzed: Boolean(row.analyzed_at), analyzedAt: row.analyzed_at || null,
+          analyzedBy: row.analyzed_by || null } : null;
+      })),
       getRaw: (id) => queries.messageById.get(id) || null,
-      list({ accountId, folder = 'inbox', mailbox = 'INBOX', query = '', category = '', limit = 50, offset = 0 }) {
+      listUnanalyzed: db.transaction(({ accountId = null, limit = 50, afterTimestamp = null, afterId = null } = {}) => {
+        if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
+          throw new RangeError('Review queue limit must be an integer from 1 to 200.');
+        }
+        // The read transaction keeps the count and page in the same snapshot.
+        const scoped = accountId !== null;
+        const count = scoped ? queries.unanalyzedAccountMessageCount : queries.unanalyzedMessageCount;
+        const page = scoped
+          ? (afterTimestamp === null ? queries.unanalyzedAccountMessages : queries.unanalyzedAccountMessagesAfter)
+          : (afterTimestamp === null ? queries.unanalyzedMessages : queries.unanalyzedMessagesAfter);
+        const total = count.get({ accountId }).count;
+        const rows = page.all({ accountId, limit: limit + 1, afterTimestamp, afterId });
+        const items = rows.slice(0, limit).map(publicReviewMessage);
+        return { items, total, hasMore: rows.length > limit };
+      }),
+      list({ accountId, folder = 'inbox', mailbox = 'INBOX', query = '', category = '', limit = 50, offset = 0, includeBodies = true, includeTotal = true }) {
         const params = {
           accountId,
           folder,
@@ -825,8 +1257,9 @@ export function createRepositories(db) {
           offset,
           now: now(),
         };
-        const items = queries.messageList.all(params).map(publicMessage);
-        return { items, total: queries.messageCount.get(params).count };
+        const statement = includeBodies ? queries.messageList : queries.messageListMetadata;
+        const items = statement.all(params).map(includeBodies ? publicMessage : publicMessageMetadata);
+        return { items, ...(includeTotal ? { total: queries.messageCount.get(params).count } : {}) };
       },
       categoryCounts({ accountId, folder = 'inbox', mailbox = 'INBOX', query = '' }) {
         const counts = Object.fromEntries(SMART_CATEGORY_SLUGS.map((category) => [category, 0]));
@@ -843,6 +1276,7 @@ export function createRepositories(db) {
         }
         return counts;
       },
+      listDrafts: (accountId) => queries.providerDraftMessages.all(accountId).map(publicMessage),
       folderCounts(accountId) {
         const row = queries.folderBadgeCounts.get({ accountId, now: now() }) || {};
         return {
@@ -855,7 +1289,8 @@ export function createRepositories(db) {
       },
       forThread: (threadId) => queries.messagesByThread.all(threadId).map(publicMessage),
       findByRfcId: (accountId, messageId) => publicMessage(queries.messageByRfcId.get(accountId, messageId)),
-      upsert(input, meta = null) {
+      findByUid: (accountId, mailbox, uid) => publicMessage(queries.messageByUid.get(accountId, mailbox, uid)),
+      upsert: db.transaction((input, meta = null) => {
         const classification = classifyMessage(input);
         const classifiedInput = {
           ...input,
@@ -863,35 +1298,65 @@ export function createRepositories(db) {
           smart_category_reason: classification.categoryReason,
           smart_category_rule: classification.rule,
           smart_category_version: classification.version,
+          source_imported: input.source_imported === 0 ? 0 : 1,
         };
-        const byUid = classifiedInput.uid === null || classifiedInput.uid === undefined
+        const uid = classifiedInput.uid === null || classifiedInput.uid === undefined
           ? null
-          : db.prepare('SELECT * FROM messages WHERE account_id = ? AND mailbox = ? AND uid = ?')
-            .get(classifiedInput.account_id, classifiedInput.mailbox, classifiedInput.uid);
-        // A MOVE without UIDPLUS cannot tell us the destination UID. Reusing an
-        // RFC Message-ID here prevents a later mailbox sync from duplicating it.
-        const existing = byUid || (classifiedInput.rfc_message_id
+          : Number(classifiedInput.uid);
+        const byUid = uid === null || !Number.isInteger(uid)
+          ? null
+          : queries.messageByUid.get(classifiedInput.account_id, classifiedInput.mailbox, uid);
+        const byRfc = !byUid && classifiedInput.rfc_message_id
           ? queries.messageByRfcId.get(classifiedInput.account_id, classifiedInput.rfc_message_id)
-          : null);
+          : null;
         const timestamp = now();
-        const row = { ...classifiedInput, updated_at: timestamp };
-        if (existing) {
+        const row = {
+          ...classifiedInput,
+          uid,
+          is_draft: classifiedInput.is_draft ? 1 : 0,
+          updated_at: timestamp,
+        };
+
+        if (byUid) {
           if (meta) meta.created = false;
-          row.id = existing.id;
-          queries.messageUpdate.run(row);
-          recomputeThread(existing.thread_id);
-          if (existing.thread_id !== row.thread_id) recomputeThread(row.thread_id);
-          syncFts(existing.id);
-          return publicMessage(queries.messageById.get(existing.id));
+          row.id = byUid.id;
+          // Envelope-only IMAP hits must not wipe a fully imported source.
+          if (Number(byUid.source_imported ?? 1) === 1 && classifiedInput.source_imported === 0) {
+            return publicMessage(byUid);
+          }
+          return updateMessageRow(byUid, row);
         }
+
+        // A local Sent copy has no UID yet; the next Sent sync finds it by
+        // Message-ID in the same mailbox and fills the server-assigned UID in.
+        if (byRfc && byRfc.mailbox === classifiedInput.mailbox) {
+          if (meta) meta.created = false;
+          row.id = byRfc.id;
+          if (Number(byRfc.source_imported ?? 1) === 1 && classifiedInput.source_imported === 0) {
+            return publicMessage(byRfc);
+          }
+          return updateMessageRow(byRfc, row);
+        }
+
+        // Same RFC Message-ID in a different mailbox is a copy, not a move.
+        // Rewriting the other row's (mailbox, uid) collides with UNIQUE when
+        // that key is already occupied and silently relocates the original.
         if (meta) meta.created = true;
         row.id ||= randomUUID();
         row.created_at ||= timestamp;
-        queries.messageInsert.run(row);
-        recomputeThread(row.thread_id);
-        syncFts(row.id);
-        return publicMessage(queries.messageById.get(row.id));
-      },
+        try {
+          return insertMessageRow(row);
+        } catch (error) {
+          if (!isUniqueMailboxUidConstraint(error)) throw error;
+          if (meta) meta.created = false;
+          const occupant = uid === null ? null : queries.messageByUid.get(
+            classifiedInput.account_id,
+            classifiedInput.mailbox,
+            uid,
+          );
+          return publicMessage(occupant || byRfc);
+        }
+      }),
       setState(id, state) {
         const row = queries.messageById.get(id);
         if (!row) return null;
@@ -909,36 +1374,89 @@ export function createRepositories(db) {
           analyzed_by: state.isAnalyzed ? String(state.analyzedBy || '').slice(0, 120) : '',
         });
         recomputeThread(row.thread_id);
+        queueSearch({ messageIds: [id] });
         return publicMessage(queries.messageById.get(id));
       },
       relocate(id, { mailbox, uid }) {
         const row = queries.messageById.get(id);
         if (!row) return null;
         queries.messageRelocate.run({ id, mailbox, uid, updated_at: now() });
+        queueSearch({ messageIds: [id] });
         return publicMessage(queries.messageById.get(id));
+      },
+      searchConversations({
+        accountIds = [],
+        folder = 'inbox',
+        mailbox = 'INBOX',
+        parsed = null,
+        ftsQuery = '',
+        category = '',
+        personEmails = [],
+        hideQuiet = false,
+        extraThreadIds = [],
+        limit = 50,
+        offset = 0,
+      } = {}) {
+        const built = buildConversationSearch({
+          accountIds,
+          folder,
+          mailbox,
+          parsed,
+          ftsQuery,
+          category,
+          personEmails,
+          hideQuiet,
+          extraThreadIds,
+          limit,
+          offset,
+          nowIso: now(),
+        });
+        if (built.empty) return { threadIds: [], total: 0, categoryCounts: [] };
+        const threadIds = db.prepare(built.pageSql).all(built.params).map((row) => row.threadId);
+        const total = Number(db.prepare(built.countSql).get(built.params)?.total) || 0;
+        const categoryCounts = db.prepare(built.categorySql).all(built.params);
+        return { threadIds, total, categoryCounts };
       },
       searchThreadIds({ accountId, folder = 'inbox', mailbox = 'INBOX', ftsQuery, limit = 500 }) {
         if (!ftsQuery) return [];
-        return queries.searchThreadIds.all({
-          accountId,
+        return this.searchConversations({
+          accountIds: [accountId],
           folder,
           mailbox,
           ftsQuery,
           limit,
-          now: now(),
-        }).map((row) => row.threadId);
+          offset: 0,
+        }).threadIds;
       },
-      forThreads(threadIds = [], { folder = '', mailbox = 'INBOX' } = {}) {
+      searchThreadPage({ after = '', limit = 20 } = {}) {
+        return db.prepare('SELECT id FROM threads WHERE id > ? ORDER BY id ASC LIMIT ?')
+          .all(String(after || ''), limit)
+          .map((row) => row.id);
+      },
+      searchThreadIdsForMessages(messageIds = []) {
+        const ids = [...new Set(messageIds.filter(Boolean))];
+        if (!ids.length) return [];
+        return db.prepare(`SELECT DISTINCT thread_id AS id FROM messages WHERE id IN (${ids.map(() => '?').join(',')})`)
+          .all(...ids)
+          .map((row) => row.id);
+      },
+      searchRowsForThreads(threadIds = []) {
         const ids = [...new Set(threadIds.filter(Boolean))];
         if (!ids.length) return [];
-        const sql = `SELECT * FROM messages WHERE thread_id IN (${ids.map(() => '?').join(',')})
+        return db.prepare(`SELECT ${SEARCH_INDEX_COLUMNS} FROM messages WHERE thread_id IN (${ids.map(() => '?').join(',')})`)
+          .all(...ids);
+      },
+      forThreads(threadIds = [], { folder = '', mailbox = 'INBOX', includeBodies = true } = {}) {
+        const ids = [...new Set(threadIds.filter(Boolean))];
+        if (!ids.length) return [];
+        const sql = `SELECT ${includeBodies ? '*' : MESSAGE_METADATA_COLUMNS} FROM messages WHERE thread_id IN (${ids.map(() => '?').join(',')})
           ${folder ? `AND CASE ?
-            WHEN 'inbox' THEN mailbox = 'INBOX' AND is_archived = 0 AND is_trashed = 0 AND is_spam = 0 AND (snoozed_until IS NULL OR snoozed_until <= ?)
+            WHEN 'inbox' THEN mailbox = 'INBOX' AND is_archived = 0 AND is_trashed = 0 AND is_spam = 0 AND is_draft = 0 AND (snoozed_until IS NULL OR snoozed_until <= ?)
             WHEN 'starred' THEN is_starred = 1 AND is_trashed = 0
             WHEN 'sent' THEN is_sent = 1 AND is_trashed = 0
-            WHEN 'drafts' THEN 0
+            WHEN 'drafts' THEN is_draft = 1 AND is_trashed = 0 AND is_spam = 0
             WHEN 'snoozed' THEN snoozed_until > ? AND is_trashed = 0 AND is_spam = 0
-            WHEN 'all' THEN is_trashed = 0 AND is_spam = 0
+            WHEN 'all' THEN is_trashed = 0 AND is_spam = 0 AND is_draft = 0
             WHEN 'trash' THEN is_trashed = 1
             WHEN 'spam' THEN is_spam = 1 AND is_trashed = 0
             WHEN 'archive' THEN is_archived = 1 AND is_trashed = 0 AND (snoozed_until IS NULL OR snoozed_until <= ?)
@@ -950,7 +1468,7 @@ export function createRepositories(db) {
         const params = folder
           ? [...ids, folder, nowValue, nowValue, nowValue, mailbox]
           : ids;
-        return statement.all(...params).map(publicMessage);
+        return statement.all(...params).map(includeBodies ? publicMessage : publicMessageMetadata);
       },
     },
     threads: {
@@ -980,6 +1498,33 @@ export function createRepositories(db) {
     sync: {
       get: (accountId, mailbox) => queries.syncState.get(accountId, mailbox) || null,
       save: (state) => queries.syncStateUpsert.run(state),
+      recordSkip(state) {
+        queries.syncSkipUpsert.run({
+          account_id: state.account_id,
+          mailbox: state.mailbox,
+          uid: Number(state.uid),
+          reason: String(state.reason || 'import-failed').slice(0, 500),
+          seen_at: state.seen_at || now(),
+        });
+      },
+      clearSkips: (accountId, mailbox) => queries.syncSkipClear.run(accountId, mailbox),
+    },
+    changes: {
+      stamp() {
+        const times = [
+          queries.maxMessageUpdated.get()?.t,
+          queries.maxSyncSynced.get()?.t,
+          queries.maxAccountUpdated.get()?.t,
+        ].filter(Boolean).sort();
+        return { changedAt: times.at(-1) || null };
+      },
+    },
+    retention: {
+      // Clears stored bodies only. The contentless FTS index keeps tokens until
+      // the next upsert, which is what lets pruned mail stay searchable.
+      pruneBodies(cutoffIso) {
+        return queries.pruneBodies.run({ cutoff: cutoffIso, updated_at: now() }).changes;
+      },
     },
     drafts: {
       get: (id) => publicDraft(queries.draftById.get(id), { includeContent: true }),
@@ -1026,8 +1571,15 @@ export function createRepositories(db) {
       },
       remove: (id) => queries.passkeyDelete.run(id).changes > 0,
     },
-    close: () => db.close(),
+    close() {
+      try {
+        db.pragma('wal_checkpoint(TRUNCATE)');
+      } catch {
+        // A leftover reader must not block shutdown.
+      }
+      db.close();
+    },
   };
 }
 
-export { json, stringify, now, publicAccount, publicMessage, publicThread, publicDraft };
+export { json, stringify, now, publicAccount, publicMessage, publicThread, publicDraft, isUniqueMailboxUidConstraint };

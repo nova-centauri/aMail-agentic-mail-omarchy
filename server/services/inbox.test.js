@@ -1,0 +1,435 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+import { createDatabase, createRepositories } from '../db.js';
+import { listConversations } from './inbox.js';
+
+function fixture(t) {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'amail-inbox-'));
+  const db = createDatabase({ dataDir, dbPath: path.join(dataDir, 'mail.sqlite') });
+  const executed = [];
+  // Observe the real SQL, including lazy statements, without recording mail.
+  const tracked = new Proxy(db, {
+    get(target, property) {
+      if (property === 'prepare') return (sql) => {
+        const statement = target.prepare(sql);
+        return new Proxy(statement, {
+          get(prepared, method) {
+            const value = prepared[method];
+            if (['all', 'get', 'run'].includes(method)) return (...args) => {
+              executed.push(sql);
+              return value.apply(prepared, args);
+            };
+            return typeof value === 'function' ? value.bind(prepared) : value;
+          },
+        });
+      };
+      const value = target[property];
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  const repos = createRepositories(tracked);
+  t.after(() => {
+    repos.close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  });
+  const account = repos.accounts.create({
+    email: 'owner@example.test', display_name: 'Owner', avatar_blob: null, avatar_mime: null,
+    color: '#1a73e8', provider: 'custom', imap_host: 'imap.example.test', imap_port: 993,
+    imap_secure: 1, smtp_host: 'smtp.example.test', smtp_port: 465, smtp_secure: 1,
+    credential_ciphertext: 'fixture', signature: '', sync_enabled: 0,
+  });
+  let uid = 0;
+  const add = (thread, extra = {}) => repos.messages.upsert({
+    account_id: account.id, thread_id: thread.id, mailbox: 'INBOX', uid: ++uid,
+    rfc_message_id: `<fixture-${uid}@example.test>`, in_reply_to: null, references_json: '[]',
+    subject: thread.subject, from_name: '', from_email: 'friend@example.test',
+    to_json: '[]', cc_json: '[]', bcc_json: '[]', reply_to_json: null,
+    sent_at: `2026-01-01T00:${String(uid).padStart(2, '0')}:00.000Z`,
+    received_at: `2026-01-01T00:${String(uid).padStart(2, '0')}:00.000Z`,
+    html_body: '', text_body: '', snippet: 'Short list preview', attachments_json: '[]', labels_json: '[]',
+    is_read: 0, is_starred: 0, is_archived: 0, is_trashed: 0, is_spam: 0,
+    snoozed_until: null, is_sent: 0, ...extra,
+  });
+  const thread = (subject) => repos.threads.create({
+    account_id: account.id, subject, normalized_subject: subject.toLowerCase(), latest_at: '2026-01-01T00:00:00.000Z',
+  });
+  return { repos, executed, account, add, thread };
+}
+
+test('conversation pages omit large bodies, avoid candidate totals, and enrich only visible threads', async (t) => {
+  const { repos, executed, add, thread } = fixture(t);
+  const body = `bodyonlyneedle ${'x'.repeat(256 * 1024)}`;
+  const ids = [];
+  let message;
+  for (let index = 0; index < 6; index += 1) {
+    const conversation = thread(`Conversation ${index}`);
+    ids.push(conversation.id);
+    message = add(conversation, { text_body: body, html_body: `<p>${body}</p>` });
+  }
+  const assertPage = async (query) => {
+    executed.length = 0;
+    const page = await listConversations(repos, { page: 2, pageSize: 2, query });
+    assert.equal(page.total, 6);
+    assert.equal(page.categoryCounts.primary, 6);
+    assert.deepEqual(page.messages.map((item) => item.id), [ids[3], ids[2]]);
+    assert.equal(executed.filter((sql) => sql === 'SELECT * FROM threads WHERE id = ?').length, 2);
+    assert.equal(executed.some((sql) => sql.startsWith('SELECT COUNT(*) AS count FROM messages m')), false);
+    const candidateSql = executed.filter((sql) => /FROM messages(?: m)?\s+WHERE/.test(sql) && /^SELECT (?:m\.)?id,/.test(sql));
+    assert.equal(candidateSql.length, 1);
+    assert.doesNotMatch(candidateSql[0], /html_body|text_body|SELECT \*/);
+    for (const item of page.messages) {
+      assert.equal(Object.hasOwn(item, 'htmlBody'), false);
+      assert.equal(Object.hasOwn(item, 'textBody'), false);
+    }
+    assert.ok(JSON.stringify(page).length < 10_000);
+  };
+  await assertPage('');
+  await assertPage('bodyonlyneedle'); // FTS finds content even though candidates omit it.
+  assert.equal(repos.messages.get(message.id).textBody, body);
+  assert.equal(repos.messages.forThread(message.threadId)[0].htmlBody, `<p>${body}</p>`);
+});
+
+test('attachment filters preserve empty and malformed cases with large inline payloads', async (t) => {
+  const { repos, add, thread } = fixture(t);
+  const withAttachment = thread('Large inline attachment');
+  add(withAttachment, { attachments_json: JSON.stringify([{ filename: 'image.png', content: 'x'.repeat(512 * 1024) }]) });
+  const empty = thread('Empty attachment list');
+  add(empty, { attachments_json: '[  ]' });
+  const malformed = thread('Malformed legacy metadata');
+  add(malformed, { attachments_json: 'invalid' });
+  assert.deepEqual((await listConversations(repos, { query: 'has:attachment' })).messages.map((m) => m.id), [withAttachment.id]);
+  assert.deepEqual(new Set((await listConversations(repos, { query: '-has:attachment' })).messages.map((m) => m.id)), new Set([empty.id, malformed.id]));
+});
+
+test('pagination preserves matching against older messages and whole-thread state aggregates', async (t) => {
+  const { repos, executed, add, thread } = fixture(t);
+  const mixed = thread('Mixed state');
+  add(mixed, { from_email: 'older@example.test', is_starred: 1 });
+  const latest = add(mixed, { is_read: 1 });
+  repos.messages.setState(latest.id, { isAnalyzed: true });
+  add(mixed, { mailbox: 'Archive', is_archived: 1, from_email: 'archived@example.test' });
+  add(thread('Other thread'));
+  for (const query of ['from:older@example.test is:unread', 'from:older@example.test is:unanalyzed', 'from:older@example.test is:starred']) {
+    executed.length = 0;
+    const page = await listConversations(repos, { query, pageSize: 1 });
+    assert.equal(page.total, 1);
+    assert.equal(page.messages[0].id, mixed.id);
+    assert.equal(page.messages[0].latestMessageId, latest.id);
+    assert.equal(page.messages[0].messageCount, 3);
+    assert.equal(page.messages[0].unreadCount, 2);
+    assert.equal(page.messages[0].unanalyzedCount, 2);
+    assert.equal(page.messages[0].isRead, false);
+    assert.equal(page.messages[0].isAnalyzed, false);
+    assert.equal(page.messages[0].isStarred, true);
+    assert.equal(executed.filter((sql) => sql === 'SELECT * FROM threads WHERE id = ?').length, 1);
+  }
+  assert.equal((await listConversations(repos, { query: 'from:older@example.test is:analyzed' })).total, 0);
+});
+
+test('operator and FTS search paginate through the whole cached corpus', async (t) => {
+  const { repos, add, thread } = fixture(t);
+  const oldFrom = thread('Ancient invoice');
+  add(oldFrom, {
+    from_email: 'accounts@vendor.test',
+    from_name: 'Vendor Accounts',
+    text_body: 'unique-corpus-token winter-close',
+    snippet: 'unique-corpus-token',
+    sent_at: '2020-01-01T00:00:00.000Z',
+    received_at: '2020-01-01T00:00:00.000Z',
+    uid: 1,
+  });
+  const originMs = Date.parse('2026-06-01T00:00:00.000Z');
+  for (let index = 0; index < 1100; index += 1) {
+    const timestamp = new Date(originMs + ((1100 - index) * 1000)).toISOString();
+    add(thread(`Recent ${index}`), {
+      from_email: 'noreply@example.test',
+      sent_at: timestamp,
+      received_at: timestamp,
+      uid: index + 2,
+      rfc_message_id: `<recent-${index}@example.test>`,
+    });
+  }
+  const fromPage = await listConversations(repos, { query: 'from:accounts@vendor.test', pageSize: 10 });
+  assert.equal(fromPage.total, 1);
+  assert.equal(fromPage.messages[0].id, oldFrom.id);
+
+  const ftsPage = await listConversations(repos, { query: 'unique-corpus-token', page: 1, pageSize: 5 });
+  assert.equal(ftsPage.total, 1);
+  assert.equal(ftsPage.messages[0].id, oldFrom.id);
+
+  const newest = await listConversations(repos, { page: 1, pageSize: 50 });
+  assert.equal(newest.total, 1101);
+  assert.equal(newest.messages.length, 50);
+  const later = await listConversations(repos, { page: 23, pageSize: 50 });
+  assert.equal(later.total, 1101);
+  assert.ok(later.messages.some((item) => item.id === oldFrom.id));
+});
+
+test('attachment filenames are indexed and pruneBodies keeps existing FTS tokens', async (t) => {
+  const { repos, add, thread } = fixture(t);
+  const conversation = thread('Catering');
+  const message = add(conversation, {
+    text_body: 'please find the winter menu attached',
+    snippet: 'please find the winter menu attached',
+    attachments_json: JSON.stringify([{ index: 0, filename: 'wintermenu.pdf', contentType: 'application/pdf', size: 2048 }]),
+  });
+  const byName = await listConversations(repos, { query: 'wintermenu' });
+  assert.equal(byName.total, 1);
+  assert.equal(byName.messages[0].id, conversation.id);
+
+  const pruned = repos.retention.pruneBodies('2099-01-01T00:00:00.000Z');
+  assert.equal(pruned, 1);
+  assert.equal(repos.messages.get(message.id).textBody, '');
+  const stillFound = await listConversations(repos, { query: 'winter menu attached' });
+  assert.equal(stillFound.total, 1);
+  assert.equal(stillFound.messages[0].id, conversation.id);
+});
+
+test('human leftover text searches the provider; MCP and analyzed filters stay cache-only', async (t) => {
+  const { repos, add, thread } = fixture(t);
+  add(thread('Cached'));
+  const calls = [];
+  const mailService = {
+    async searchAndMaterialize(args) {
+      calls.push(args);
+      return { threadIds: [] };
+    },
+  };
+  await listConversations(repos, { query: 'invoice', mailService, searchSource: 'human' });
+  assert.equal(calls.length, 1);
+  calls.length = 0;
+  await listConversations(repos, { query: 'invoice', mailService, searchSource: 'mcp' });
+  assert.equal(calls.length, 0);
+  await listConversations(repos, { query: 'invoice is:unanalyzed', mailService, searchSource: 'human' });
+  assert.equal(calls.length, 0);
+  await listConversations(repos, { query: 'from:ada@example.test', mailService, searchSource: 'human' });
+  assert.equal(calls.length, 0);
+  await listConversations(repos, { query: 'in:anywhere invoice', mailService, searchSource: 'mcp' });
+  assert.equal(calls.length, 1);
+});
+
+test('IMAP envelope hits join leftover-text pages and stay out of analyzed filters', async (t) => {
+  const { repos, account, thread } = fixture(t);
+  const conversation = thread('Old invoice');
+  const mailService = {
+    async searchAndMaterialize() {
+      repos.messages.upsert({
+        account_id: account.id,
+        thread_id: conversation.id,
+        mailbox: 'INBOX',
+        uid: 9001,
+        rfc_message_id: '<envelope-hit@example.test>',
+        in_reply_to: null,
+        references_json: '[]',
+        subject: 'Old invoice',
+        from_name: 'Vendor',
+        from_email: 'accounts@vendor.test',
+        to_json: '[]',
+        cc_json: '[]',
+        bcc_json: '[]',
+        reply_to_json: null,
+        sent_at: '2019-01-01T00:00:00.000Z',
+        received_at: '2019-01-01T00:00:00.000Z',
+        html_body: '',
+        text_body: '',
+        snippet: 'Old invoice',
+        attachments_json: '[]',
+        labels_json: '[]',
+        is_read: 0,
+        is_starred: 0,
+        is_archived: 0,
+        is_trashed: 0,
+        is_spam: 0,
+        snoozed_until: null,
+        is_sent: 0,
+        source_imported: 0,
+      });
+      return { threadIds: [conversation.id] };
+    },
+  };
+  const page = await listConversations(repos, {
+    query: 'bodyonlyword',
+    mailService,
+    searchSource: 'human',
+  });
+  assert.equal(page.total, 1);
+  assert.equal(page.messages[0].id, conversation.id);
+  assert.equal(page.messages[0].sourceImported, false);
+  assert.equal(page.folderCounts.unanalyzed, 0);
+  assert.equal((await listConversations(repos, { query: 'bodyonlyword is:unanalyzed' })).total, 0);
+  assert.equal((await listConversations(repos, { query: 'bodyonlyword is:analyzed' })).total, 0);
+});
+
+test('Typesense rank order is kept and a dead engine falls back to FTS', async (t) => {
+  const { repos, add, thread } = fixture(t);
+  const older = thread('Older');
+  add(older, {
+    text_body: 'alpha report',
+    snippet: 'alpha report',
+    sent_at: '2020-01-01T00:00:00.000Z',
+    received_at: '2020-01-01T00:00:00.000Z',
+  });
+  const newer = thread('Newer');
+  add(newer, {
+    text_body: 'alpha report',
+    snippet: 'alpha report',
+    sent_at: '2026-01-01T00:00:00.000Z',
+    received_at: '2026-01-01T00:00:00.000Z',
+  });
+  repos.searchEngine = {
+    enabled: true,
+    async searchConversations() {
+      return {
+        threadIds: [older.id, newer.id],
+        total: 2,
+        categoryCounts: [{ category: 'primary', count: 2 }],
+      };
+    },
+  };
+  const ranked = await listConversations(repos, { query: 'alpha report', pageSize: 10 });
+  assert.deepEqual(ranked.messages.map((item) => item.id), [older.id, newer.id]);
+  assert.equal(ranked.categoryCounts.primary, 2);
+
+  repos.searchEngine = {
+    enabled: true,
+    async searchConversations() {
+      throw new Error('typesense down');
+    },
+  };
+  const fallback = await listConversations(repos, { query: 'alpha report', pageSize: 10 });
+  assert.equal(fallback.total, 2);
+  assert.equal(fallback.messages[0].id, newer.id);
+});
+
+test('Typesense pages are not clipped and analyzed text stays off IMAP', async (t) => {
+  const { repos } = fixture(t);
+  let paging = null;
+  const providerCalls = [];
+  repos.searchEngine = {
+    enabled: true,
+    async searchConversations(args) {
+      paging = args;
+      return { threadIds: [], total: 1200, categoryCounts: [] };
+    },
+  };
+  const mailService = {
+    async searchAndMaterialize(args) {
+      providerCalls.push(args);
+      return { threadIds: [] };
+    },
+  };
+  const page = await listConversations(repos, { query: 'invoice', page: 21, pageSize: 50, mailService, searchSource: 'human' });
+  assert.equal(page.total, 1200);
+  assert.equal(paging.offset, 1000);
+  assert.equal(paging.limit, 50);
+  assert.equal(providerCalls.length, 1);
+
+  providerCalls.length = 0;
+  paging = null;
+  await listConversations(repos, { query: 'invoice is:unanalyzed', mailService, searchSource: 'human' });
+  assert.equal(providerCalls.length, 0);
+  assert.equal(paging.parsed.isAnalyzed, false);
+  await listConversations(repos, { query: 'from:ada@example.test', mailService, searchSource: 'human' });
+  assert.equal(providerCalls.length, 0);
+});
+
+test('Typesense results still include IMAP hits that are not in the index', async (t) => {
+  const { repos, account, thread } = fixture(t);
+  const conversation = thread('Old invoice');
+  repos.searchEngine = {
+    enabled: true,
+    async searchConversations() {
+      return { threadIds: [], total: 0, categoryCounts: [] };
+    },
+    async matchingThreadIds() {
+      return new Set();
+    },
+  };
+  const mailService = {
+    async searchAndMaterialize() {
+      repos.messages.upsert({
+        account_id: account.id,
+        thread_id: conversation.id,
+        mailbox: 'INBOX',
+        uid: 9001,
+        rfc_message_id: '<envelope-hit@example.test>',
+        in_reply_to: null,
+        references_json: '[]',
+        subject: 'Old invoice',
+        from_name: 'Vendor',
+        from_email: 'accounts@vendor.test',
+        to_json: '[]',
+        cc_json: '[]',
+        bcc_json: '[]',
+        reply_to_json: null,
+        sent_at: '2019-01-01T00:00:00.000Z',
+        received_at: '2019-01-01T00:00:00.000Z',
+        html_body: '',
+        text_body: '',
+        snippet: 'Old invoice',
+        attachments_json: '[]',
+        labels_json: '[]',
+        is_read: 0,
+        is_starred: 0,
+        is_archived: 0,
+        is_trashed: 0,
+        is_spam: 0,
+        snoozed_until: null,
+        is_sent: 0,
+        source_imported: 0,
+      });
+      return { threadIds: [conversation.id] };
+    },
+  };
+  const page = await listConversations(repos, {
+    query: 'bodyonlyword',
+    mailService,
+    searchSource: 'human',
+  });
+  assert.equal(page.total, 1);
+  assert.equal(page.messages[0].id, conversation.id);
+  assert.equal(page.messages[0].sourceImported, false);
+  assert.equal((await listConversations(repos, { query: 'bodyonlyword is:unanalyzed' })).total, 0);
+});
+
+test('provider Drafts messages list with local drafts and stay out of the inbox', async (t) => {
+  const { repos, account, add, thread } = fixture(t);
+  add(thread('Lab standup notes'), {
+    subject: 'Lab standup notes',
+    from_email: 'ops@lab.example',
+  });
+  add(thread('Q3 budget notes'), {
+    mailbox: '[Gmail]/Drafts',
+    is_draft: 1,
+    is_read: 1,
+    subject: 'Q3 budget notes',
+    from_email: 'finance@lab.example',
+    to_json: JSON.stringify([{ name: 'Finance', email: 'finance@lab.example' }]),
+    text_body: 'Hold the numbers.',
+  });
+  repos.drafts.create({
+    account_id: account.id,
+    thread_id: null,
+    to_json: '[]',
+    cc_json: '[]',
+    bcc_json: '[]',
+    subject: 'Local compose',
+    html_body: '',
+    text_body: 'local',
+    attachments_json: '[]',
+  });
+
+  const drafts = await listConversations(repos, { folder: 'drafts' });
+  assert.equal(drafts.total, 2);
+  const provider = drafts.messages.find((message) => message.subject === 'Q3 budget notes');
+  assert.equal(provider.isDraft, true);
+  assert.ok(provider.draftId);
+  assert.ok(drafts.messages.some((message) => message.subject === 'Local compose'));
+  const inbox = await listConversations(repos, { folder: 'inbox' });
+  assert.equal(inbox.messages.some((message) => message.subject === 'Q3 budget notes'), false);
+  assert.ok(inbox.messages.some((message) => message.subject === 'Lab standup notes'));
+  assert.equal(inbox.folderCounts.drafts, 2);
+});

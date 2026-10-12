@@ -16,26 +16,26 @@
     "build": "vite build",
     "start": "node server/index.js",
     "check": "npm run build && node --check server/index.js",
-    "test": "node --test server/**/*.test.js plugin/*.test.js && vitest run"
+    "test": "node --test \"server/**/*.test.js\" \"plugin/*.test.js\" && vitest run"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
     "@simplewebauthn/browser": "^13.3.0",
     "@simplewebauthn/server": "^13.3.2",
-    "better-sqlite3": "^12.4.1",
+    "better-sqlite3-multiple-ciphers": "13.0.3",
     "cheerio": "^1.1.2",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
     "express-rate-limit": "^8.6.2",
     "helmet": "^8.1.0",
-    "imapflow": "^1.0.190",
-    "mailparser": "^3.9.0",
-    "nodemailer": "^9.0.3",
+    "imapflow": "^1.7.8",
+    "mailparser": "^3.9.33",
+    "nodemailer": "^10.0.13",
     "pino": "^10.3.1",
     "pino-http": "^11.0.0",
     "sanitize-html": "^2.17.0",
-    "undici": "8.10.0",
+    "undici": "8.11.2",
     "uuid": "^14.0.1",
     "zod": "^4.1.12"
   },
@@ -52,6 +52,9 @@
     "vitest": "^4.1.10"
   },
   "overrides": {
-    "html-to-text": "10.0.1"
+    "html-to-text": "10.0.1",
+    "cheerio": {
+      "undici": "7.30.0"
+    }
   }
 }

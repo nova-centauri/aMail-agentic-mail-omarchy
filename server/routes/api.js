@@ -1,13 +1,15 @@
 import express from 'express';
 import rateLimit from 'express-rate-limit';
-import { readSignedToken, timingSafeMatch } from '../services/crypto.js';
+import { readSignedToken } from '../services/crypto.js';
 import { hydrateCidImages, hydrateRemoteContent } from '../services/message-html.js';
 import {
   accountTestInput,
+  accountLoginSettings,
   parseAvatar,
   serializeAccountInput,
 } from '../services/account-input.js';
-import { listConversations, parseNumber } from '../services/inbox.js';
+import { listConversations, listStoredDrafts, parseNumber } from '../services/inbox.js';
+import { resolveSearchBackend } from '../services/search-engine.js';
 import { HIDDEN_DEFAULT_CATEGORIES, configuredOpsSources } from '../services/smart-filter.js';
 import { loadPersonFlags, publicPersonFlag, savePersonFlags } from '../services/person-flags.js';
 import {
@@ -18,8 +20,8 @@ import {
 import { normalizeComposeAttachments } from '../services/compose-attachments.js';
 import { sanitizeComposeHtml } from '../utils/signature.js';
 import { AppError, ConflictError, NotFoundError, ServiceUnavailableError, ValidationError } from '../errors.js';
-import { accessGate, requestHasAccess, sessionCookieClearOptions, sessionCookieOptions } from '../middleware/auth.js';
-import { LEGACY_SESSION_COOKIE, SESSION_COOKIE } from '../config.js';
+import { accessGate, createAuthenticator } from '../middleware/auth.js';
+import { registerKeyslotManagement, registerKeyslotProvisioning } from './keyslots.js';
 import { NOOP_EVENTS } from '../services/events.js';
 
 function initials(value) {
@@ -94,21 +96,41 @@ function updateTargets(repos, mailService, id, state) {
   return Promise.all(repos.messages.forThread(thread.id).map((item) => mailService.updateMessageState(item.id, state)));
 }
 
-export function registerApi(app, { config, repos, mailService, remoteContent, passkeys, events = NOOP_EVENTS, idle = null }) {
+export function registerApi(app, {
+  config,
+  repos,
+  mailService,
+  remoteContent,
+  passkeys,
+  auth = createAuthenticator({ config }),
+  vault = null,
+  events = NOOP_EVENTS,
+  idle = null,
+}) {
+  // In keyslot mode `config` is a proxy whose key material throws while the
+  // harness is locked, so health reads only static settings plus vault status.
+  const keyStatus = () => (vault ? vault.status() : { keyMode: 'env', locked: false, initialized: true });
+  const activeIdle = () => vault?.current?.()?.idle || idle || null;
   app.get('/api/health', (_request, response) => {
+    const status = keyStatus();
     response.json({
       status: 'ok',
       version: '0.1.0',
       releaseSha: config.releaseSha || null,
       // Capability flags let thin clients (the Omarchy plugin) pick push over
-      // polling without probing every endpoint.
-      features: ['events', ...(idle ? ['idle'] : [])],
+      // polling without probing every endpoint. No account count: this
+      // endpoint answers unauthenticated for container health checks.
+      features: ['events', ...(activeIdle() ? ['idle'] : [])],
       eventSeq: events.seq,
-      idle: idle ? idle.status() : null,
-      accounts: repos.accounts.list().length,
-      authProtected: Boolean(config.accessToken),
-      credentialsConfigured: Boolean(config.credentialKey),
+      idle: activeIdle() ? activeIdle().status() : null,
+      authProtected: auth.protected,
+      credentialsConfigured: vault ? true : Boolean(config.credentialKey),
+      databaseEncrypted: vault ? true : Boolean(config.databaseKey),
+      keyMode: status.keyMode,
+      locked: status.locked,
+      initialized: status.initialized,
       remoteContentProxyConfigured: Boolean(config.remoteContentProxyUrl),
+      searchEngine: resolveSearchBackend(config).name,
       remoteContentDirectDevelopmentOnly: Boolean(config.allowDirectRemoteContent),
       webauthnRpId: config.webauthnRpId || null,
       webauthnOrigins: config.webauthnOrigins || [],
@@ -116,25 +138,30 @@ export function registerApi(app, { config, repos, mailService, remoteContent, pa
   });
 
   app.get('/api/session', (request, response) => {
+    const status = keyStatus();
     response.json({
-      protected: Boolean(config.accessToken),
-      authenticated: requestHasAccess(request, config),
+      protected: auth.protected,
+      authenticated: auth.requestHasAccess(request),
       passkeys: passkeys?.count?.() || 0,
+      keyMode: status.keyMode,
+      locked: status.locked,
+      initialized: status.initialized,
     });
   });
 
   app.post('/api/session', rateLimit({ windowMs: 60_000, limit: 10, standardHeaders: 'draft-8', legacyHeaders: false }), (request, response) => {
-    if (!config.accessToken) return response.status(204).end();
-    if (!timingSafeMatch(request.body?.accessToken, config.accessToken)) {
-      return response.status(401).json({ error: { code: 'AUTH_FAILED', message: 'Invalid access token.' } });
-    }
-    response.cookie(SESSION_COOKIE, config.accessToken, sessionCookieOptions(config));
+    if (!auth.protected) return response.status(204).end();
+    const body = request.body || {};
+    // `accessToken` is the historical field; in keyslot mode any keyslot
+    // credential (token, passphrase, recovery code) is accepted under any name.
+    const secret = body.accessToken ?? body.credential ?? body.passphrase ?? body.recoveryCode;
+    const { slot } = auth.credentialLogin(secret);
+    auth.beginSession(response, { slotId: slot?.id || null });
     return response.status(204).end();
   });
 
-  app.delete('/api/session', (_request, response) => {
-    response.clearCookie(SESSION_COOKIE, sessionCookieClearOptions(config));
-    response.clearCookie(LEGACY_SESSION_COOKIE, sessionCookieClearOptions(config));
+  app.delete('/api/session', (request, response) => {
+    auth.endSession(request, response);
     response.status(204).end();
   });
 
@@ -146,19 +173,34 @@ export function registerApi(app, { config, repos, mailService, remoteContent, pa
   });
 
   app.post('/api/session/passkey/login/options', passkeyLimiter, async (request, response) => {
-    if (!config.accessToken || !passkeys) {
+    if (!auth.protected || !passkeys) {
       throw new ServiceUnavailableError('Passkeys are unavailable on this server.');
     }
     response.json(await passkeys.loginOptions(request));
   });
   app.post('/api/session/passkey/login', passkeyLimiter, async (request, response) => {
-    if (!config.accessToken || !passkeys) {
+    if (!auth.protected || !passkeys) {
       throw new ServiceUnavailableError('Passkeys are unavailable on this server.');
     }
-    await passkeys.login(request, request.body || {});
-    response.cookie(SESSION_COOKIE, config.accessToken, sessionCookieOptions(config));
+    const result = await passkeys.login(request, request.body || {});
+    if (vault) {
+      const passkey = passkeys.list().find((item) => item.id === result.passkey.id);
+      if (passkey && !passkey.canUnlock && vault.isUnlocked() && auth.requestHasAccess(request)) {
+        // Second half of registration: an already-authenticated session links
+        // the passkey's PRF secret to the DEK so it can unlock from now on.
+        if (!result.prf) throw new AppError('This passkey did not return a PRF secret, so it cannot unlock the harness.', { status: 400, code: 'PASSKEY_PRF_REQUIRED', expose: true });
+        vault.completePasskeySlot(result.passkey.id, result.prf);
+      } else {
+        // Verified assertion, but the DEK is only reachable through the PRF.
+        if (!result.prf) throw new AppError('This passkey did not return a PRF secret, so it cannot unlock the harness.', { status: 401, code: 'PASSKEY_PRF_REQUIRED', expose: true });
+        vault.unlockWithPasskey(result.passkey.id, result.prf);
+      }
+    }
+    auth.beginSession(response, { slotId: null });
     return response.status(204).end();
   });
+
+  if (vault) registerKeyslotProvisioning(app, { config, vault });
 
   // Account ids are random UUIDs and avatar bytes contain no mailbox data. This
   // is public solely so native <img> rendering works when the rest of the API
@@ -212,7 +254,7 @@ export function registerApi(app, { config, repos, mailService, remoteContent, pa
   });
 
   const router = express.Router();
-  router.use(accessGate(config));
+  router.use(accessGate(auth));
 
   router.post('/session/passkey/register/options', async (request, response) => {
     if (!passkeys) throw new ServiceUnavailableError('Passkeys are unavailable on this server.');
@@ -220,8 +262,17 @@ export function registerApi(app, { config, repos, mailService, remoteContent, pa
   });
   router.post('/session/passkey/register', async (request, response) => {
     if (!passkeys) throw new ServiceUnavailableError('Passkeys are unavailable on this server.');
-    response.status(201).json(await passkeys.register(request, request.body || {}));
+    const result = await passkeys.register(request, request.body || {});
+    if (vault && result.prf) {
+      // The authenticator evaluated PRF during registration: link immediately.
+      vault.completePasskeySlot(result.passkey.id, result.prf);
+      result.passkey = passkeys.list().find((item) => item.id === result.passkey.id) || result.passkey;
+    }
+    const { prf: _prf, ...publicResult } = result;
+    response.status(201).json(publicResult);
   });
+
+  if (vault) registerKeyslotManagement(router, { vault, auth });
   router.get('/session/passkeys', (_request, response) => {
     if (!passkeys) return response.json({ passkeys: [] });
     response.json({ passkeys: passkeys.list() });
@@ -241,6 +292,12 @@ export function registerApi(app, { config, repos, mailService, remoteContent, pa
   });
 
   router.get('/accounts', (_request, response) => response.json({ accounts: repos.accounts.list() }));
+  router.get('/accounts/:id/settings', (request, response) => {
+    const existing = repos.accounts.getRaw(request.params.id);
+    if (!existing) throw new NotFoundError('Mail account not found.');
+    response.set('Cache-Control', 'private, no-store');
+    response.json({ account: repos.accounts.get(existing.id), credentials: accountLoginSettings(existing, config) });
+  });
   router.get('/accounts/providers', (request, response) => {
     const discoveryInput = {
       email: String(request.query.email || '').trim(),
@@ -262,7 +319,7 @@ export function registerApi(app, { config, repos, mailService, remoteContent, pa
     if (repos.accounts.getByEmailRaw(input.email)) throw new ConflictError('An account with this email already exists.');
     // Creation is atomic from the API's perspective: bad credentials or an
     // unreachable receiving/sending server never leave a broken saved account.
-    const connection = await mailService.testSettings(body);
+    const connection = await mailService.testSettings(accountTestInput(input, config));
     const account = repos.accounts.create(input);
     events.emit('account.added', { accountId: account.id, email: account.email });
     response.status(201).json({ account, connection });
@@ -272,17 +329,27 @@ export function registerApi(app, { config, repos, mailService, remoteContent, pa
     if (!existing) throw new NotFoundError('Mail account not found.');
     const body = request.body || {};
     const input = serializeAccountInput(body, existing, config);
-    const connectionChanged = ['credentials', 'provider', 'serverHost', 'imap', 'smtp']
-      .some((field) => Object.hasOwn(body, field));
+    const connectionChanged = ['credential_ciphertext', 'provider', 'imap_host', 'imap_port', 'imap_secure', 'smtp_host', 'smtp_port', 'smtp_secure']
+      .some((field) => input[field] !== existing[field]);
     const connection = connectionChanged
-      ? await mailService.testSettings(accountTestInput(body, existing, config))
+      ? await mailService.testSettings(accountTestInput(input, config))
       : undefined;
+    const latest = repos.accounts.getRaw(existing.id);
+    if (!latest) throw new NotFoundError('Mail account not found.');
+    if (Object.keys(input).some((field) => JSON.stringify(latest[field]) !== JSON.stringify(existing[field]))) {
+      throw new ConflictError('This account changed while its connection was tested. Reload its settings and try again.');
+    }
     const account = repos.accounts.update(existing.id, input);
-    if (connectionChanged || Object.hasOwn(body, 'syncEnabled')) events.emit('account.updated', { accountId: account.id, email: account.email });
+    if (connectionChanged || input.sync_enabled !== existing.sync_enabled) {
+      mailService.invalidateAccount?.(existing.id);
+      events.emit('account.updated', { accountId: account.id, email: account.email });
+    }
     response.json({ account, ...(connection ? { connection } : {}) });
   });
   router.delete('/accounts/:id', (request, response) => {
     if (!repos.accounts.remove(request.params.id)) throw new NotFoundError('Mail account not found.');
+    // This is a local database cascade, never an IMAP mailbox/message delete.
+    mailService.invalidateAccount?.(request.params.id);
     events.emit('account.removed', { accountId: request.params.id });
     response.status(204).end();
   });
@@ -304,6 +371,8 @@ export function registerApi(app, { config, repos, mailService, remoteContent, pa
     const result = await mailService.syncAccount(request.params.id, {
       mailbox: request.body?.mailbox ? String(request.body.mailbox) : undefined,
       limit: parseNumber(request.body?.limit, config.syncBatchSize, 1, 1000),
+      maxAgeMs: parseNumber(request.body?.maxAgeSeconds, 0, 0, 3600) * 1000,
+      force: Boolean(request.body?.force),
     });
     response.json({ result });
   });
@@ -311,8 +380,21 @@ export function registerApi(app, { config, repos, mailService, remoteContent, pa
     const results = await mailService.syncAll({
       mailbox: request.body?.mailbox ? String(request.body.mailbox) : undefined,
       limit: parseNumber(request.body?.limit, config.syncBatchSize, 1, 1000),
+      // Pollers pass maxAgeSeconds to accept a run that finished this recently
+      // instead of starting another; the manual refresh sends force.
+      maxAgeMs: parseNumber(request.body?.maxAgeSeconds, 0, 0, 3600) * 1000,
+      force: Boolean(request.body?.force),
     });
     response.json({ results });
+  });
+  router.get('/changes', (request, response) => {
+    const since = String(request.query.since || '');
+    const stamp = repos.changes.stamp();
+    const changedAt = stamp.changedAt;
+    response.json({
+      changedAt,
+      changed: !since || !changedAt || changedAt > since,
+    });
   });
 
   const flagsPayload = (flags) => ({
@@ -329,8 +411,8 @@ export function registerApi(app, { config, repos, mailService, remoteContent, pa
     response.json(flagsPayload(savePersonFlags(repos, input ?? [])));
   });
 
-  router.get('/messages', (request, response) => {
-    response.json(listConversations(repos, {
+  router.get('/messages', async (request, response) => {
+    response.json(await listConversations(repos, {
       accountId: request.query.accountId ? String(request.query.accountId) : null,
       folder: request.query.folder,
       category: request.query.category,
@@ -339,11 +421,15 @@ export function registerApi(app, { config, repos, mailService, remoteContent, pa
       pageSize: request.query.pageSize || request.query.limit,
       query: request.query.q,
       mailbox: request.query.mailbox,
+      mailService,
+      searchSource: 'human',
+      signal: request.signal,
     }));
   });
-  router.get('/messages/:id', (request, response) => {
-    const message = repos.messages.get(request.params.id);
+  router.get('/messages/:id', async (request, response) => {
+    let message = repos.messages.get(request.params.id);
     if (!message) throw new NotFoundError('Message not found.');
+    if (mailService?.hydrateMessageSource) message = await mailService.hydrateMessageSource(message.id);
     response.json({ message: hydrateMessage(message, remoteContent) });
   });
   router.post('/messages', async (request, response) => {
@@ -408,20 +494,47 @@ export function registerApi(app, { config, repos, mailService, remoteContent, pa
     return response.json({ thread: { ...thread, messages }, messages, htmlBody: messages.at(-1)?.htmlBody || '' });
   });
 
-  router.get('/threads/:id', (request, response) => {
+  router.get('/threads/:id', async (request, response) => {
     const thread = repos.threads.get(request.params.id);
     if (!thread) throw new NotFoundError('Thread not found.');
-    const messages = repos.messages.forThread(thread.id).map((message) => hydrateMessage(message, remoteContent));
-    response.json({ thread: { ...thread, messages }, messages });
+    const stored = repos.messages.forThread(thread.id);
+    const hydrated = [];
+    for (const item of stored) {
+      const next = mailService?.hydrateMessageSource ? await mailService.hydrateMessageSource(item.id) : item;
+      hydrated.push(hydrateMessage(next, remoteContent));
+    }
+    response.json({ thread: { ...thread, messages: hydrated }, messages: hydrated });
   });
 
+  const storedDrafts = (accountId) => {
+    const accounts = accountId
+      ? [repos.accounts.get(accountId)].filter(Boolean)
+      : repos.accounts.list();
+    return listStoredDrafts(repos, accounts.map((account) => account.id))
+      .map(({ draft }) => draft)
+      .sort((left, right) => String(right.updatedAt || '').localeCompare(String(left.updatedAt || '')));
+  };
+  const providerDraft = (id) => {
+    const message = repos.messages.get(id);
+    if (!message?.isDraft || message.isTrashed || message.isSpam) return null;
+    return {
+      id: message.id,
+      accountId: message.accountId,
+      threadId: message.threadId,
+      to: message.to || [],
+      cc: message.cc || [],
+      bcc: message.bcc || [],
+      subject: message.subject === '(no subject)' ? '' : (message.subject || ''),
+      htmlBody: message.htmlBody || '',
+      textBody: message.textBody || '',
+      attachments: message.attachments || [],
+      updatedAt: message.receivedAt || message.sentAt || message.updatedAt,
+      createdAt: message.createdAt || message.receivedAt || message.sentAt,
+    };
+  };
   router.get('/drafts', (request, response) => {
     const accountId = String(request.query.accountId || '');
-    if (accountId) {
-      response.json({ drafts: repos.drafts.list(accountId) });
-      return;
-    }
-    response.json({ drafts: repos.drafts.listAll() });
+    response.json({ drafts: storedDrafts(accountId) });
   });
   router.post('/drafts', (request, response) => {
     const body = request.body || {};
@@ -440,13 +553,33 @@ export function registerApi(app, { config, repos, mailService, remoteContent, pa
     response.status(201).json({ draft });
   });
   router.get('/drafts/:id', (request, response) => {
-    const draft = repos.drafts.get(request.params.id);
+    const draft = repos.drafts.get(request.params.id) || providerDraft(request.params.id);
     if (!draft) throw new NotFoundError('Draft not found.');
     response.json({ draft });
   });
   router.patch('/drafts/:id', (request, response) => {
     const existing = repos.drafts.get(request.params.id);
-    if (!existing) throw new NotFoundError('Draft not found.');
+    if (!existing) {
+      const synced = providerDraft(request.params.id);
+      if (!synced) throw new NotFoundError('Draft not found.');
+      const body = request.body || {};
+      const accountId = body.accountId || synced.accountId;
+      if (!repos.accounts.get(accountId)) throw new NotFoundError('Mail account not found.');
+      const threadId = [body.threadId, synced.threadId].find((id) => id && repos.threads.get(id)) || null;
+      const draft = repos.drafts.create({
+        account_id: accountId,
+        thread_id: threadId,
+        to_json: JSON.stringify(body.to || synced.to || []),
+        cc_json: JSON.stringify(body.cc || synced.cc || []),
+        bcc_json: JSON.stringify(body.bcc || synced.bcc || []),
+        subject: String(body.subject ?? synced.subject ?? '').slice(0, 998),
+        html_body: sanitizeComposeHtml(body.htmlBody ?? synced.htmlBody).slice(0, 1_000_000),
+        text_body: String(body.textBody ?? synced.textBody ?? '').slice(0, 1_000_000),
+        attachments_json: JSON.stringify(normalizeComposeAttachments(body.attachments || synced.attachments || [])),
+      });
+      response.status(201).json({ draft });
+      return;
+    }
     const body = request.body || {};
     const draft = repos.drafts.update(existing.id, {
       thread_id: body.threadId ?? existing.threadId,
@@ -460,8 +593,15 @@ export function registerApi(app, { config, repos, mailService, remoteContent, pa
     });
     response.json({ draft });
   });
-  router.delete('/drafts/:id', (request, response) => {
-    if (!repos.drafts.remove(request.params.id)) throw new NotFoundError('Draft not found.');
+  router.delete('/drafts/:id', async (request, response) => {
+    if (repos.drafts.remove(request.params.id)) {
+      response.status(204).end();
+      return;
+    }
+    const synced = providerDraft(request.params.id);
+    if (!synced) throw new NotFoundError('Draft not found.');
+    if (mailService?.updateMessageState) await mailService.updateMessageState(synced.id, { isTrashed: true });
+    else repos.messages.setState(synced.id, { isTrashed: true });
     response.status(204).end();
   });
 

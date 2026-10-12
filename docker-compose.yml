@@ -21,6 +21,11 @@ services:
       # Optional: set by your deploy tooling so /api/health can report which
       # exact revision is serving traffic.
       AMAIL_RELEASE_SHA: ${AMAIL_RELEASE_SHA:-}
+      # Typesense is the relevance index. It is not published on the host.
+      # Encrypted databases stay on SQLite FTS unless AMAIL_SEARCH_ENGINE=typesense.
+      AMAIL_SEARCH_ENGINE: ${AMAIL_SEARCH_ENGINE:-auto}
+      AMAIL_TYPESENSE_URL: http://typesense:8108
+      AMAIL_TYPESENSE_API_KEY: ${TYPESENSE_API_KEY:-amail-dev-typesense-key}
       # The privacy launcher provides this only for its own Compose invocation.
       # An empty value keeps remote-content requests on their normal path.
       REMOTE_CONTENT_PROXY_URL: ${REMOTE_CONTENT_PROXY_URL:-}
@@ -35,6 +40,10 @@ services:
       - amail-data:/data
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=64m
+    # A 21-account mailbox measured about 1.1 GiB at steady state. The cap
+    # keeps one runaway instance from starving the host; raise it in .env for
+    # very large mailboxes.
+    mem_limit: ${AMAIL_MEMORY_LIMIT:-1536m}
     read_only: true
     user: "10001:10001"
     cap_drop:
@@ -48,6 +57,9 @@ services:
       app-net:
         gw_priority: 1
       privacy-net:
+    depends_on:
+      typesense:
+        condition: service_started
     healthcheck:
       test:
         - CMD
@@ -58,6 +70,39 @@ services:
       timeout: 5s
       start_period: 60s
       retries: 3
+
+  # Relevance index for the local cache. No host port: only aMail can reach it.
+  # The volume is plaintext. With AMAIL_ENCRYPT_DATABASE or keyslot mode, aMail
+  # leaves this service unused unless AMAIL_SEARCH_ENGINE=typesense.
+  typesense:
+    image: typesense/typesense:29.0
+    restart: unless-stopped
+    init: true
+    command:
+      - --data-dir
+      - /data
+      - --api-key=${TYPESENSE_API_KEY:-amail-dev-typesense-key}
+    volumes:
+      - typesense-data:/data
+    mem_limit: ${TYPESENSE_MEMORY_LIMIT:-768m}
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - app-net
+    # The published image is Ubuntu plus the server binary and CA certs. It has
+    # bash, not curl, so a curl healthcheck never becomes healthy.
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -c
+        - 'exec 3<>/dev/tcp/127.0.0.1/8108 && printf "GET /health HTTP/1.0\r\n\r\n" >&3 && grep -q "\"ok\":true" <&3'
+      interval: 10s
+      timeout: 5s
+      start_period: 15s
+      retries: 12
 
   # This has no host port. Start it only with --profile privacy and set
   # REMOTE_CONTENT_PROXY_URL=http://tor-proxy:8118 for that same command.
@@ -80,6 +125,7 @@ services:
       - tor-state:/var/lib/tor
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=32m
+    mem_limit: ${AMAIL_TOR_MEMORY_LIMIT:-256m}
     networks:
       privacy-net:
       # Tor must use the egress bridge as its default route. Without an
@@ -107,6 +153,7 @@ volumes:
   #     name: gigamail_gigamail-data
   # aMail opens an existing gigamail.sqlite in place.
   amail-data:
+  typesense-data:
   tor-state:
 
 networks:

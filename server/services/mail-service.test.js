@@ -1,13 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { EventEmitter } from 'node:events';
 import {
   buildImapOptions,
   buildSmtpOptions,
   classifyMailConnectionError,
   compileRfc822Message,
   createMailService,
+  discoverSyncMailboxes,
+  sqliteConstraintReason,
 } from './mail-service.js';
 import { encryptJson } from './crypto.js';
+import { parseMailboxQuery } from '../mail/search-query.js';
 
 const config = {
   allowInsecureTls: false,
@@ -32,6 +36,7 @@ test('non-implicit TLS ports require STARTTLS before authentication', () => {
   assert.equal(imap.secure, false);
   assert.equal(imap.doSTARTTLS, true);
   assert.equal(imap.tls.rejectUnauthorized, true);
+  assert.equal(imap.disableAutoIdle, true);
   assert.equal(smtp.secure, false);
   assert.equal(smtp.requireTLS, true);
   assert.equal(smtp.tls.rejectUnauthorized, true);
@@ -141,7 +146,11 @@ test('TLS failures point to certificate hostnames without returning raw errors',
   });
 });
 
-function syncHarness({ maxMessageBytes = 512, messages, sources, previousSync = null, uidValidity = 41 }) {
+function syncHarness({
+  maxMessageBytes = 512, messages, sources, previousSync = null, uidValidity = 41, rejectUpsert = () => false, connectDelayMs = 0,
+  imapPoolIdleMs, syncMinIntervalMs, connectFailure = false, fetchHangs = false, syncPassBudgetMs, syncAccountTimeoutMs,
+  threadsBySubject = new Map(), folders = null, messagesByMailbox = null,
+}) {
   const account = {
     id: 'sync-account',
     email: 'sync@example.test',
@@ -158,59 +167,148 @@ function syncHarness({ maxMessageBytes = 512, messages, sources, previousSync = 
     credential_ciphertext: encryptJson({ username: 'sync@example.test', password: 'test-password' }, config.credentialKey),
   };
   const state = {
+    clients: [],
+    connects: 0,
+    openSessions: 0,
+    maxOpenSessions: 0,
+    listCalls: 0,
     fetchCalls: [],
     fetchOneCalls: [],
     savedMessages: [],
     savedSync: null,
+    skips: [],
+    checkpoints: 0,
     logs: [],
   };
-  const latestUid = Math.max(0, ...messages.map((message) => message.uid));
-  class FakeImapClient {
-    async connect() {}
-    async list() { return [{ path: 'INBOX', name: 'INBOX', specialUse: '\\Inbox' }]; }
-    async getMailboxLock() {
+  const mailboxMessages = messagesByMailbox
+    ? Object.values(messagesByMailbox).flat()
+    : [];
+  const latestUid = Math.max(0, ...messages.map((message) => message.uid), ...mailboxMessages.map((message) => message.uid));
+  class FakeImapClient extends EventEmitter {
+    constructor() {
+      super();
+      state.clients.push(this);
+    }
+    async connect() {
+      state.connects += 1;
+      state.openSessions += 1;
+      state.maxOpenSessions = Math.max(state.maxOpenSessions, state.openSessions);
+      if (connectDelayMs) await new Promise((resolve) => setTimeout(resolve, connectDelayMs));
+      if (connectFailure) {
+        const error = new Error('Socket timeout during connect');
+        this.emit('error', error);
+        throw error;
+      }
+    }
+    async list() {
+      state.listCalls += 1;
+      return folders || [{ path: 'INBOX', name: 'INBOX', specialUse: '\\Inbox' }];
+    }
+    // ImapFlow's fetch() holds the connection while the caller's loop body
+    // runs; any command issued from inside that loop waits forever. Fail
+    // loudly instead so a regression cannot hang the suite.
+    assertIdle(command) {
+      if (this.fetching) throw new Error(`${command} issued while a FETCH is being iterated (deadlock)`);
+    }
+    async mailboxOpen() { this.assertIdle('SELECT'); }
+    async getMailboxLock(path) {
+      this.assertIdle('SELECT');
+      this.lockedMailbox = path;
       this.mailbox = { uidValidity, uidNext: latestUid + 1 };
       return { release() {} };
     }
     async *fetch(range, query, options) {
-      state.fetchCalls.push({ range, query, options });
-      for (const message of messages) yield message;
+      this.assertIdle('FETCH');
+      state.fetchCalls.push({ range, query, options, mailbox: this.lockedMailbox });
+      const wanted = String(range).split(',').map((part) => {
+        const [start, end = start] = part.split(':').map(Number);
+        return [start, end];
+      });
+      const pool = messagesByMailbox
+        ? (messagesByMailbox[this.lockedMailbox] || [])
+        : messages;
+      const matches = pool.filter((message) => wanted.some(([start, end]) => message.uid >= start && message.uid <= end));
+      if (fetchHangs) {
+        this.fetching = true;
+        // A real stuck socket is a live handle; without one the event loop
+        // would drain before the (unref'd) deadline could fire.
+        const socket = setInterval(() => {}, 1_000);
+        await new Promise((_, reject) => this.once('close', () => {
+          clearInterval(socket);
+          reject(new Error('Connection closed'));
+        }));
+      }
+      this.fetching = true;
+      try {
+        for (const message of matches) {
+          const row = { uid: message.uid };
+          if (query.size && message.size !== undefined) row.size = message.size;
+          if (query.envelope) Object.assign(row, message);
+          if (query.source) {
+            const source = sources.get(message.uid);
+            if (source !== undefined) row.source = source.subarray(0, query.source.maxLength);
+          }
+          yield row;
+        }
+      } finally {
+        this.fetching = false;
+      }
     }
     async fetchOne(uid, query, options) {
+      this.assertIdle('FETCH');
       state.fetchOneCalls.push({ uid, query, options });
       const source = sources.get(uid);
       return source === undefined ? null : { uid, source };
     }
-    async logout() {}
+    async logout() {
+      if (this.closed) return;
+      this.closed = true;
+      state.openSessions -= 1;
+      this.emit('close');
+    }
+    close() { void this.logout(); }
   }
   const repos = {
     accounts: {
       getRaw: (id) => id === account.id ? account : null,
+      list: () => [{ id: account.id, syncEnabled: true }],
       markSynced() {},
     },
     sync: {
-      get: () => previousSync,
+      get: () => state.savedSync || previousSync,
       save(value) { state.savedSync = value; },
+      recordSkip(value) { state.skips.push(value); },
+      clearSkips() { state.skips.length = 0; },
     },
     threads: {
       get: () => null,
-      findBySubject: () => null,
+      findBySubject: (accountId, subject) => threadsBySubject.get(subject) || null,
       create: () => ({ id: `thread-${state.savedMessages.length + 1}`, accountId: account.id }),
     },
     messages: {
       findByRfcId: () => null,
       upsert(value) {
+        if (rejectUpsert(value)) throw new Error('UNIQUE constraint failed: messages.account_id, mailbox, uid');
         state.savedMessages.push(value);
         return { id: `message-${state.savedMessages.length}` };
       },
     },
+    checkpointWal() { state.checkpoints += 1; },
   };
   const logger = {
     info(fields, message) { state.logs.push({ level: 'info', fields, message }); },
     warn(fields, message) { state.logs.push({ level: 'warn', fields, message }); },
   };
   const service = createMailService({
-    config: { ...config, syncBatchSize: 20, syncMaxMessageBytes: maxMessageBytes },
+    config: {
+      ...config,
+      syncBatchSize: 20,
+      syncMaxMessageBytes: maxMessageBytes,
+      imapPoolIdleMs: imapPoolIdleMs ?? 60_000,
+      syncMinIntervalMs: syncMinIntervalMs ?? 0,
+      syncPassBudgetMs: syncPassBudgetMs ?? 60_000,
+      syncAccountTimeoutMs: syncAccountTimeoutMs ?? 60_000,
+    },
     repos,
     logger,
     ImapClient: FakeImapClient,
@@ -258,16 +356,388 @@ test('IMAP sync skips oversized sources without unrestricted body downloads', as
   assert.equal(state.savedMessages.length, 1);
   assert.equal(state.savedMessages[0].rfc_message_id, '<small@example.test>');
 
-  assert.equal(state.fetchCalls.length, 1);
+  // One size-only scan, then one capped source FETCH for everything that is
+  // not already known to be too large. Never a command per message.
+  assert.equal(state.fetchCalls.length, 2);
   assert.equal(state.fetchCalls[0].range, '1:3');
   assert.equal(state.fetchCalls[0].query.size, true);
   assert.equal(state.fetchCalls[0].query.source, undefined);
-  assert.deepEqual(state.fetchOneCalls.map((call) => call.uid), [2, 3]);
-  for (const call of state.fetchOneCalls) {
-    assert.deepEqual(call.query.source, { start: 0, maxLength: maxMessageBytes + 1 });
-  }
+  assert.equal(state.fetchCalls[1].range, '2,3');
+  assert.deepEqual(state.fetchCalls[1].query.source, { start: 0, maxLength: maxMessageBytes + 1 });
+  assert.equal(state.fetchOneCalls.length, 0);
   assert.equal(state.savedSync.last_uid, 3);
   assert.doesNotMatch(JSON.stringify(state.logs), /TOP SECRET OVERSIZED CONTENT/);
+  await service.close();
+});
+
+test('a message the database rejects is skipped and reported instead of pinning the mailbox', async () => {
+  const source = (id, body) => Buffer.from([
+    'From: Sender <sender@example.test>',
+    'To: Sync Account <sync@example.test>',
+    `Subject: ${id}`,
+    `Message-ID: <${id}@example.test>`,
+    'Date: Sat, 18 Jul 2026 12:00:00 +0000',
+    '',
+    body,
+  ].join('\r\n'));
+  const sources = new Map([[1, source('first', 'ok')], [2, source('poison', 'PRIVATE POISON BODY')], [3, source('third', 'ok')]]);
+  const { service, state } = syncHarness({
+    maxMessageBytes: 4096,
+    messages: [1, 2, 3].map((uid) => ({ uid, size: sources.get(uid).length })),
+    sources,
+    rejectUpsert: (value) => value.rfc_message_id === '<poison@example.test>',
+  });
+
+  const result = await service.syncAccount('sync-account');
+
+  assert.equal(result.status, 'partial');
+  assert.equal(result.imported, 2);
+  assert.equal(result.skipped, 1);
+  assert.deepEqual(result.mailboxes[0].skipReasons, [{ code: 'IMAP_MESSAGE_IMPORT_FAILED', count: 1 }]);
+  // The window moves past the rejected message so the next cycle does not
+  // fetch, parse, and reject it again.
+  assert.equal(result.mailboxes[0].lastUid, 3);
+  assert.equal(state.savedSync.last_uid, 3);
+  assert.equal(state.savedSync.last_error, null);
+  assert.deepEqual(state.savedMessages.map((message) => message.rfc_message_id), ['<first@example.test>', '<third@example.test>']);
+  const warnings = state.logs.filter((entry) => entry.level === 'warn');
+  assert.equal(warnings.length, 1);
+  assert.equal(warnings[0].fields.mailbox, 'INBOX');
+  assert.equal(warnings[0].fields.uid, 2);
+  assert.equal(warnings[0].fields.err, 'UNIQUE messages.account_id, mailbox, uid');
+  assert.equal(state.skips.length, 1);
+  assert.equal(state.skips[0].uid, 2);
+  assert.equal(state.skips[0].reason, 'UNIQUE messages.account_id, mailbox, uid');
+  assert.doesNotMatch(JSON.stringify(state.logs), /PRIVATE POISON BODY/);
+  await service.close();
+});
+
+function plainSource(uid) {
+  return Buffer.from([
+    'From: Sender <sender@example.test>',
+    'To: Sync Account <sync@example.test>',
+    `Subject: Message ${uid}`,
+    `Message-ID: <message-${uid}@example.test>`,
+    'Date: Sat, 18 Jul 2026 12:00:00 +0000',
+    '',
+    `Body ${uid}`,
+  ].join('\r\n'));
+}
+
+function mailboxOf(uids) {
+  const sources = new Map(uids.map((uid) => [uid, plainSource(uid)]));
+  return { messages: uids.map((uid) => ({ uid, size: sources.get(uid).length })), sources };
+}
+
+test('sources arrive in chunked FETCHes and never a command inside a FETCH loop', async () => {
+  const uids = Array.from({ length: 60 }, (_, index) => index + 1);
+  const { service, state } = syncHarness({ ...mailboxOf(uids), maxMessageBytes: 4096 });
+
+  const result = await service.syncAccount('sync-account', { limit: 100 });
+
+  assert.equal(result.status, 'ok');
+  assert.equal(result.imported, 60);
+  // One size scan plus ceil(60 / 25) source chunks.
+  assert.deepEqual(state.fetchCalls.map((call) => Boolean(call.query.source)), [false, true, true, true]);
+  assert.equal(state.fetchOneCalls.length, 0);
+  assert.equal(state.savedSync.last_uid, 60);
+  await service.close();
+});
+
+test('a source whose length differs from the reported size is still imported', async () => {
+  const source = plainSource(7);
+  // Gmail's RFC822.SIZE is often a few percent off the bytes it returns.
+  const { service, state } = syncHarness({
+    maxMessageBytes: 4096,
+    messages: [{ uid: 7, size: source.length - 40 }, { uid: 8, size: source.length + 40 }],
+    sources: new Map([[7, source], [8, plainSource(8)]]),
+  });
+
+  const result = await service.syncAccount('sync-account');
+
+  assert.equal(result.status, 'ok');
+  assert.equal(result.imported, 2);
+  assert.equal(result.skipped, 0);
+  await service.close();
+});
+
+test('a burst larger than one page is imported oldest first instead of skipped', async () => {
+  const uids = Array.from({ length: 12 }, (_, index) => index + 11);
+  const { service, state } = syncHarness({
+    ...mailboxOf(uids),
+    maxMessageBytes: 4096,
+    previousSync: { last_uid: 10, uid_validity: 41 },
+    syncPassBudgetMs: 0,
+  });
+
+  // A zero budget stops after one page per pass, so the backlog drains over
+  // passes; every message still arrives exactly once.
+  const first = await service.syncAccount('sync-account', { limit: 5, force: true });
+  assert.equal(first.imported, 5);
+  assert.equal(first.remaining, 7);
+  assert.equal(state.savedSync.last_uid, 15);
+  assert.equal(state.fetchCalls[0].range, '11:22');
+
+  const second = await service.syncAccount('sync-account', { limit: 5, force: true });
+  assert.equal(second.imported, 5);
+  assert.equal(second.remaining, 2);
+  const third = await service.syncAccount('sync-account', { limit: 5, force: true });
+  assert.equal(third.imported, 2);
+  assert.equal(third.remaining, 0);
+
+  assert.deepEqual(
+    state.savedMessages.map((message) => message.uid),
+    uids,
+  );
+  await service.close();
+});
+
+test('a pass with budget left keeps paging until the backlog is drained', async () => {
+  const uids = Array.from({ length: 12 }, (_, index) => index + 11);
+  const { service, state } = syncHarness({
+    ...mailboxOf(uids),
+    maxMessageBytes: 4096,
+    previousSync: { last_uid: 10, uid_validity: 41 },
+  });
+
+  const result = await service.syncAccount('sync-account', { limit: 5 });
+
+  assert.equal(result.imported, 12);
+  assert.equal(result.remaining, 0);
+  assert.equal(state.savedSync.last_uid, 22);
+  await service.close();
+});
+
+test('the first sync of a mailbox still imports only its newest window', async () => {
+  const uids = Array.from({ length: 12 }, (_, index) => index + 1);
+  const { service, state } = syncHarness({ ...mailboxOf(uids), maxMessageBytes: 4096 });
+
+  const result = await service.syncAccount('sync-account', { limit: 5 });
+
+  assert.equal(state.fetchCalls[0].range, '8:12');
+  assert.equal(result.imported, 5);
+  assert.equal(result.remaining, 0);
+  await service.close();
+});
+
+test('a hung IMAP session is closed at the deadline and does not block later syncs', async () => {
+  const { service, state } = syncHarness({
+    ...mailboxOf([1]),
+    maxMessageBytes: 4096,
+    fetchHangs: true,
+    syncAccountTimeoutMs: 50,
+  });
+
+  const [result] = await service.syncAll({ force: true });
+  assert.equal(result.status, 'failed');
+  assert.equal(result.error, 'IMAP_SYNC_TIMEOUT');
+  assert.equal(state.clients[0].closed, true);
+  assert.ok(state.logs.some((entry) => entry.message === 'IMAP synchronization exceeded its deadline; connection closed'));
+
+  // The next pass opens a fresh session instead of waiting on the dead one.
+  const [again] = await service.syncAll({ force: true });
+  assert.equal(again.error, 'IMAP_SYNC_TIMEOUT');
+  assert.equal(state.connects, 2);
+  await service.close();
+});
+
+test('changing or removing an account closes its pooled socket and invalidates recent sync results', async () => {
+  const { service, state } = syncHarness({ ...mailboxOf([1]), maxMessageBytes: 4096, syncMinIntervalMs: 60_000 });
+  await service.syncAccount('sync-account');
+  assert.equal(state.connects, 1);
+  service.invalidateAccount('sync-account');
+  assert.equal(state.clients[0].closed, true);
+  await service.syncAccount('sync-account');
+  assert.equal(state.connects, 2);
+  await service.close();
+});
+
+test('account invalidation stops an active fetch without writing deleted account sync state', async () => {
+  const { service, state } = syncHarness({ ...mailboxOf([1]), maxMessageBytes: 4096, fetchHangs: true });
+  const syncing = service.syncAccount('sync-account');
+  while (!state.clients[0]?.fetching) await new Promise((resolve) => setImmediate(resolve));
+  service.invalidateAccount('sync-account');
+  await assert.rejects(syncing, (error) => error.code === 'ACCOUNT_SETTINGS_CHANGED');
+  assert.equal(state.clients[0].closed, true);
+  assert.equal(state.savedSync, null);
+  assert.deepEqual(state.savedMessages, []);
+  assert.deepEqual(state.skips, []);
+  await service.close();
+});
+
+test('an account connection that finishes after invalidation cannot re-enter the pool', async () => {
+  const { service, state } = syncHarness({ ...mailboxOf([1]), maxMessageBytes: 4096, connectDelayMs: 15 });
+  const first = service.syncAccount('sync-account');
+  service.invalidateAccount('sync-account');
+  await assert.rejects(first);
+  assert.equal(state.clients[0].closed, true);
+  assert.deepEqual(state.savedMessages, []);
+  await service.syncAccount('sync-account');
+  assert.equal(state.connects, 2);
+  assert.equal(state.savedMessages.length, 1);
+  await service.close();
+});
+
+test('only replies fall back to subject threading', async () => {
+  const header = (uid, subject, extra = []) => Buffer.from([
+    'From: Sender <sender@example.test>',
+    'To: Sync Account <sync@example.test>',
+    `Subject: ${subject}`,
+    `Message-ID: <thread-${uid}@example.test>`,
+    ...extra,
+    '',
+    'Body',
+  ].join('\r\n'));
+  const sources = new Map([
+    [1, header(1, 'Quote Request')],
+    [2, header(2, 'RE: Quote Request')],
+    [3, header(3, 'Quote Request', ['In-Reply-To: <not-stored@example.test>'])],
+  ]);
+  const existing = { id: 'existing-thread', accountId: 'sync-account' };
+  const { service, state } = syncHarness({
+    maxMessageBytes: 4096,
+    messages: [1, 2, 3].map((uid) => ({ uid, size: sources.get(uid).length })),
+    sources,
+    threadsBySubject: new Map([['quote request', existing]]),
+  });
+
+  await service.syncAccount('sync-account');
+
+  const threadOf = Object.fromEntries(state.savedMessages.map((message) => [message.uid, message.thread_id]));
+  // A new message that merely shares a subject starts its own conversation.
+  assert.notEqual(threadOf[1], 'existing-thread');
+  // A reply prefix or reply header whose parent is not stored still joins it.
+  assert.equal(threadOf[2], 'existing-thread');
+  assert.equal(threadOf[3], 'existing-thread');
+  await service.close();
+});
+
+test('concurrent and recent full syncs share one IMAP pass', async () => {
+  const { service, state } = syncHarness({ messages: [], sources: new Map(), connectDelayMs: 20 });
+
+  // The web client, a second tab, and the background poller all ask at once:
+  // one IMAP session, one shared result.
+  const [a, b, c] = await Promise.all([
+    service.syncAll({ mailbox: 'INBOX' }),
+    service.syncAll({ mailbox: 'INBOX', maxAgeMs: 20_000 }),
+    service.syncAll(),
+  ]);
+  assert.equal(state.connects, 1);
+  assert.equal(a, b);
+  assert.equal(a, c);
+  assert.equal(a[0].accountId, 'sync-account');
+
+  // A poll that accepts a recent result gets the last one without IMAP.
+  const recent = await service.syncAll({ mailbox: 'INBOX', maxAgeMs: 20_000 });
+  assert.equal(recent, a);
+  assert.equal(state.connects, 1);
+
+  // A manual refresh reuses the pooled IMAP session instead of reconnecting.
+  await service.syncAll({ mailbox: 'INBOX', force: true });
+  assert.equal(state.connects, 1);
+  assert.equal(state.listCalls, 1);
+  await service.syncAll({ mailbox: 'Archive', force: true });
+  assert.equal(state.connects, 1);
+  assert.equal(state.listCalls, 1);
+
+  // A request with a different target waits for the running one instead of
+  // opening a second session to the same server, then runs on the same pool.
+  const first = service.syncAll({ mailbox: 'INBOX', force: true });
+  const second = service.syncAll({ mailbox: 'Archive', force: true });
+  await Promise.all([first, second]);
+  assert.equal(state.connects, 1);
+  assert.equal(state.maxOpenSessions, 1);
+  assert.ok(state.checkpoints >= 1);
+  await service.close();
+  assert.equal(state.openSessions, 0);
+});
+
+test('the server enforces a minimum sync interval unless force is set', async () => {
+  const { service, state } = syncHarness({ messages: [], sources: new Map(), syncMinIntervalMs: 60_000 });
+  await service.syncAll({ mailbox: 'INBOX' });
+  const checkpoints = state.checkpoints;
+  await service.syncAll({ mailbox: 'INBOX' });
+  assert.equal(state.checkpoints, checkpoints);
+  await service.syncAll({ mailbox: 'INBOX', force: true });
+  assert.ok(state.checkpoints > checkpoints);
+  await service.close();
+});
+
+test('idle IMAP errors retire the connection without crashing or retiring its replacement', async () => {
+  const { service, state } = syncHarness({ messages: [], sources: new Map() });
+  try {
+    await service.syncAll({ force: true });
+    const first = state.clients[0];
+    assert.doesNotThrow(() => first.emit('error', new Error('Socket timeout')));
+    await service.syncAll({ force: true });
+    assert.equal(state.connects, 2, 'a failed idle socket must not be reused');
+    const replacement = state.clients[1];
+    assert.doesNotThrow(() => first.emit('error', new Error('late old-socket error')));
+    await service.syncAll({ force: true });
+    assert.equal(state.connects, 2, 'late errors from the retired socket leave its replacement usable');
+    replacement.emit('close');
+    await service.syncAll({ force: true });
+    assert.equal(state.connects, 3, 'a closed connection must also be replaced');
+    assert.ok(state.logs.some((entry) => entry.message === 'IMAP connection became unavailable'));
+    await service.close();
+    assert.doesNotThrow(() => state.clients.at(-1).emit('error', new Error('late shutdown error')));
+  } finally {
+    await service.close();
+  }
+});
+
+test('IMAP error handling is installed before connect and remains during teardown', async () => {
+  let client;
+  const logs = [];
+  class FailingImapClient extends EventEmitter {
+    constructor() { super(); client = this; }
+    async connect() {
+      assert.equal(this.listenerCount('error'), 1);
+      this.emit('error', new Error('Socket timeout password=fixture-secret'));
+      throw new Error('Socket timeout');
+    }
+    async logout() { this.emit('error', new Error('late teardown error')); }
+  }
+  const service = createMailService({
+    config,
+    repos: {},
+    logger: { info() {}, warn(fields, message) { logs.push({ fields, message }); } },
+    ImapClient: FailingImapClient,
+    createSmtpTransport: () => ({ async verify() {}, close() {} }),
+  });
+  await assert.rejects(() => service.testSettings({
+    email: 'person@example.test', provider: 'custom', serverHost: 'mail.example.test',
+    credentials: { username: 'person@example.test', password: 'fixture-secret' },
+  }), (error) => error.code === 'IMAP_TIMEOUT');
+  assert.doesNotThrow(() => client.emit('error', new Error('after logout')));
+  assert.ok(logs.some(({ fields }) => fields.code === 'IMAP_TIMEOUT'));
+  assert.doesNotMatch(JSON.stringify(logs), /fixture-secret|person@example/);
+});
+
+test('failed pooled IMAP connects close their socket and never enter the reusable pool', async () => {
+  const { service, state } = syncHarness({ messages: [], sources: new Map(), connectFailure: true });
+  try {
+    await assert.rejects(() => service.syncAccount('sync-account', { force: true }),
+      (error) => error.code === 'IMAP_SYNC_FAILED');
+    assert.equal(state.openSessions, 0);
+    assert.doesNotThrow(() => state.clients[0].emit('error', new Error('late failed-connect error')));
+    await assert.rejects(() => service.syncAccount('sync-account', { force: true }),
+      (error) => error.code === 'IMAP_SYNC_FAILED');
+    assert.equal(state.connects, 2);
+    assert.equal(state.openSessions, 0);
+  } finally {
+    await service.close();
+  }
+});
+
+test('sqlite constraint messages are named without retrying the fetch', () => {
+  assert.equal(
+    sqliteConstraintReason(new Error('UNIQUE constraint failed: messages.account_id, mailbox, uid')),
+    'UNIQUE messages.account_id, mailbox, uid',
+  );
+  assert.equal(sqliteConstraintReason(new Error('FOREIGN KEY constraint failed')), 'FOREIGN KEY');
+  assert.equal(sqliteConstraintReason(new Error('CHECK constraint failed: smart_category')), 'CHECK smart_category');
+  assert.equal(sqliteConstraintReason(new Error('no such table: messages')), null);
 });
 
 test('UIDVALIDITY changes reset the incremental window and are reported', async () => {
@@ -294,6 +764,7 @@ test('UIDVALIDITY changes reset the incremental window and are reported', async 
   assert.equal(state.savedSync.uid_validity, 41);
   assert.equal(state.savedSync.last_uid, 5);
   assert.ok(state.logs.some((entry) => entry.message === 'IMAP UIDVALIDITY changed; resynchronizing mailbox window'));
+  await service.close();
 });
 
 test('RFC822 compilation preserves the chosen Message-ID and keeps Bcc envelope-only', async () => {
@@ -569,6 +1040,79 @@ test('Gmail skips IMAP APPEND because Gmail automatically files SMTP sends', asy
   });
 });
 
+function mutationHarness({ connectFailure = false } = {}) {
+  const account = {
+    id: 'mutation-account',
+    email: 'mutate@example.test',
+    provider: 'custom',
+    imap_host: 'mail.example.test',
+    imap_port: 993,
+    imap_secure: 1,
+    credential_ciphertext: encryptJson({ username: 'mutate@example.test', password: 'test-password' }, config.credentialKey),
+  };
+  const state = { connects: 0, openSessions: 0, maxOpenSessions: 0, flagged: [] };
+  class FakeImapClient extends EventEmitter {
+    async connect() {
+      state.connects += 1;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      if (connectFailure) throw Object.assign(new Error('Invalid credentials'), { authenticationFailed: true });
+      state.openSessions += 1;
+      state.maxOpenSessions = Math.max(state.maxOpenSessions, state.openSessions);
+    }
+    async list() { return [{ path: 'INBOX', specialUse: '\\Inbox' }]; }
+    async mailboxOpen() {}
+    async getMailboxLock() { return { release() {} }; }
+    async messageFlagsAdd(uid, flags) { state.flagged.push({ uid, flags }); return true; }
+    async logout() {
+      if (this.closed) return;
+      this.closed = true;
+      state.openSessions -= 1;
+    }
+    close() { void this.logout(); }
+  }
+  const messages = new Map(Array.from({ length: 50 }, (_, index) => {
+    const id = `message-${index + 1}`;
+    return [id, { id, accountId: account.id, mailbox: 'INBOX', uid: index + 1 }];
+  }));
+  const service = createMailService({
+    config: { ...config, imapPoolIdleMs: 60_000 },
+    repos: {
+      accounts: { getRaw: (id) => (id === account.id ? account : null) },
+      messages: {
+        get: (id) => messages.get(id),
+        setState: (id) => messages.get(id),
+      },
+    },
+    logger: { info() {}, warn() {} },
+    ImapClient: FakeImapClient,
+  });
+  return { service, state, ids: [...messages.keys()] };
+}
+
+test('a burst of message mutations shares one pooled IMAP session', async () => {
+  const { service, state, ids } = mutationHarness();
+
+  // A thread-wide "read" fans out one update per message, all at once.
+  const results = await Promise.all(ids.map((id) => service.updateMessageState(id, { isRead: true })));
+
+  assert.ok(results.every((result) => result.remoteSync.status === 'synced'));
+  assert.equal(state.connects, 1);
+  assert.equal(state.maxOpenSessions, 1);
+  assert.equal(state.flagged.length, 50);
+  await service.close();
+  assert.equal(state.openSessions, 0);
+});
+
+test('concurrent mutations share one failed login instead of retrying it per message', async () => {
+  const { service, state, ids } = mutationHarness({ connectFailure: true });
+
+  const results = await Promise.all(ids.map((id) => service.updateMessageState(id, { isRead: true })));
+
+  assert.ok(results.every((result) => result.remoteSync.status === 'failed'));
+  assert.equal(state.connects, 1);
+  await service.close();
+});
+
 test('attachment download re-fetches the original IMAP source and returns one part', async () => {
   const pdf = Buffer.from('%PDF-1.4 attachment-bytes');
   const source = Buffer.from([
@@ -644,4 +1188,552 @@ test('attachment download re-fetches the original IMAP source and returns one pa
   const cached = await service.fetchAttachment('msg-1', 0);
   assert.equal(fetchOneUid, null);
   assert.equal(cached.body.equals(first.body), true);
+});
+
+test('concurrent attachment downloads share one IMAP fetch', async () => {
+  const pdf = Buffer.from('%PDF-1.4 attachment-bytes');
+  const source = Buffer.from([
+    'From: Billing <billing@example.test>',
+    'To: Owner <owner@example.test>',
+    'Subject: Invoice',
+    'Message-ID: <invoice@example.test>',
+    'Date: Thu, 13 Aug 2026 12:00:00 +0000',
+    'MIME-Version: 1.0',
+    'Content-Type: multipart/mixed; boundary="bound"',
+    '',
+    '--bound',
+    'Content-Type: text/plain; charset=utf-8',
+    '',
+    'Invoice attached.',
+    '--bound',
+    'Content-Type: application/pdf',
+    'Content-Disposition: attachment; filename="invoice.pdf"',
+    'Content-Transfer-Encoding: base64',
+    '',
+    pdf.toString('base64'),
+    '--bound--',
+    '',
+  ].join('\r\n'));
+  let connects = 0;
+  let fetches = 0;
+  let releaseFetch;
+  const fetchGate = new Promise((resolve) => { releaseFetch = resolve; });
+  class FakeImapClient {
+    async connect() { connects += 1; }
+    async getMailboxLock() { return { release() {} }; }
+    async fetchOne() {
+      fetches += 1;
+      await fetchGate;
+      return { uid: 42, source };
+    }
+    async logout() {}
+  }
+  const account = {
+    id: 'account-1',
+    email: 'owner@example.test',
+    credential_ciphertext: encryptJson({ username: 'owner@example.test', password: 'app-password' }, config.credentialKey),
+    imap_host: 'imap.example.test',
+    imap_port: 993,
+    imap_secure: 1,
+    provider: 'custom',
+  };
+  const service = createMailService({
+    config,
+    repos: {
+      accounts: { getRaw: (id) => id === account.id ? account : null },
+      messages: {
+        get: () => ({
+          id: 'msg-1',
+          accountId: account.id,
+          mailbox: 'INBOX',
+          uid: 42,
+          attachments: [{ index: 0, filename: 'invoice.pdf', contentType: 'application/pdf', size: pdf.length }],
+        }),
+      },
+    },
+    logger: { info() {}, warn() {} },
+    ImapClient: FakeImapClient,
+  });
+  const pending = Promise.all([
+    service.fetchAttachment('msg-1', 0),
+    service.fetchAttachment('msg-1', 0),
+    service.fetchAttachment('msg-1', 0),
+  ]);
+  releaseFetch();
+  const results = await pending;
+  assert.equal(connects, 1);
+  assert.equal(fetches, 1);
+  assert.equal(results[0].body.equals(results[1].body), true);
+  assert.equal(results[1].body.equals(results[2].body), true);
+});
+
+function strictAttachmentHarness({ messageOverrides = {}, metadataOverrides = {}, sourceParts, sourceId = '<strict@example.test>', sourceUid = 42, uidValidity = 7, syncUidValidity = 7, sourceLimit = 64 * 1024 * 1024, rawAttachments, failureAt, failure } = {}) {
+  const content = Buffer.from([0, 255, 1, 128, 13, 10]);
+  const metadata = { index: 0, filename: 'sample.bin', contentType: 'application/octet-stream', size: content.length, contentId: 'part-0', ...metadataOverrides };
+  const message = {
+    id: 'strict-message', accountId: 'strict-account', mailbox: 'INBOX', uid: 42,
+    messageId: '<strict@example.test>', attachments: [metadata], ...messageOverrides,
+  };
+  const parts = sourceParts || [{ ...metadata, content }];
+  const lines = [
+    'From: Synthetic <sender@example.test>', 'To: Owner <owner@example.test>', 'Subject: Synthetic attachment',
+    `Message-ID: ${sourceId}`, 'MIME-Version: 1.0', 'Content-Type: multipart/mixed; boundary="strict-bound"', '',
+    '--strict-bound', 'Content-Type: text/plain', '', 'Synthetic fixture.',
+    ...parts.flatMap((part) => [
+      '--strict-bound', `Content-Type: ${part.contentType}`, `Content-Disposition: attachment; filename="${part.filename}"`,
+      `Content-ID: <${part.contentId || 'part-0'}>`, 'Content-Transfer-Encoding: base64', '', part.content.toString('base64'),
+    ]),
+    '--strict-bound--', '',
+  ];
+  const state = { source: Buffer.from(lines.join('\r\n')), connects: 0, fetches: 0, logouts: 0, releases: 0, mutations: [], warnings: [] };
+  class FakeImapClient {
+    mailbox = { path: 'INBOX', uidValidity };
+    async connect() { state.connects += 1; if (failureAt === 'connect') throw failure; }
+    async getMailboxLock(mailbox, options) {
+      assert.equal(mailbox, 'INBOX');
+      assert.deepEqual(options, { readOnly: true });
+      if (failureAt === 'open_mailbox') throw failure;
+      return { release() { state.releases += 1; } };
+    }
+    async fetchOne(uid, query, options) {
+      state.fetches += 1;
+      if (failureAt === 'fetch_source') throw failure;
+      assert.equal(uid, 42);
+      assert.deepEqual(options, { uid: true });
+      state.sourceMaxLength = query.source.maxLength;
+      return { uid: sourceUid, source: state.source };
+    }
+    async logout() { state.logouts += 1; }
+    async messageFlagsAdd() { state.mutations.push('flags'); throw new Error('must not mark'); }
+  }
+  const account = {
+    id: 'strict-account', email: 'owner@example.test', provider: 'custom',
+    credential_ciphertext: encryptJson({ username: 'owner@example.test', password: 'synthetic-password' }, config.credentialKey),
+    imap_host: 'imap.example.test', imap_port: 993, imap_secure: 1,
+  };
+  const service = createMailService({
+    config: { ...config, syncMaxMessageBytes: sourceLimit },
+    repos: {
+      accounts: { getRaw(id) { assert.equal(id, account.id); return account; } },
+      messages: {
+        get: (id) => id === message.id ? message : null,
+        getRaw: () => ({ attachments_json: JSON.stringify(rawAttachments || []) }),
+        setState() { state.mutations.push('state'); throw new Error('must not mark'); },
+      },
+      sync: { get(accountId, mailbox) { assert.equal(accountId, account.id); assert.equal(mailbox, 'INBOX'); return { uid_validity: syncUidValidity }; } },
+    },
+    logger: { info() {}, warn(...args) { state.warnings.push(args); } }, ImapClient: FakeImapClient,
+  });
+  return { service, state, message, content };
+}
+
+test('strict attachment download verifies message and part and opens IMAP read-only', async () => {
+  const { service, state, content } = strictAttachmentHarness();
+  const attachment = await service.fetchAttachment('strict-message', 0, { strict: true });
+  assert.deepEqual(attachment.body, content);
+  assert.equal(state.sourceMaxLength, 12 * 1024 * 1024 + 1);
+  assert.equal(state.fetches, 1);
+  assert.equal(state.releases, 1);
+  assert.equal(state.logouts, 1);
+  assert.deepEqual(state.mutations, []);
+});
+
+test('attachment failure diagnostics expose only fixed operation, status, and code enums', async () => {
+  for (const operation of ['connect', 'open_mailbox', 'fetch_source']) {
+    const failure = Object.assign(new Error('secret parser or server content'), {
+      responseStatus: 'NO', serverResponseCode: 'NOPERM',
+      executedCommand: 'LOGIN private@example.test secret-password', responseText: 'private mail body',
+    });
+    const { service, state } = strictAttachmentHarness({ failureAt: operation, failure });
+    await assert.rejects(service.fetchAttachment('strict-message', 0, { strict: true }), { code: 'ATTACHMENT_IMAP_FAILED' });
+    assert.deepEqual(state.warnings, [[{
+      messageId: 'strict-message', operation, responseStatus: 'NO', code: 'NOPERM',
+    }, 'IMAP attachment download failed']]);
+    assert.equal(state.logouts, 1);
+  }
+  for (const [errorFields, expected] of [
+    [{ responseStatus: 'secret-response', code: 'secret-code', serverResponseCode: 'secret-server-code' }, { responseStatus: null, code: null }],
+    [{ responseStatus: 'BAD', response: { attributes: [{ section: [{ value: 'NONEXISTENT' }] }] } }, { responseStatus: 'BAD', code: 'NONEXISTENT' }],
+    [{ code: 'ECONNRESET' }, { responseStatus: null, code: 'ECONNRESET' }],
+  ]) {
+    const failure = Object.assign(new Error('secret'), errorFields);
+    const { service, state } = strictAttachmentHarness({ failureAt: 'fetch_source', failure });
+    await assert.rejects(service.fetchAttachment('strict-message', 0, { strict: true }), { code: 'ATTACHMENT_IMAP_FAILED' });
+    assert.deepEqual(state.warnings[0][0], { messageId: 'strict-message', operation: 'fetch_source', ...expected });
+    assert.equal(JSON.stringify(state.warnings).includes('secret'), false);
+  }
+});
+
+test('strict attachment download refuses stale or unverified message identity', async () => {
+  for (const options of [
+    { sourceId: '<different@example.test>' }, { sourceUid: 99 }, { uidValidity: 8 },
+    { messageOverrides: { messageId: null } }, { messageOverrides: { mailbox: '' } },
+  ]) {
+    const { service, state } = strictAttachmentHarness(options);
+    await assert.rejects(service.fetchAttachment('strict-message', 0, { strict: true }), { code: 'ATTACHMENT_IDENTITY_UNVERIFIED' });
+    assert.deepEqual(state.mutations, []);
+    assert.equal(state.logouts, state.connects);
+  }
+});
+
+test('strict attachment download does not fall back to a different indexed part', async () => {
+  const { service } = strictAttachmentHarness({
+    metadataOverrides: { index: 1 },
+    sourceParts: [{ filename: 'sample.bin', contentType: 'application/octet-stream', contentId: 'part-0', content: Buffer.from([0, 255, 1, 128, 13, 10]) }],
+  });
+  await assert.rejects(service.fetchAttachment('strict-message', 1, { strict: true }), { code: 'ATTACHMENT_IDENTITY_UNVERIFIED' });
+  await assert.rejects(service.fetchAttachment('strict-message', 0, { strict: true }), { code: 'NOT_FOUND' });
+});
+
+test('strict attachment download verifies known metadata at the selected index', async () => {
+  for (const mismatch of [
+    { filename: 'wrong.bin' }, { contentType: 'image/png' }, { contentId: 'wrong-id' }, { content: Buffer.from('different-size') },
+  ]) {
+    const { service } = strictAttachmentHarness({ sourceParts: [{
+      filename: 'sample.bin', contentType: 'application/octet-stream', contentId: 'part-0',
+      content: Buffer.from([0, 255, 1, 128, 13, 10]), ...mismatch,
+    }] });
+    await assert.rejects(service.fetchAttachment('strict-message', 0, { strict: true }), { code: 'ATTACHMENT_IDENTITY_UNVERIFIED' });
+  }
+});
+
+test('strict attachment download bypasses legacy cached content', async () => {
+  const { service, state } = strictAttachmentHarness();
+  await service.fetchAttachment('strict-message', 0);
+  state.source = Buffer.from(state.source.toString().replace('<strict@example.test>', '<reused-uid@example.test>'));
+  await assert.rejects(service.fetchAttachment('strict-message', 0, { strict: true }), { code: 'ATTACHMENT_IDENTITY_UNVERIFIED' });
+  assert.equal(state.fetches, 2);
+});
+
+test('strict stored attachment bytes must match cached metadata and actual size', async () => {
+  const content = Buffer.from([0, 255, 1, 128, 13, 10]);
+  const raw = { index: 0, filename: 'sample.bin', contentType: 'application/octet-stream', size: content.length, contentId: 'part-0', content: content.toString('base64') };
+  const valid = strictAttachmentHarness({ rawAttachments: [raw], messageOverrides: { messageId: null, uid: null } });
+  assert.deepEqual((await valid.service.fetchAttachment('strict-message', 0, { strict: true })).body, content);
+  assert.equal(valid.state.connects, 0);
+  for (const options of [
+    { metadataOverrides: { size: 99 }, rawAttachments: [{ ...raw, size: 99 }] },
+    { rawAttachments: [{ ...raw, filename: 'different.bin' }] },
+    { rawAttachments: [{ ...raw, contentType: 'text/plain' }] },
+    { rawAttachments: [{ ...raw, contentId: 'different-part' }] },
+  ]) {
+    const { service, state } = strictAttachmentHarness(options);
+    await assert.rejects(service.fetchAttachment('strict-message', 0, { strict: true }), { code: 'ATTACHMENT_IDENTITY_UNVERIFIED' });
+    assert.equal(state.connects, 0);
+  }
+});
+
+test('strict attachment download bounds metadata, stored bytes, decoded bytes, and original source', async () => {
+  const maxBytes = 8 * 1024 * 1024;
+  const knownOversize = strictAttachmentHarness({ metadataOverrides: { size: maxBytes + 1 } });
+  await assert.rejects(knownOversize.service.fetchAttachment('strict-message', 0, { strict: true }), { code: 'VALIDATION_ERROR' });
+  assert.equal(knownOversize.state.connects, 0);
+
+  const storedOversize = strictAttachmentHarness({ rawAttachments: [{ index: 0, content: Buffer.alloc(maxBytes + 1).toString('base64') }] });
+  await assert.rejects(storedOversize.service.fetchAttachment('strict-message', 0, { strict: true }), { code: 'VALIDATION_ERROR' });
+  assert.equal(storedOversize.state.connects, 0);
+
+  const decodedOversize = strictAttachmentHarness({ metadataOverrides: { size: undefined }, sourceParts: [{
+    filename: 'sample.bin', contentType: 'application/octet-stream', contentId: 'part-0', content: Buffer.alloc(maxBytes + 1),
+  }] });
+  await assert.rejects(decodedOversize.service.fetchAttachment('strict-message', 0, { strict: true }), { code: 'VALIDATION_ERROR' });
+  assert.equal(decodedOversize.state.fetches, 1);
+
+  const sourceOversize = strictAttachmentHarness({ sourceLimit: 32 });
+  await assert.rejects(sourceOversize.service.fetchAttachment('strict-message', 0, { strict: true }), { code: 'ATTACHMENT_SOURCE_UNAVAILABLE' });
+  assert.equal(sourceOversize.state.sourceMaxLength, 33);
+  assert.equal(sourceOversize.state.releases, 1);
+  assert.equal(sourceOversize.state.logouts, 1);
+});
+
+function searchHarness({
+  provider = 'custom',
+  messages = [],
+  sources = new Map(),
+  searchDelayMs = 0,
+  gate = null,
+} = {}) {
+  const account = {
+    id: 'search-account',
+    email: 'sync@example.test',
+    display_name: 'Search Account',
+    provider,
+    imap_host: 'mail.example.test',
+    imap_port: 993,
+    imap_secure: 1,
+    smtp_host: 'mail.example.test',
+    smtp_port: 465,
+    smtp_secure: 1,
+    signature: '',
+    sync_enabled: 0,
+    credential_ciphertext: encryptJson({ username: 'sync@example.test', password: 'test-password' }, config.credentialKey),
+  };
+  const state = {
+    searchQueries: [],
+    fetchCalls: [],
+    fetchOneCalls: [],
+    savedMessages: [],
+    searchStarts: 0,
+  };
+  class FakeImapClient extends EventEmitter {
+    constructor() {
+      super();
+      this.capabilities = provider === 'gmail' ? new Map([['X-GM-EXT-1', true]]) : new Map();
+    }
+    async connect() {}
+    async list() {
+      return [{ path: 'INBOX', name: 'INBOX', specialUse: '\\Inbox' }];
+    }
+    async mailboxOpen() {}
+    async getMailboxLock() {
+      return { release() {} };
+    }
+    async search(query) {
+      state.searchStarts += 1;
+      state.searchQueries.push(query);
+      if (gate?.started) gate.started();
+      if (gate?.hold) await gate.hold;
+      if (searchDelayMs) await new Promise((resolve) => setTimeout(resolve, searchDelayMs));
+      return messages.map((message) => message.uid);
+    }
+    async *fetch(range, query, options) {
+      state.fetchCalls.push({ range, query, options });
+      const wanted = new Set(String(range).split(',').map(Number));
+      for (const message of messages.filter((item) => wanted.has(item.uid))) {
+        yield { uid: message.uid, ...message };
+      }
+    }
+    async fetchOne(uid, query, options) {
+      state.fetchOneCalls.push({ uid, query, options });
+      const message = messages.find((item) => item.uid === uid);
+      const source = sources.get(uid);
+      if (!message && source === undefined) return null;
+      return { uid, ...message, source };
+    }
+    async logout() { this.emit('close'); }
+    close() { void this.logout(); }
+  }
+  const repos = {
+    accounts: {
+      getRaw: (id) => id === account.id ? account : null,
+      list: () => [{ id: account.id, syncEnabled: false }],
+    },
+    threads: {
+      get: (id) => id ? { id, accountId: account.id } : null,
+      findBySubject: () => null,
+      create: () => ({ id: `thread-${state.savedMessages.length + 1}`, accountId: account.id }),
+    },
+    messages: {
+      findByRfcId: (accountId, messageId) => state.savedMessages.find((row) => (
+        row.account_id === accountId && row.rfc_message_id === messageId
+      )) || null,
+      findByUid: (accountId, mailbox, uid) => state.savedMessages.find((row) => (
+        row.account_id === accountId && row.mailbox === mailbox && row.uid === uid
+      )) || null,
+      get: (id) => state.savedMessages.find((row) => row.id === id) || null,
+      upsert(value) {
+        const existing = state.savedMessages.find((row) => row.account_id === value.account_id && row.mailbox === value.mailbox && row.uid === value.uid);
+        if (existing) {
+          Object.assign(existing, value);
+          existing.threadId = value.thread_id || existing.threadId;
+          existing.sourceImported = value.source_imported !== 0;
+          existing.htmlBody = value.html_body || '';
+          existing.textBody = value.text_body || '';
+          return existing;
+        }
+        const saved = {
+          ...value,
+          id: `message-${state.savedMessages.length + 1}`,
+          threadId: value.thread_id,
+          sourceImported: value.source_imported !== 0,
+          htmlBody: value.html_body || '',
+          textBody: value.text_body || '',
+          mailbox: value.mailbox,
+          uid: value.uid,
+          accountId: value.account_id,
+        };
+        state.savedMessages.push(saved);
+        return saved;
+      },
+    },
+    runWriteBatch(fn) { return fn(); },
+  };
+  const service = createMailService({
+    config: { ...config, imapPoolIdleMs: 60_000 },
+    repos,
+    logger: { info() {}, warn() {} },
+    ImapClient: FakeImapClient,
+  });
+  return { service, state, account };
+}
+
+function historicalInvoice() {
+  return {
+    uid: 99,
+    envelope: {
+      messageId: '<old-invoice@example.test>',
+      subject: 'Old invoice',
+      from: [{ name: 'Vendor', address: 'accounts@vendor.test' }],
+      to: [{ address: 'sync@example.test' }],
+      date: new Date('2019-01-01T00:00:00Z'),
+    },
+    flags: new Set(),
+    labels: [],
+    internalDate: new Date('2019-01-01T00:00:00Z'),
+    bodyStructure: {
+      childNodes: [
+        { type: 'text/plain', disposition: 'inline' },
+        { type: 'application/pdf', disposition: 'attachment', dispositionParameters: { filename: 'invoice.pdf' } },
+      ],
+    },
+  };
+}
+
+test('IMAP SEARCH materializes envelope rows and hydrates full source on open', async () => {
+  const source = Buffer.from([
+    'From: Vendor <accounts@vendor.test>',
+    'To: Search Account <sync@example.test>',
+    'Subject: Old invoice',
+    'Message-ID: <old-invoice@example.test>',
+    'Date: Tue, 01 Jan 2019 00:00:00 +0000',
+    'Content-Type: text/plain; charset=utf-8',
+    '',
+    'Pay the historical invoice body.',
+  ].join('\r\n'));
+  const { service, state, account } = searchHarness({
+    messages: [historicalInvoice()],
+    sources: new Map([[99, source]]),
+  });
+  const parsed = parseMailboxQuery('invoice');
+  const result = await service.searchAndMaterialize({
+    accounts: [{ id: account.id, syncEnabled: false }],
+    parsed,
+    folder: 'inbox',
+  });
+  assert.equal(result.cancelled, false);
+  assert.equal(state.searchQueries.length, 1);
+  assert.equal(state.searchQueries[0].text, 'invoice');
+  assert.equal(state.searchQueries[0].gmraw, undefined);
+  assert.equal(state.fetchCalls.length, 1);
+  assert.equal(state.savedMessages.length, 1);
+  assert.equal(state.savedMessages[0].source_imported, 0);
+  assert.equal(state.savedMessages[0].html_body, '');
+  assert.deepEqual(result.threadIds, [state.savedMessages[0].threadId]);
+
+  const hydrated = await service.hydrateMessageSource(state.savedMessages[0].id);
+  assert.equal(state.fetchOneCalls.length, 1);
+  assert.equal(hydrated.source_imported ?? (hydrated.sourceImported === false ? 0 : 1), 1);
+  assert.match(hydrated.text_body || hydrated.textBody, /historical invoice body/);
+  await service.close();
+});
+
+test('Gmail leftover-text search uses gmraw and skips already cached UIDs', async () => {
+  const { service, state, account } = searchHarness({
+    provider: 'gmail',
+    messages: [historicalInvoice()],
+  });
+  state.savedMessages.push({
+    id: 'already-local',
+    account_id: account.id,
+    mailbox: 'INBOX',
+    uid: 99,
+    threadId: 'thread-local',
+    sourceImported: true,
+  });
+  const result = await service.searchAndMaterialize({
+    accounts: [{ id: account.id }],
+    parsed: parseMailboxQuery('invoice from:vendor'),
+    folder: 'inbox',
+  });
+  assert.equal(state.searchQueries[0].gmraw, 'from:vendor invoice');
+  assert.equal(state.fetchCalls.length, 0);
+  assert.deepEqual(result.threadIds, ['thread-local']);
+  await service.close();
+});
+
+test('a newer leftover-text search cancels the in-flight IMAP SEARCH', async () => {
+  let release;
+  const hold = new Promise((resolve) => { release = resolve; });
+  let started;
+  const startedSearch = new Promise((resolve) => { started = resolve; });
+  const { service, state, account } = searchHarness({
+    messages: [historicalInvoice()],
+    gate: { hold, started },
+  });
+  const first = service.searchAndMaterialize({
+    accounts: [{ id: account.id }],
+    parsed: parseMailboxQuery('firstquery'),
+    folder: 'inbox',
+  });
+  await startedSearch;
+  const second = service.searchAndMaterialize({
+    accounts: [{ id: account.id }],
+    parsed: parseMailboxQuery('secondquery'),
+    folder: 'inbox',
+  });
+  release();
+  const firstResult = await first;
+  const secondResult = await second;
+  assert.equal(firstResult.cancelled, true);
+  assert.equal(secondResult.cancelled, false);
+  assert.ok(state.searchQueries.some((query) => query.text === 'secondquery'));
+  await service.close();
+});
+
+test('discoverSyncMailboxes imports Drafts before All Mail', () => {
+  const descriptors = discoverSyncMailboxes([
+    { path: 'INBOX', name: 'INBOX', specialUse: '\\Inbox' },
+    { path: '[Gmail]/All Mail', name: 'All Mail', specialUse: '\\All' },
+    { path: 'Brouillons', name: 'Brouillons', specialUse: '\\Drafts' },
+  ]);
+  assert.deepEqual(descriptors.map((item) => item.role), ['inbox', 'drafts', 'archive']);
+  assert.equal(descriptors.find((item) => item.role === 'drafts').mailbox, 'Brouillons');
+  assert.equal(descriptors.find((item) => item.role === 'archive').allMailMirror, true);
+
+  const byName = discoverSyncMailboxes([
+    { path: 'INBOX', name: 'INBOX' },
+    { path: 'Drafts', name: 'Drafts' },
+  ]);
+  assert.equal(byName.find((item) => item.role === 'drafts').mailbox, 'Drafts');
+});
+
+test('IMAP sync stores provider Drafts as drafts and keeps them out of the inbox', async () => {
+  const source = Buffer.from([
+    'From: Finance Lab <finance@lab.example>',
+    'To: Finance <finance@lab.example>',
+    'Subject: Q3 budget notes',
+    'Message-ID: <q3-budget@lab.example>',
+    'Date: Thu, 01 Oct 2026 12:00:00 +0000',
+    'Content-Type: text/plain; charset=utf-8',
+    '',
+    'Hold the numbers.',
+  ].join('\r\n'));
+  const draft = {
+    uid: 4,
+    size: source.length,
+    flags: new Set(['\\Seen', '\\Draft']),
+    internalDate: new Date('2026-10-01T12:00:00Z'),
+  };
+  const { service, state } = syncHarness({
+    maxMessageBytes: 4096,
+    messages: [],
+    sources: new Map([[4, source]]),
+    folders: [
+      { path: 'INBOX', name: 'INBOX', specialUse: '\\Inbox' },
+      { path: 'Brouillons', name: 'Brouillons', specialUse: '\\Drafts' },
+    ],
+    messagesByMailbox: { Brouillons: [draft] },
+  });
+
+  const result = await service.syncAccount('sync-account');
+  const draftsMailbox = result.mailboxes.find((item) => item.role === 'drafts');
+  const inboxMailbox = result.mailboxes.find((item) => item.role === 'inbox');
+  assert.equal(draftsMailbox.mailbox, 'Brouillons');
+  assert.equal(draftsMailbox.imported, 1);
+  assert.equal(inboxMailbox.imported, 0);
+  assert.equal(state.savedMessages.length, 1);
+  assert.equal(state.savedMessages[0].is_draft, 1);
+  assert.equal(state.savedMessages[0].mailbox, 'Brouillons');
+  assert.equal(state.savedMessages[0].subject, 'Q3 budget notes');
+  await service.close();
 });

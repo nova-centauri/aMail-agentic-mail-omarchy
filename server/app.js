@@ -8,42 +8,32 @@ import { registerMcp } from './routes/mcp.js';
 import { registerEvents } from './routes/events.js';
 import { NOOP_EVENTS } from './services/events.js';
 import { errorHandler, notFound } from './middleware/errors.js';
+import { createAuthenticator } from './middleware/auth.js';
+import { logSerializers } from './logging.js';
 
-function safeRequestUrl(value) {
-  const raw = String(value || '');
-  try {
-    const url = new URL(raw, 'http://amail.invalid');
-    for (const name of ['token', 'access_token', 'signature', 'sig']) {
-      if (url.searchParams.has(name)) url.searchParams.set(name, '[redacted]');
-    }
-    return `${url.pathname}${url.search}`;
-  } catch {
-    // Keep logging useful even for a malformed request target without allowing a
-    // capability token to reach the log sink.
-    return raw.replace(/([?&](?:token|access_token|signature|sig)=)[^&]*/gi, '$1[redacted]');
-  }
-}
-
-function requestSerializer(request) {
-  // Do not log headers at all: besides remote tokens in URLs, this avoids
-  // bearer credentials, cookies, and mail-client metadata reaching Pino.
-  return {
-    id: request.id,
-    method: request.method,
-    url: safeRequestUrl(request.url),
-    remoteAddress: request.socket?.remoteAddress,
-    remotePort: request.socket?.remotePort,
-  };
-}
-
-export function createApp({ config, repos, mailService, remoteContent, logger, passkeys, events = NOOP_EVENTS, idle = null }) {
+export function createApp({
+  config,
+  repos,
+  mailService,
+  remoteContent,
+  logger,
+  passkeys,
+  auth = createAuthenticator({ config }),
+  vault = null,
+  events = NOOP_EVENTS,
+  idle = null,
+}) {
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', config.trustProxy);
   app.use(pinoHttp({
     logger,
-    autoLogging: config.env !== 'test',
-    serializers: { req: requestSerializer },
+    autoLogging: config.env !== 'test' && !['error', 'fatal', 'silent'].includes(config.logLevel),
+    // Request logging stays at info: under the hosted LOG_LEVEL=error profile
+    // no per-request entry exists (autoLogging is off, and the level would drop
+    // it anyway). The error handler below is the single place a failure is
+    // recorded (route, status, request id, scrubbed error).
+    serializers: logSerializers,
   }));
   app.use(helmet({
     crossOriginEmbedderPolicy: false,
@@ -67,9 +57,9 @@ export function createApp({ config, repos, mailService, remoteContent, logger, p
   // Compose attachments travel as base64 JSON. 8 MiB of files is ~11 MiB encoded.
   app.use(express.json({ limit: '12mb', type: ['application/json', 'application/*+json'] }));
 
-  registerApi(app, { config, repos, mailService, remoteContent, passkeys, events, idle });
-  registerEvents(app, { config, events });
-  registerMcp(app, { config, repos, mailService, remoteContent });
+  registerApi(app, { config, repos, mailService, remoteContent, passkeys, auth, vault, events, idle });
+  registerEvents(app, { config, events, auth });
+  registerMcp(app, { config, repos, mailService, remoteContent, auth });
   app.use('/api', notFound);
 
   if (fs.existsSync(config.staticDir)) {
