@@ -73,6 +73,7 @@ BarWidget {
     return parts.length ? parts.join("  ") : "󰇮"
   }
   readonly property bool hasWork: (showUnread && unread > 0) || (showUnanalyzed && unanalyzed > 0)
+  readonly property bool needsReauth: transport === "reauth"
   // Waiting mail follows the theme accent. WidgetButton's default active color
   // is bar.active, which themes reserve for alarms (recording, alerts). A real
   // connection failure still uses that alarm color.
@@ -204,6 +205,7 @@ BarWidget {
     activeColor: root.hasError ? root.errorColor : root.mailColor
     dimmed: !root.online
     tooltipText: !root.configured ? "aMail: click to set up"
+      : root.needsReauth ? "aMail: re-authenticate — " + (root.lastError !== "" ? root.lastError : "run amail-plugin connect <url>")
       : !root.online ? "aMail: offline" + (root.lastError !== "" ? " — " + root.lastError : "")
       : root.unread + " unread · " + root.unanalyzed + " not yet analyzed · " + (root.transport === "push" ? "push" : root.transport)
     onPressed: function(buttonCode) {

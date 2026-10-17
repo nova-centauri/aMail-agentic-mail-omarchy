@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.nova-centauri.amail",
   "name": "aMail",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": "Steve Barrett",
   "license": "MIT",
   "description": "An email harness that wrangles many accounts into one funnel for your agents, and works as a simple mail client too. Every IMAP/SMTP inbox in one hub, one MCP endpoint, and an analyzed/not-analyzed flag on each message next to read/unread. Bar counters for both queues, a keyboard triage panel, toasts, and a first-run wizard. Client mode follows an aMail server you already run; server mode runs aMail here. New mail is pushed (IMAP IDLE → SSE) so the badge moves within a second.",

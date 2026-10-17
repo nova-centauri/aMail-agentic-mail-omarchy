@@ -4,27 +4,31 @@
 // fed through ~/.local/state/amail/state.json and fires desktop toasts for
 // new mail. New mail reaches it two ways:
 //
-//   push  — the aMail server's /api/events SSE stream (servers running this
-//           fork, which also park an IMAP IDLE connection per account). New
-//           mail lands here about a second after the provider receives it.
-//   poll  — for servers without /api/events: list polling every
-//           `pollSeconds` plus a POST /api/sync nudge every `syncSeconds`,
-//           which is exactly what a focused aMail browser tab does.
+//   push  — GET /api/events (SSE). Tried first. Reconnects with backoff.
+//           A 404 is the only signal that falls back to polling.
+//   poll  — slow list polling (at least 60s) for servers without events.
+//           POST /api/sync is not on a timer; the server syncs itself
+//           unless the user sets syncEnabled=true.
 //
 // Either way the daemon never holds message bodies; the state file carries
-// subjects, senders, snippets, counts and ids only.
+// subjects, senders, snippets, counts and ids only. One REST request is in
+// flight at a time. 401/403 stop the loop and surface a re-auth state.
 import fs from 'node:fs';
 import { spawn } from 'node:child_process';
 import {
   ApiError, PID_FILE, STATE_DIR, STATE_FILE, compactAccount, compactConversation,
   createApi, ensureDir, loadConfig, loadToken, log, readJson, writeJsonAtomic,
+  PLUGIN_VERSION, applyHttpFailure, authFailureMessage, computeBackoffMs,
+  decideAfterEventsResponse, isAuthFailure, isTimeoutError, messagesListPath,
+  nextRetryDelayMs, pluginUserAgent,
 } from './lib.mjs';
 
-const config = loadConfig();
+const config = loadConfig({ warn: (message) => log('config', message) });
 const token = loadToken(config);
 const startedAt = new Date().toISOString();
 const SEEN_LIMIT = 800;
 const SELF = process.env.AMAIL_PLUGIN_ID || 'io.github.nova-centauri.amail';
+const userAgent = pluginUserAgent({ version: PLUGIN_VERSION });
 
 let api = null;
 let features = [];
@@ -38,9 +42,12 @@ let refreshing = false;
 let refreshQueued = false;
 let refreshTimer = null;
 let stopping = false;
+let authStopped = false;
 let sseAbort = null;
 let syncInFlight = false;
 let health = null;
+let messagesEtag = null;
+let pollAttempt = 0;
 
 const previous = readJson(STATE_FILE, null);
 let seen = new Set(Array.isArray(previous?.seen) ? previous.seen : []);
@@ -66,6 +73,7 @@ function writeState(extra = {}) {
     eventSeq,
     features,
     error: lastError,
+    userAgent,
     idle: health?.idle ? { enabled: health.idle.enabled, connected: (health.idle.accounts || []).filter((a) => a.state === 'idle').length, total: (health.idle.accounts || []).length } : null,
     ...current,
     ...extra,
@@ -146,18 +154,53 @@ function detectNew(conversations, accountEmails) {
   return fresh;
 }
 
+function enterReauth(status) {
+  authStopped = true;
+  sseAbort?.abort(new Error('reauth'));
+  online = false;
+  transport = 'reauth';
+  lastError = authFailureMessage(status);
+  writeState();
+  log('auth', lastError);
+}
+
+function pageSizeFor(reason) {
+  // Timer / safety polls ask only for what the badge needs. A user refresh
+  // or a push event may pull the larger panel snapshot.
+  const full = reason === 'signal' || reason === 'hello' || reason === 'startup'
+    || String(reason).startsWith('message.') || String(reason).startsWith('account.')
+    || String(reason).startsWith('sync.');
+  return full ? config.listSize : config.badgePageSize;
+}
+
 async function refresh(reason = 'timer') {
-  if (!api) return;
+  if (!api || authStopped) return;
   if (refreshing) { refreshQueued = true; return; }
   refreshing = true;
   try {
-    const [accountsPayload, listPayload] = await Promise.all([
-      api.get('/api/accounts'),
-      api.get(`/api/messages?folder=inbox&pageSize=${config.listSize}`),
-    ]);
-    const accounts = (accountsPayload.accounts || []).map(compactAccount);
+    const needAccounts = current.accounts.length === 0
+      || reason === 'startup'
+      || String(reason).startsWith('account.');
+    let accounts = current.accounts;
+    if (needAccounts) {
+      const accountsPayload = await api.get('/api/accounts');
+      accounts = (accountsPayload.accounts || []).map(compactAccount);
+    }
     const accountsById = new Map(accounts.map((account) => [account.id, account]));
     const accountEmails = new Set(accounts.map((account) => String(account.email).toLowerCase()));
+    const result = await api.request('GET', messagesListPath({ pageSize: pageSizeFor(reason) }), {
+      ifNoneMatch: messagesEtag,
+    });
+    if (result.notModified) {
+      online = true;
+      lastError = '';
+      lastRefreshAt = new Date().toISOString();
+      pollAttempt = 0;
+      writeState();
+      return;
+    }
+    if (result.etag) messagesEtag = result.etag;
+    const listPayload = result.data || {};
     const conversations = (listPayload.messages || []).map((conversation) => compactConversation(conversation, accountsById));
     const counts = listPayload.folderCounts || {};
     current = {
@@ -172,20 +215,35 @@ async function refresh(reason = 'timer') {
     online = true;
     lastError = '';
     lastRefreshAt = new Date().toISOString();
+    pollAttempt = 0;
     const fresh = detectNew(conversations, accountEmails);
     writeState();
     for (const conversation of fresh) toast(conversation);
     if (fresh.length) log('new mail', { reason, count: fresh.length });
   } catch (error) {
+    const status = error instanceof ApiError ? error.status : 0;
+    if (isAuthFailure(status)) {
+      enterReauth(status);
+      return;
+    }
+    const decision = applyHttpFailure({ transport, error: lastError }, {
+      status,
+      retryAfter: error instanceof ApiError ? error.retryAfter : null,
+      path: error instanceof ApiError ? error.path : '',
+      attempt: pollAttempt,
+      timeout: isTimeoutError(error),
+    });
+    pollAttempt += 1;
     online = false;
-    lastError = error instanceof ApiError && error.status === 401
-      ? 'aMail rejected the access token (401). Run: amail-plugin connect <url>'
+    lastError = error instanceof ApiError
+      ? (decision.error || String(error.message || error))
       : String(error?.message || error);
     writeState();
     log('refresh failed', lastError);
+    if (decision.delayMs) await sleep(decision.delayMs);
   } finally {
     refreshing = false;
-    if (refreshQueued) {
+    if (refreshQueued && !authStopped) {
       refreshQueued = false;
       scheduleRefresh('queued', 50);
     }
@@ -199,6 +257,7 @@ async function refresh(reason = 'timer') {
 const MIN_REFRESH_GAP_MS = 1_500;
 let lastRefreshStartedAt = 0;
 function scheduleRefresh(reason, delayMs = 150) {
+  if (authStopped) return;
   if (refreshTimer) return;
   const sinceLast = Date.now() - lastRefreshStartedAt;
   const delay = Math.max(delayMs, MIN_REFRESH_GAP_MS - sinceLast);
@@ -210,68 +269,20 @@ function scheduleRefresh(reason, delayMs = 150) {
 }
 
 async function probeHealth() {
+  if (!api || authStopped) return false;
   try {
     health = await api.get('/api/health', { timeout: 10_000 });
     features = Array.isArray(health.features) ? health.features : [];
     return true;
   } catch (error) {
+    if (isAuthFailure(error?.status)) {
+      enterReauth(error.status);
+      return false;
+    }
     online = false;
     lastError = String(error?.message || error);
     writeState();
     return false;
-  }
-}
-
-// ---------------------------------------------------------------- push (SSE)
-async function runEventStream() {
-  let backoff = 2_000;
-  while (!stopping) {
-    sseAbort = new AbortController();
-    const { signal } = sseAbort;
-    let heartbeatTimer = null;
-    const armHeartbeat = (ms) => {
-      if (heartbeatTimer) clearTimeout(heartbeatTimer);
-      heartbeatTimer = setTimeout(() => sseAbort?.abort(new Error('event stream went quiet')), ms);
-    };
-    try {
-      const headers = { ...api.headers, Accept: 'text/event-stream' };
-      if (eventSeq) headers['Last-Event-ID'] = String(eventSeq);
-      const response = await fetch(`${api.base}/api/events`, { headers, signal });
-      if (!response.ok || !response.body) throw new ApiError(response.status, `event stream returned ${response.status}`);
-      transport = 'push';
-      online = true;
-      backoff = 2_000;
-      armHeartbeat(60_000);
-      writeState();
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      // eslint-disable-next-line no-constant-condition
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        let index;
-        while ((index = buffer.indexOf('\n\n')) >= 0) {
-          const block = buffer.slice(0, index);
-          buffer = buffer.slice(index + 2);
-          handleEventBlock(block, armHeartbeat);
-        }
-      }
-      throw new Error('event stream ended');
-    } catch (error) {
-      if (stopping) break;
-      transport = 'reconnecting';
-      lastError = String(error?.message || error);
-      writeState();
-      log('event stream dropped', lastError, `retry in ${backoff}ms`);
-      await sleep(backoff);
-      backoff = Math.min(60_000, backoff * 2);
-      // The gap may have hidden mail; a refresh is cheap.
-      scheduleRefresh('reconnect');
-    } finally {
-      if (heartbeatTimer) clearTimeout(heartbeatTimer);
-    }
   }
 }
 
@@ -311,19 +322,152 @@ function handleEventBlock(block, armHeartbeat) {
   }
 }
 
+async function consumeEventStream(response, armHeartbeat) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let index;
+    while ((index = buffer.indexOf('\n\n')) >= 0) {
+      const block = buffer.slice(0, index);
+      buffer = buffer.slice(index + 2);
+      handleEventBlock(block, armHeartbeat);
+    }
+  }
+}
+
+// ---------------------------------------------------------------- push (SSE)
+async function runEventStream() {
+  let attempt = 0;
+  while (!stopping && !authStopped) {
+    sseAbort = new AbortController();
+    const { signal } = sseAbort;
+    let heartbeatTimer = null;
+    const armHeartbeat = (ms) => {
+      if (heartbeatTimer) clearTimeout(heartbeatTimer);
+      heartbeatTimer = setTimeout(() => sseAbort?.abort(new Error('event stream went quiet')), ms);
+    };
+    try {
+      const headers = { ...api.headers, Accept: 'text/event-stream', 'User-Agent': userAgent };
+      if (eventSeq) headers['Last-Event-ID'] = String(eventSeq);
+      const response = await fetch(`${api.base}/api/events`, { headers, signal });
+      const decision = decideAfterEventsResponse(response.status, {
+        retryAfter: response.headers.get('retry-after'),
+        attempt,
+      });
+      if (decision.stopped) {
+        await response.body?.cancel?.().catch(() => {});
+        enterReauth(response.status);
+        return;
+      }
+      if (decision.fallback === 'events-missing') {
+        await response.body?.cancel?.().catch(() => {});
+        log('events', decision.error);
+        transport = 'poll';
+        writeState();
+        await pollLoop();
+        return;
+      }
+      if (response.status === 429) {
+        await response.body?.cancel?.().catch(() => {});
+        const delay = decision.delayMs ?? nextRetryDelayMs({ attempt, status: 429, retryAfter: response.headers.get('retry-after') });
+        log('events', `429, retry in ${delay}ms`);
+        await sleep(delay);
+        attempt += 1;
+        continue;
+      }
+      if (!response.ok || !response.body) {
+        throw new ApiError(response.status, `event stream returned ${response.status}`, null, {
+          retryAfter: response.headers.get('retry-after'),
+          path: '/api/events',
+        });
+      }
+      transport = 'push';
+      online = true;
+      lastError = '';
+      attempt = 0;
+      armHeartbeat(60_000);
+      writeState();
+      await consumeEventStream(response, armHeartbeat);
+      throw new Error('event stream ended');
+    } catch (error) {
+      if (stopping || authStopped) break;
+      if (isAuthFailure(error?.status)) {
+        enterReauth(error.status);
+        return;
+      }
+      const decision = applyHttpFailure({ transport: 'push' }, {
+        status: error instanceof ApiError ? error.status : 0,
+        retryAfter: error instanceof ApiError ? error.retryAfter : null,
+        path: error instanceof ApiError ? error.path : '/api/events',
+        attempt,
+        timeout: isTimeoutError(error),
+      });
+      if (decision.fallback === 'events-missing') {
+        log('events', decision.error);
+        transport = 'poll';
+        writeState();
+        await pollLoop();
+        return;
+      }
+      transport = 'reconnecting';
+      lastError = String(error?.message || error);
+      writeState();
+      const delay = decision.delayMs ?? computeBackoffMs(attempt);
+      log('event stream dropped', lastError, `retry in ${delay}ms`);
+      attempt += 1;
+      await sleep(delay);
+      scheduleRefresh('reconnect');
+    } finally {
+      if (heartbeatTimer) clearTimeout(heartbeatTimer);
+    }
+  }
+}
+
 // ---------------------------------------------------------------- poll
 async function nudgeSync() {
-  if (!api || syncInFlight) return;
+  if (!api || authStopped || syncInFlight) return;
   syncInFlight = true;
   try {
-    // A full sync over many accounts can take a while; do not let it block
-    // the list poll, and never overlap two of them.
     await api.post('/api/sync', {}, { timeout: 10 * 60_000 });
     scheduleRefresh('sync', 50);
   } catch (error) {
+    if (isAuthFailure(error?.status)) {
+      enterReauth(error.status);
+      return;
+    }
     log('sync nudge failed', String(error?.message || error));
   } finally {
     syncInFlight = false;
+  }
+}
+
+async function pollLoop() {
+  transport = 'poll';
+  writeState();
+  let lastSyncAt = 0;
+  while (!stopping && !authStopped) {
+    const started = Date.now();
+    await refresh('poll');
+    if (stopping || authStopped) break;
+    if (config.syncEnabled && Date.now() - lastSyncAt >= config.syncSeconds * 1000) {
+      await nudgeSync();
+      lastSyncAt = Date.now();
+    }
+    const wait = Math.max(0, config.pollSeconds * 1000 - (Date.now() - started));
+    await sleep(wait);
+  }
+}
+
+async function safetyPollLoop() {
+  while (!stopping && !authStopped) {
+    await sleep(config.safetyPollSeconds * 1000);
+    if (stopping || authStopped || transport !== 'push') continue;
+    await refresh('safety');
   }
 }
 
@@ -352,40 +496,37 @@ async function main() {
     setInterval(() => { if (loadToken(loadConfig())) process.exit(75); }, 5_000);
     return;
   }
-  api = createApi({ url: config.url, token });
+  api = createApi({ url: config.url, token, userAgent, serial: true });
 
-  let healthy = await probeHealth();
-  while (!healthy && !stopping) {
-    transport = 'offline';
-    await sleep(15_000);
-    healthy = await probeHealth();
-  }
-  await refresh('startup');
+  await probeHealth();
+  if (authStopped) return;
+  log('connected', {
+    url: config.url,
+    userAgent,
+    pollSeconds: config.pollSeconds,
+    syncEnabled: config.syncEnabled,
+    syncSeconds: config.syncSeconds,
+    badgePageSize: config.badgePageSize,
+  });
 
-  const hasEvents = features.includes('events');
-  const hasIdle = features.includes('idle') && health?.idle?.enabled !== false;
-  log('connected', { url: config.url, transport: hasEvents ? 'push' : 'poll', idle: hasIdle, accounts: current.accounts.length });
-
-  if (hasEvents) {
-    void runEventStream();
-    // Even with push, a periodic list refresh guards against a missed event.
-    setInterval(() => scheduleRefresh('safety'), Math.max(30, config.safetyPollSeconds) * 1000).unref();
-    if (!hasIdle) {
-      setInterval(() => void nudgeSync(), Math.max(20, config.syncSeconds) * 1000).unref();
-    }
-  } else {
-    transport = 'poll';
-    writeState();
-    setInterval(() => scheduleRefresh('poll'), Math.max(3, config.pollSeconds) * 1000).unref();
-    setInterval(() => void nudgeSync(), Math.max(20, config.syncSeconds) * 1000).unref();
-    setInterval(() => void probeHealth(), 5 * 60_000).unref();
-  }
-  // Keep the event loop alive regardless of the branch above.
+  // Prefer SSE. Health "features" is advisory only; a 404 is the fallback.
+  void safetyPollLoop();
+  await runEventStream();
+  // Re-auth and other terminal states must keep the process alive so the bar
+  // keeps showing the last state instead of the widget restarting us.
   setInterval(() => {}, 60_000);
 }
 
 process.on('SIGUSR1', () => scheduleRefresh('signal', 50));
-process.on('SIGUSR2', () => { void nudgeSync(); scheduleRefresh('signal', 0); });
+process.on('SIGUSR2', () => {
+  if (!config.syncEnabled) {
+    log('sync', 'SIGUSR2 ignored: syncEnabled is false');
+    scheduleRefresh('signal', 0);
+    return;
+  }
+  void nudgeSync();
+  scheduleRefresh('signal', 0);
+});
 for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
   process.on(signal, () => {
     stopping = true;
