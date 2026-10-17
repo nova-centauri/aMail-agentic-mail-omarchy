@@ -17,6 +17,11 @@ Gentle client for shared aMail hubs. The 0.2.0 daemon could pin a self-hosted se
 - **Small badge query:** timer polls use `pageSize=5` (folder counts + a few threads), not the full inbox.
 - **User-Agent:** `amail-omarchy/<version> (<hostname>)`.
 
+### Dependencies
+
+- `undici` 8.10.0 → 8.12.2 (GHSA-3wwx-pv8p-q78v and later 8.x DoS fixes). Cheerio’s nested 7.x copy is overridden to 7.30.1.
+- Production `npm audit --audit-level=high` also required patched `nodemailer` 10.1.2, `@modelcontextprotocol/sdk` 1.32.1, `proxy-addr` 2.0.8, and `source-map-js` 1.2.2.
+
 ### Upgrade
 
 Hosts still running 0.2.0 with `pollSeconds=10` / `syncSeconds=45` should update and restart the shell. Steps: [`docs/upgrade-omarchy-plugin.md`](docs/upgrade-omarchy-plugin.md).
