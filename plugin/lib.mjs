@@ -23,6 +23,28 @@ export const BADGE_PAGE_SIZE = 5;
 export const BADGE_PAGE_SIZE_MAX = 20;
 export const BACKOFF_BASE_MS = 2_000;
 export const BACKOFF_MAX_MS = 5 * 60_000;
+export const SSE_HEARTBEAT_DEFAULT_MS = 20_000;
+export const SSE_QUIET_DEFAULT_MS = 60_000;
+export const SSE_QUIET_MIN_MS = 30_000;
+export const SSE_QUIET_NAMED_EVENT_MS = 75_000;
+export const SSE_RECONNECT_BASE_MS = 2_000;
+export const SSE_RECONNECT_MAX_MS = 60_000;
+export const MESSAGES_PER_MINUTE_BUDGET = 15;
+export const MIN_REFRESH_GAP_MS = Math.ceil(60_000 / MESSAGES_PER_MINUTE_BUDGET);
+
+/** Inbox refetch names from nova-centauri/aMail docs/api-events.md (PR #29). */
+export const SSE_REFRESH_EVENTS = Object.freeze(new Set([
+  'change-version',
+  'new-mail',
+  'message.new',
+  'message.state',
+  'message.sent',
+  'sync-status',
+  'sync.mailbox',
+  'account.updated',
+  'account.added',
+  'account.removed',
+]));
 
 export const DEFAULT_CONFIG = Object.freeze({
   mode: 'client',            // "client" (remote aMail) or "server" (local aMail managed by the plugin)
@@ -155,6 +177,8 @@ export function applyHttpFailure(state, {
   timeout = false,
   now = Date.now(),
   random = Math.random,
+  baseMs = BACKOFF_BASE_MS,
+  maxMs = BACKOFF_MAX_MS,
 } = {}) {
   if (isAuthFailure(status)) {
     return {
@@ -176,7 +200,7 @@ export function applyHttpFailure(state, {
       error: 'GET /api/events is not available; falling back to slow polling',
     };
   }
-  const delayMs = nextRetryDelayMs({ attempt, status, retryAfter, now, random });
+  const delayMs = nextRetryDelayMs({ attempt, status, retryAfter, now, random, baseMs, maxMs });
   return {
     ...state,
     transport: state.transport === 'push' ? 'reconnecting' : (state.transport || 'offline'),
@@ -192,6 +216,120 @@ export function decideAfterEventsResponse(status, extras = {}) {
     return { transport: 'push', stopped: false, fallback: null, delayMs: null, error: '' };
   }
   return applyHttpFailure({ transport: 'starting' }, { ...extras, status, path: '/api/events' });
+}
+
+export function healthAdvertisesEvents(health) {
+  return Array.isArray(health?.features) && health.features.includes('events');
+}
+
+/** Health is the discovery signal. Missing/unreadable health still probes SSE. */
+export function chooseTransportFromHealth(health) {
+  if (!health || !Array.isArray(health.features)) return 'probe-events';
+  return healthAdvertisesEvents(health) ? 'push' : 'poll';
+}
+
+/**
+ * Quiet-stream watchdog from docs/api-events.md:
+ * open/comment = 60s, hello = max(30s, heartbeatMs * 3), named events = 75s.
+ */
+export function quietTimeoutMs(kind, heartbeatMs = SSE_HEARTBEAT_DEFAULT_MS) {
+  if (kind === 'hello') {
+    return Math.max(SSE_QUIET_MIN_MS, (Number(heartbeatMs) || SSE_HEARTBEAT_DEFAULT_MS) * 3);
+  }
+  if (kind === 'comment' || kind === 'open') return SSE_QUIET_DEFAULT_MS;
+  return SSE_QUIET_NAMED_EVENT_MS;
+}
+
+export function shouldRefreshOnEvent(type) {
+  return SSE_REFRESH_EVENTS.has(String(type || ''));
+}
+
+export function shouldRefreshOnHello({
+  gap = false,
+  lastRefreshAt = null,
+  changedAt = null,
+  lastChangedAt = null,
+} = {}) {
+  if (gap) return true;
+  if (!lastRefreshAt) return true;
+  if (changedAt && lastChangedAt && changedAt !== lastChangedAt) return true;
+  return false;
+}
+
+export function parseSseBlock(block) {
+  const text = String(block || '');
+  if (!text.trim() || text.startsWith(':')) {
+    return { kind: 'comment', comment: text.replace(/^:\s?/, '').trim(), type: null, id: 0, data: null };
+  }
+  let type = 'message';
+  let id = 0;
+  let raw = '';
+  for (const line of text.split('\n')) {
+    if (line.startsWith('event:')) type = line.slice(6).trim();
+    else if (line.startsWith('id:')) {
+      const parsed = Number.parseInt(line.slice(3).trim(), 10);
+      if (Number.isInteger(parsed) && parsed > 0) id = parsed;
+    } else if (line.startsWith('data:')) raw += line.slice(5).trim();
+  }
+  let data = null;
+  try { data = raw ? JSON.parse(raw) : null; } catch { data = null; }
+  return { kind: 'event', comment: '', type, id, data };
+}
+
+export function lastEventIdHeader(eventSeq) {
+  const id = Number.parseInt(String(eventSeq ?? ''), 10);
+  if (!Number.isInteger(id) || id <= 0) return null;
+  return String(id);
+}
+
+export function eventsRequestHeaders({ token, userAgent, lastEventId } = {}) {
+  const headers = { Accept: 'text/event-stream' };
+  if (userAgent) headers['User-Agent'] = userAgent;
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const last = lastEventIdHeader(lastEventId);
+  if (last) headers['Last-Event-ID'] = last;
+  return headers;
+}
+
+export function sseReconnectDelayMs(attempt, random = Math.random) {
+  return computeBackoffMs(attempt, {
+    baseMs: SSE_RECONNECT_BASE_MS,
+    maxMs: SSE_RECONNECT_MAX_MS,
+    random,
+  });
+}
+
+/** Unauthenticated GET /api/health — discovery only, no bearer token. */
+export async function fetchHealth(url, { timeout = 10_000, userAgent = pluginUserAgent(), fetchImpl = fetch } = {}) {
+  const base = String(url || '').replace(/\/+$/, '');
+  if (!base) throw new Error('aMail URL is not configured. Run: amail-plugin connect <url>');
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error(`aMail request timed out after ${timeout}ms`)), timeout);
+  try {
+    let response;
+    try {
+      response = await fetchImpl(`${base}/api/health`, {
+        headers: { Accept: 'application/json', 'User-Agent': userAgent },
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (isTimeoutError(error)) throw new Error(`aMail request timed out after ${timeout}ms`);
+      const cause = error?.cause;
+      throw new Error(`Could not reach ${base}: ${cause?.code || cause?.message || error?.message || String(error)}`);
+    }
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new ApiError(
+        response.status,
+        data?.error?.message || `GET /api/health failed with ${response.status}`,
+        data?.error?.code || null,
+        { path: '/api/health' },
+      );
+    }
+    return data;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export function messagesListPath({ folder = 'inbox', pageSize = BADGE_PAGE_SIZE } = {}) {
@@ -323,13 +461,21 @@ export function createApi({
         throw new Error(`Could not reach ${base}: ${detail}`);
       }
       const etag = response.headers.get('etag');
-      const retryAfter = response.headers.get('retry-after');
       if (response.status === 304) {
-        return { status: 304, notModified: true, etag, data: null, retryAfter, headers: response.headers };
+        return {
+          status: 304,
+          notModified: true,
+          etag,
+          data: null,
+          retryAfter: response.headers.get('retry-after'),
+          headers: response.headers,
+        };
       }
       const text = await response.text();
       let data = null;
       try { data = text ? JSON.parse(text) : null; } catch { data = { raw: text }; }
+      const retryAfter = response.headers.get('retry-after')
+        ?? (data?.error?.retryAfterSec != null ? String(data.error.retryAfterSec) : null);
       if (!response.ok) {
         throw new ApiError(
           response.status,

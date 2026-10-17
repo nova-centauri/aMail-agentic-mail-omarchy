@@ -60,8 +60,8 @@ Expect:
 
 | Hub | `transport` | Traffic |
 | --- | --- | --- |
-| Old server (no `GET /api/events`) | `poll` | One serialized `GET /api/messages?folder=inbox&pageSize=5` about every 60s, with `If-None-Match` once an ETag exists. No timer `POST /api/sync`. |
-| New server (SSE) | `push` | One long-lived `GET /api/events`, plus a badge refresh on events and a 300s safety poll. Reconnects with backoff if the stream drops. |
+| Old server (health has no `features.events`) | `poll` | One serialized `GET /api/messages?folder=inbox&pageSize=5` about every 60s, with `If-None-Match` once an ETag exists. No timer `POST /api/sync`. |
+| New server (`GET /api/health` → `"features": ["events"]`) | `push` | Unauthenticated health discovery, then one long-lived `GET /api/events` (Bearer + `Last-Event-ID` on reconnect). Refetch on `hello.gap`, `change-version`, `new-mail` / `message.new`, `sync-status` / `sync.mailbox`, `account.updated`. Quiet-timeout from `hello.heartbeatMs`. Reconnects 2s→60s. |
 
 On every host the `User-Agent` should look like `amail-omarchy/0.3.0 (<hostname>)` so hub logs can tell the desktops apart.
 

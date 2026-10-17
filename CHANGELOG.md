@@ -8,7 +8,8 @@ Gentle client for shared aMail hubs. The 0.2.0 daemon could pin a self-hosted se
 
 - **Floors:** `pollSeconds` defaults to 60 and never runs faster; `syncSeconds` defaults to 300. Values below the floor are clamped and logged.
 - **No overlap:** the REST client serializes requests so a host has at most one in flight.
-- **Prefer events:** try `GET /api/events` first, reconnect with jittered exponential backoff, and fall back to slow polling only on 404.
+- **Prefer events:** unauthenticated `GET /api/health` is the discovery signal (`features` includes `events`). Then hold `GET /api/events` (Bearer + `Accept: text/event-stream` + optional `Last-Event-ID`). Reconnect 2s→60s. Fall back to slow polling only when health has no `events` or `/api/events` returns 404.
+- **SSE contract (aMail PR #29):** quiet-timeout from `hello.heartbeatMs` (`max(30s, heartbeatMs * 3)`); `: heartbeat` comments reset to 60s; named events reset to 75s. Refetch on `hello.gap`, `change-version`, `new-mail` / `message.new`, `sync-status` / `sync.mailbox`, `account.updated`. `401 AUTH_REQUIRED` stops the loop.
 - **No timer sync:** `POST /api/sync` is off unless `syncEnabled` is set. The server syncs itself.
 - **Backoff:** errors and timeouts back off; `429` honours `Retry-After`.
 - **Re-auth:** `401`/`403` stop the loop and surface a re-authenticate state on the bar instead of retrying.

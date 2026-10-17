@@ -5,19 +5,30 @@ import {
   ApiError,
   applyConfigFloors,
   applyHttpFailure,
+  chooseTransportFromHealth,
   computeBackoffMs,
   createApi,
   createRequestGate,
   decideAfterEventsResponse,
   DEFAULT_CONFIG,
+  eventsRequestHeaders,
+  fetchHealth,
+  healthAdvertisesEvents,
   isAuthFailure,
+  lastEventIdHeader,
   messagesListPath,
+  MIN_REFRESH_GAP_MS,
   nextRetryDelayMs,
+  parseSseBlock,
   pluginUserAgent,
   POLL_SECONDS_FLOOR,
+  quietTimeoutMs,
   recipientsFrom,
   resolveOpenTarget,
   retryAfterMs,
+  shouldRefreshOnEvent,
+  shouldRefreshOnHello,
+  sseReconnectDelayMs,
   SYNC_SECONDS_FLOOR,
 } from './lib.mjs';
 
@@ -216,6 +227,109 @@ describe('request gate', () => {
   });
 });
 
+describe('SSE contract (aMail PR #29)', () => {
+  it('discovers push from unauthenticated health features.events', () => {
+    assert.equal(healthAdvertisesEvents({ features: ['events'] }), true);
+    assert.equal(healthAdvertisesEvents({ features: ['events', 'idle'] }), true);
+    assert.equal(healthAdvertisesEvents({ features: ['idle'] }), false);
+    assert.equal(healthAdvertisesEvents({}), false);
+    assert.equal(chooseTransportFromHealth({ features: ['events'] }), 'push');
+    assert.equal(chooseTransportFromHealth({ features: [] }), 'poll');
+    assert.equal(chooseTransportFromHealth(null), 'probe-events');
+  });
+
+  it('fetches /api/health without Authorization', async () => {
+    let authorization = 'unset';
+    const server = await listen((request, response) => {
+      authorization = request.headers.authorization || null;
+      response.setHeader('Content-Type', 'application/json');
+      response.end(JSON.stringify({ status: 'ok', features: ['events'] }));
+    });
+    try {
+      const health = await fetchHealth(originOf(server), { userAgent: 'amail-omarchy/0.3.0 (desk-one)' });
+      assert.equal(authorization, null);
+      assert.deepEqual(health.features, ['events']);
+    } finally {
+      server.close();
+    }
+  });
+
+  it('sets quiet-timeout from hello.heartbeatMs', () => {
+    assert.equal(quietTimeoutMs('open'), 60_000);
+    assert.equal(quietTimeoutMs('comment'), 60_000);
+    assert.equal(quietTimeoutMs('hello', 20_000), 60_000);
+    assert.equal(quietTimeoutMs('hello', 5_000), 30_000);
+    assert.equal(quietTimeoutMs('hello', 30_000), 90_000);
+    assert.equal(quietTimeoutMs('message.new'), 75_000);
+    assert.equal(quietTimeoutMs('change-version'), 75_000);
+  });
+
+  it('refetches on contract event names and plugin aliases', () => {
+    for (const name of ['change-version', 'new-mail', 'message.new', 'sync-status', 'sync.mailbox', 'account.updated']) {
+      assert.equal(shouldRefreshOnEvent(name), true, name);
+    }
+    assert.equal(shouldRefreshOnEvent('hello'), false);
+    assert.equal(shouldRefreshOnEvent('unknown'), false);
+  });
+
+  it('refetches on hello.gap or a first snapshot, not on a warm reconnect', () => {
+    assert.equal(shouldRefreshOnHello({ gap: true, lastRefreshAt: '2026-01-01T00:00:00.000Z' }), true);
+    assert.equal(shouldRefreshOnHello({ gap: false, lastRefreshAt: null }), true);
+    assert.equal(shouldRefreshOnHello({
+      gap: false,
+      lastRefreshAt: '2026-01-01T00:00:00.000Z',
+      changedAt: 't1',
+      lastChangedAt: 't1',
+    }), false);
+    assert.equal(shouldRefreshOnHello({
+      gap: false,
+      lastRefreshAt: '2026-01-01T00:00:00.000Z',
+      changedAt: 't2',
+      lastChangedAt: 't1',
+    }), true);
+  });
+
+  it('reconnects with Last-Event-ID and Accept: text/event-stream', () => {
+    assert.equal(lastEventIdHeader(12), '12');
+    assert.equal(lastEventIdHeader(0), null);
+    assert.equal(lastEventIdHeader(null), null);
+    const headers = eventsRequestHeaders({ token: 'secret', userAgent: 'amail-omarchy/0.3.0 (desk-one)', lastEventId: 12 });
+    assert.equal(headers.Accept, 'text/event-stream');
+    assert.equal(headers.Authorization, 'Bearer secret');
+    assert.equal(headers['Last-Event-ID'], '12');
+    assert.equal(headers['User-Agent'], 'amail-omarchy/0.3.0 (desk-one)');
+    assert.equal(eventsRequestHeaders({ token: 'secret' })['Last-Event-ID'], undefined);
+  });
+
+  it('parses hello payloads and : heartbeat comments', () => {
+    const hello = parseSseBlock('id: 12\nevent: hello\ndata: {"heartbeatMs":20000,"gap":true,"changedAt":"t"}');
+    assert.equal(hello.kind, 'event');
+    assert.equal(hello.type, 'hello');
+    assert.equal(hello.id, 12);
+    assert.equal(hello.data.gap, true);
+    assert.equal(hello.data.heartbeatMs, 20_000);
+    assert.equal(hello.data.changedAt, 't');
+    const beat = parseSseBlock(': heartbeat');
+    assert.equal(beat.kind, 'comment');
+    assert.equal(beat.comment, 'heartbeat');
+  });
+
+  it('caps SSE reconnect backoff at 60s (2s → 60s)', () => {
+    assert.equal(sseReconnectDelayMs(0, () => 1), 2_000);
+    assert.equal(sseReconnectDelayMs(10, () => 1), 60_000);
+  });
+
+  it('stops on 401 AUTH_REQUIRED from GET /api/events', () => {
+    const decision = decideAfterEventsResponse(401);
+    assert.equal(decision.stopped, true);
+    assert.equal(decision.transport, 'reauth');
+  });
+
+  it('keeps GET /api/messages under 15/min by spacing refreshes', () => {
+    assert.ok(MIN_REFRESH_GAP_MS >= 4_000);
+  });
+});
+
 describe('createApi', () => {
   it('sends a descriptive User-Agent and handles ETag / 304', async () => {
     const seen = [];
@@ -286,6 +400,25 @@ describe('createApi', () => {
       });
       await Promise.all([api.get('/api/busy'), api.get('/api/busy')]);
       assert.equal(peak, 1);
+    } finally {
+      server.close();
+    }
+  });
+
+  it('reads retryAfterSec from a RATE_LIMITED body when Retry-After is absent', async () => {
+    const server = await listen((_request, response) => {
+      response.statusCode = 429;
+      response.setHeader('Content-Type', 'application/json');
+      response.end(JSON.stringify({ error: { code: 'RATE_LIMITED', retryAfterSec: 60 } }));
+    });
+    try {
+      const api = createApi({ url: originOf(server), token: 'secret' });
+      await assert.rejects(() => api.get('/api/messages'), (error) => {
+        assert.equal(error.status, 429);
+        assert.equal(error.retryAfter, '60');
+        assert.equal(error.code, 'RATE_LIMITED');
+        return true;
+      });
     } finally {
       server.close();
     }

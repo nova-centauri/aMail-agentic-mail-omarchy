@@ -4,8 +4,9 @@
 // fed through ~/.local/state/amail/state.json and fires desktop toasts for
 // new mail. New mail reaches it two ways:
 //
-//   push  — GET /api/events (SSE). Tried first. Reconnects with backoff.
-//           A 404 is the only signal that falls back to polling.
+//   push  — unauthenticated GET /api/health lists features.events, then
+//           GET /api/events (SSE, Bearer + Last-Event-ID). Reconnects 2s→60s.
+//           A 404 (or health without events) falls back to polling.
 //   poll  — slow list polling (at least 60s) for servers without events.
 //           POST /api/sync is not on a timer; the server syncs itself
 //           unless the user sets syncEnabled=true.
@@ -18,9 +19,12 @@ import { spawn } from 'node:child_process';
 import {
   ApiError, PID_FILE, STATE_DIR, STATE_FILE, compactAccount, compactConversation,
   createApi, ensureDir, loadConfig, loadToken, log, readJson, writeJsonAtomic,
-  PLUGIN_VERSION, applyHttpFailure, authFailureMessage, computeBackoffMs,
-  decideAfterEventsResponse, isAuthFailure, isTimeoutError, messagesListPath,
-  nextRetryDelayMs, pluginUserAgent,
+  PLUGIN_VERSION, applyHttpFailure, authFailureMessage,
+  chooseTransportFromHealth, decideAfterEventsResponse, eventsRequestHeaders,
+  fetchHealth, isAuthFailure, isTimeoutError, messagesListPath, MIN_REFRESH_GAP_MS,
+  nextRetryDelayMs, parseSseBlock, pluginUserAgent, quietTimeoutMs,
+  shouldRefreshOnEvent, shouldRefreshOnHello, sseReconnectDelayMs,
+  SSE_RECONNECT_BASE_MS, SSE_RECONNECT_MAX_MS, SSE_REFRESH_EVENTS,
 } from './lib.mjs';
 
 const config = loadConfig({ warn: (message) => log('config', message) });
@@ -48,6 +52,8 @@ let syncInFlight = false;
 let health = null;
 let messagesEtag = null;
 let pollAttempt = 0;
+let lastChangedAt = null;
+let heartbeatMs = 20_000;
 
 const previous = readJson(STATE_FILE, null);
 let seen = new Set(Array.isArray(previous?.seen) ? previous.seen : []);
@@ -165,11 +171,10 @@ function enterReauth(status) {
 }
 
 function pageSizeFor(reason) {
-  // Timer / safety polls ask only for what the badge needs. A user refresh
-  // or a push event may pull the larger panel snapshot.
+  // Timer / safety / reconnect polls ask only for what the badge needs.
+  // A user refresh, hello gap, or a mailbox event may pull the panel snapshot.
   const full = reason === 'signal' || reason === 'hello' || reason === 'startup'
-    || String(reason).startsWith('message.') || String(reason).startsWith('account.')
-    || String(reason).startsWith('sync.');
+    || SSE_REFRESH_EVENTS.has(String(reason));
   return full ? config.listSize : config.badgePageSize;
 }
 
@@ -254,7 +259,6 @@ async function refresh(reason = 'timer') {
 // messages) produces a firehose of state events. Coalesce them so the daemon
 // re-fetches at most about once every 1.5 s while that is going on, and
 // immediately again once it goes quiet.
-const MIN_REFRESH_GAP_MS = 1_500;
 let lastRefreshStartedAt = 0;
 function scheduleRefresh(reason, delayMs = 150) {
   if (authStopped) return;
@@ -269,56 +273,45 @@ function scheduleRefresh(reason, delayMs = 150) {
 }
 
 async function probeHealth() {
-  if (!api || authStopped) return false;
+  // Discovery is unauthenticated. A bad bearer token must not hide features.
   try {
-    health = await api.get('/api/health', { timeout: 10_000 });
+    health = await fetchHealth(config.url, { timeout: 10_000, userAgent });
     features = Array.isArray(health.features) ? health.features : [];
     return true;
   } catch (error) {
-    if (isAuthFailure(error?.status)) {
-      enterReauth(error.status);
-      return false;
-    }
-    online = false;
-    lastError = String(error?.message || error);
-    writeState();
+    log('health', String(error?.message || error));
     return false;
   }
 }
 
 function handleEventBlock(block, armHeartbeat) {
-  if (!block.trim() || block.startsWith(':')) { armHeartbeat(60_000); return; }
-  let type = 'message';
-  let id = 0;
-  let data = '';
-  for (const line of block.split('\n')) {
-    if (line.startsWith('event:')) type = line.slice(6).trim();
-    else if (line.startsWith('id:')) id = Number(line.slice(3).trim()) || 0;
-    else if (line.startsWith('data:')) data += line.slice(5).trim();
+  const parsed = parseSseBlock(block);
+  if (parsed.kind === 'comment') {
+    armHeartbeat(quietTimeoutMs('comment', heartbeatMs));
+    return;
   }
-  let event = null;
-  try { event = data ? JSON.parse(data) : null; } catch { event = null; }
-  if (id) eventSeq = id;
+  if (parsed.id) eventSeq = parsed.id;
   lastEventAt = new Date().toISOString();
-  if (type === 'hello') {
-    armHeartbeat(Math.max(30_000, (Number(event?.heartbeatMs) || 20_000) * 3));
-    if (event?.gap || !lastRefreshAt) scheduleRefresh('hello');
+  const event = parsed.data;
+  if (parsed.type === 'hello') {
+    heartbeatMs = Number(event?.heartbeatMs) || heartbeatMs;
+    armHeartbeat(quietTimeoutMs('hello', heartbeatMs));
+    if (shouldRefreshOnHello({
+      gap: Boolean(event?.gap),
+      lastRefreshAt,
+      changedAt: event?.changedAt || null,
+      lastChangedAt,
+    })) {
+      scheduleRefresh('hello');
+    }
+    if (event?.changedAt) lastChangedAt = event.changedAt;
     writeState();
     return;
   }
-  armHeartbeat(75_000);
-  switch (type) {
-    case 'message.new':
-    case 'message.state':
-    case 'message.sent':
-    case 'sync.mailbox':
-    case 'account.added':
-    case 'account.removed':
-    case 'account.updated':
-      scheduleRefresh(type, type === 'message.new' ? 60 : 250);
-      break;
-    default:
-      break;
+  if (event?.changedAt) lastChangedAt = event.changedAt;
+  armHeartbeat(quietTimeoutMs(parsed.type, heartbeatMs));
+  if (shouldRefreshOnEvent(parsed.type)) {
+    scheduleRefresh(parsed.type, parsed.type === 'message.new' || parsed.type === 'new-mail' ? 60 : 250);
   }
 }
 
@@ -352,8 +345,7 @@ async function runEventStream() {
       heartbeatTimer = setTimeout(() => sseAbort?.abort(new Error('event stream went quiet')), ms);
     };
     try {
-      const headers = { ...api.headers, Accept: 'text/event-stream', 'User-Agent': userAgent };
-      if (eventSeq) headers['Last-Event-ID'] = String(eventSeq);
+      const headers = eventsRequestHeaders({ token, userAgent, lastEventId: eventSeq });
       const response = await fetch(`${api.base}/api/events`, { headers, signal });
       const decision = decideAfterEventsResponse(response.status, {
         retryAfter: response.headers.get('retry-after'),
@@ -390,7 +382,7 @@ async function runEventStream() {
       online = true;
       lastError = '';
       attempt = 0;
-      armHeartbeat(60_000);
+      armHeartbeat(quietTimeoutMs('open', heartbeatMs));
       writeState();
       await consumeEventStream(response, armHeartbeat);
       throw new Error('event stream ended');
@@ -406,6 +398,8 @@ async function runEventStream() {
         path: error instanceof ApiError ? error.path : '/api/events',
         attempt,
         timeout: isTimeoutError(error),
+        baseMs: SSE_RECONNECT_BASE_MS,
+        maxMs: SSE_RECONNECT_MAX_MS,
       });
       if (decision.fallback === 'events-missing') {
         log('events', decision.error);
@@ -417,7 +411,7 @@ async function runEventStream() {
       transport = 'reconnecting';
       lastError = String(error?.message || error);
       writeState();
-      const delay = decision.delayMs ?? computeBackoffMs(attempt);
+      const delay = decision.delayMs ?? sseReconnectDelayMs(attempt);
       log('event stream dropped', lastError, `retry in ${delay}ms`);
       attempt += 1;
       await sleep(delay);
@@ -499,19 +493,27 @@ async function main() {
   api = createApi({ url: config.url, token, userAgent, serial: true });
 
   await probeHealth();
-  if (authStopped) return;
+  const discovered = chooseTransportFromHealth(health);
   log('connected', {
     url: config.url,
     userAgent,
+    features,
+    discovery: discovered,
     pollSeconds: config.pollSeconds,
     syncEnabled: config.syncEnabled,
     syncSeconds: config.syncSeconds,
     badgePageSize: config.badgePageSize,
   });
 
-  // Prefer SSE. Health "features" is advisory only; a 404 is the fallback.
   void safetyPollLoop();
-  await runEventStream();
+  if (discovered === 'poll') {
+    log('events', 'GET /api/health did not advertise features.events; using slow poll');
+    await pollLoop();
+  } else {
+    // features includes "events", or health was unreachable — try SSE.
+    // A 404 is the only permanent fallback to poll.
+    await runEventStream();
+  }
   // Re-auth and other terminal states must keep the process alive so the bar
   // keeps showing the last state instead of the widget restarting us.
   setInterval(() => {}, 60_000);
