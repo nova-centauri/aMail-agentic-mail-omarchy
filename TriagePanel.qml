@@ -96,6 +96,7 @@ Panel {
 
   function statusLine() {
     if (!widget.configured) return "Not configured — run: amail-plugin connect <url>"
+    if (widget.transport === "reauth") return "Re-authenticate — " + (widget.lastError !== "" ? widget.lastError : "run amail-plugin connect <url>")
     if (!widget.online) return "Offline" + (widget.lastError !== "" ? " · " + widget.lastError : "")
     var t = widget.transport === "push" ? "push" : widget.transport === "poll" ? "polling" : widget.transport
     return widget.unread + " unread · " + widget.unanalyzed + " to analyze · " + t
@@ -823,6 +824,7 @@ Panel {
               horizontalAlignment: Text.AlignHCenter
               wrapMode: Text.Wrap
               text: !widget.configured ? "Run  amail-plugin connect <url>  to follow your aMail server, or  amail-plugin server install  to run one here."
+                : widget.transport === "reauth" ? "Token rejected. Run  amail-plugin connect <url>  to re-authenticate."
                 : !widget.online ? "aMail is unreachable." + (widget.lastError !== "" ? "\n" + widget.lastError : "")
                 : root.filter === "unread" ? "Inbox zero. Nothing unread."
                 : root.filter === "unanalyzed" ? "Every message has been analyzed."
